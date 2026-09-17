@@ -1,0 +1,642 @@
+#!/usr/bin/env python3
+"""overview.py — 「AI作業の全体像」のデータ層。snapshot() が JSON 化できる dict を返す。
+
+判定は1か所:
+  - タブの状態(作業中/返答待ち/確認待ち/codex…)は cs.classify()(~/.claude/tools/cs.py)
+  - 顧客(利用者が ~/.aiboard/clients.json に書く)は clients.py の classify()
+  - 「いま何をしているか」は ~/.claude/tabstate/<session_id>.json(hooks/tab-status.py が書く)
+  ここでは判定を書き直さない。集めて並べるだけ。
+
+snapshot() の中身:
+  sessions   このMacの全AIセッション(cs と同じ件数)
+  attention  利用者が対応すべきもの(⚠確認待ち → 返答済みで長く放置 → 確認画面で停止)
+  clients    顧客プロダクトごとのまとめ(動いている数・状態の内訳・最新の依頼・今日の依頼件数)
+  projects   自社プロジェクト(フォルダ)ごとのまとめ
+  machine    メモリ(使用率・圧縮・スワップ・内訳)と JetsamEvent(強制終了)の回数
+  macmini    無人AIジョブ(YouTube工場 launchd / cron の claude -p / PM2 / cron-wrap 61本)。60秒キャッシュ
+
+失敗・未測定は ok=False と reason を持たせ、正常と混ぜない。
+"""
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import datetime as dt
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+sys.path.insert(1, os.path.join(os.path.expanduser("~"), ".claude", "tools"))
+import cs  # noqa: E402  判定ロジックの本体
+
+HOME = os.path.expanduser("~")
+import aiboard_paths  # noqa: E402
+MACMINI_HOSTS = aiboard_paths.config().get("remote_hosts", [])   # ssh で無人ジョブを読む先。~/.aiboard/config.json の remote_hosts(無ければ読まない)
+MACMINI_CACHE = aiboard_paths.data("remote_cache.json")
+MACMINI_TTL = 60                                    # 秒。ssh は遅いので使い回す
+SSH_OPTS = ["-o", "ConnectTimeout=5", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new"]
+IDLE_LONG = 15 * 60                                 # 返答済みのまま「長く放置」とみなす秒数
+
+# ---------------------------------------------------------------- 伏せ字 ----
+SECRET_PATTERNS = [
+    re.compile(r"\b(?:sk|rk|pk)-[A-Za-z0-9_\-]{12,}"),          # OpenAI / Stripe 風
+    re.compile(r"\bsk-ant-[A-Za-z0-9_\-]{12,}"),
+    re.compile(r"\bfhm_[A-Za-z0-9_\-]{8,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),               # GitHub
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9\-]{10,}"),            # Slack
+    re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                       # AWS
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}"),                  # Google API key
+    re.compile(r"\bey[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}"),  # JWT
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9_\-\.=]{16,}"),
+    re.compile(r"(?i)((?:api[_\-]?key|secret|token|password|passwd)\s*[=:]\s*[\"']?)[^\s\"',;]{8,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"\b[A-Za-z0-9_\-]{40,}\b"),                    # 40桁以上の英数字(ハッシュ・トークン)
+]
+
+
+def redact(text):
+    """APIキー風の文字列を伏せ字にする(表示前に必ず通す)。"""
+    if not text:
+        return text
+    for pat in SECRET_PATTERNS:
+        if pat.groups:
+            text = pat.sub(lambda m: m.group(1) + "●●●(伏せ字)", text)
+        else:
+            text = pat.sub("●●●(伏せ字)", text)
+    return text
+
+
+# ---------------------------------------------------------------- 共通 ----
+def local_today():
+    return dt.date.today()
+
+
+def iso_to_local_date(ts):
+    """トランスクリプトの timestamp(ISO, UTC 'Z' 付き)をローカル日付に。"""
+    try:
+        d = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        return d.astimezone().date()
+    except (ValueError, AttributeError):
+        return None
+
+
+def fmt_dur(sec):
+    if sec is None:
+        return "-"
+    sec = max(0, int(sec))
+    if sec < 60:
+        return f"{sec}秒"
+    if sec < 3600:
+        return f"{sec // 60}分"
+    if sec < 86400:
+        return f"{sec / 3600:.1f}時間"
+    return f"{sec / 86400:.1f}日"
+
+
+def project_name(cwd):
+    if not cwd:
+        return ""
+    base = os.path.basename(cwd.rstrip("/"))
+    return base if base != os.path.basename(HOME) else "~(ホーム)"
+
+
+# ---------------------------------------------------------------- 今日の依頼件数 ----
+def today_requests(transcript, ai):
+    """今日(ローカル日付)そのセッションで人が出した依頼の件数。
+
+    数え方:
+      Claude: トランスクリプト末尾 4MB の中の type=user レコードのうち、cs.prompt_text() が
+              依頼と認めるもの(ツール結果・isMeta・isSidechain・'<' で始まる system 注入を除く)で、
+              timestamp のローカル日付が今日のもの。
+      Codex : rollout の response_item/message で role=user かつ input_text が '<' で始まらないもので、
+              timestamp のローカル日付が今日のもの。
+    末尾 4MB より前は読まないので、その範囲を超える長いセッションでは partial=True(下限値)になる。
+    終了したセッション(タブに無いもの)は数えない。
+    """
+    if not transcript:
+        return 0, False
+    try:
+        size = os.path.getsize(transcript)
+    except OSError:
+        return 0, False
+    today = local_today()
+    codex = ai.startswith("Codex")
+    st = _TODAY_CACHE.get(transcript)
+    if not st or st["day"] != today or size < st["pos"]:
+        # 初回・日付が変わった・ファイルが縮んだ → 末尾から数え直す。以後は増えた分だけ読む
+        # (毎回 4MB×タブ数を読み直すと常駐のメモリが戻らない。2026-09-17 実測)
+        start = 0 if codex else max(0, size - 4_000_000)
+        st = _TODAY_CACHE[transcript] = {"day": today, "pos": start, "n": 0, "partial": start > 0, "first": None}
+    if size > st["pos"]:
+        try:
+            with open(transcript, "rb") as f:
+                f.seek(st["pos"])
+                raw = f.read()
+        except OSError:
+            return st["n"], st["partial"] and st["first"] == today
+        cut = raw.rfind(b"\n") + 1            # 書き込み途中の行は次回に回す
+        chunk = raw[:cut].decode("utf-8", errors="replace")
+        st["pos"] += cut
+        for ts in (_codex_prompt_times(chunk) if codex else (t for t, _ in cs.user_prompts_in(chunk))):
+            d = iso_to_local_date(ts)
+            if st["first"] is None:
+                st["first"] = d
+            if d == today:
+                st["n"] += 1
+    # 末尾 4MB の最初の依頼が既に今日なら、それより前にも今日の依頼があるかもしれない
+    return st["n"], st["partial"] and st["first"] == today
+
+
+_TODAY_CACHE = {}
+
+
+def _codex_prompt_times(chunk):
+    for line in chunk.splitlines():
+        if '"role":"user"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        pl = d.get("payload") or {}
+        if pl.get("type") != "message" or pl.get("role") != "user":
+            continue
+        txt = "".join(x.get("text", "") for x in (pl.get("content") or []) if isinstance(x, dict))
+        if txt.lstrip().startswith("<") or not txt.strip():
+            continue
+        yield d.get("timestamp", "")
+
+
+# ---------------------------------------------------------------- セッション ----
+def sessions(procs=None):
+    """cs.classify() の結果を JSON 化できる形に整える(件数は cs と同じ)。"""
+    now = time.time()
+    tabs = cs.classify(cs.iterm_sessions(), procs or cs.processes())
+    out = []
+    for t in tabs:
+        n_today, partial = today_requests(t.get("transcript", ""), t.get("ai", ""))
+        out.append({
+            "tab": f"{t['win']}-{t['tab']}",
+            "tty": t.get("tty", ""),
+            "sid": t.get("sid", ""),
+            "state": t["state"], "mark": t["mark"],
+            "ai": t.get("ai", ""), "model": t.get("model", ""), "account": t.get("account", ""),
+            "model_id": t.get("model_id", ""),
+            "model_style": t.get("model_style") or (cs.model_style(t.get("model_id", "")) if t.get("ai") else None),
+            "cwd": t.get("cwd", ""), "project": project_name(t.get("cwd", "")),
+            "doing": redact(t.get("doing", "")),
+            "task": redact(t.get("task", "")),
+            "topic": redact(t.get("title_topic", "")),
+            "client": t.get("client"),
+            "state_for": (now - t["state_since"]) if t.get("state_since") else None,
+            "ago": t.get("ago"),
+            "started": t.get("started"),
+            "mem_mb": round(t.get("mem", 0) / 1024),
+            "pid": t.get("pid"),
+            "transcript": t.get("transcript", ""),
+            "today_requests": n_today, "today_requests_partial": partial,
+            "subagents": t.get("subagents") or {},
+        })
+    return out
+
+
+def attention(sess):
+    """利用者が対応すべきもの。上から順に: ⚠確認待ち → 返答済みで長く放置 → 確認画面で停止。"""
+    items = []
+    for s in sess:
+        why = None
+        rank = None
+        if s["state"] == "確認待ち":
+            why, rank = "⚠ 確認待ち(承認か返事が要る)", 0
+        elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("state_for") or 0) >= IDLE_LONG:
+            why, rank = f"返答済みのまま {fmt_dur(s['state_for'])} 放置", 1
+        elif s["state"] == "codex 停止":
+            why, rank = "Codex が止まっている: " + (s.get("doing") or "")[:80], 0
+        elif s["state"] == "確認画面で停止":
+            why, rank = "フォルダ信頼の確認画面で止まっている(未起動)", 2
+        elif s["state"] == "起動中?":
+            why, rank = "セッション記録が無い(起動途中か固まっている)", 2
+        if why:
+            items.append({**s, "why": why, "rank": rank})
+    items.sort(key=lambda x: (x["rank"], -(x.get("state_for") or 0)))
+    return items
+
+
+def _group_summary(rows):
+    counts = {}
+    for s in rows:
+        counts[s["state"]] = counts.get(s["state"], 0) + 1
+    latest = max(rows, key=lambda s: -(s.get("ago") if s.get("ago") is not None else 1e12))
+    return {
+        "sessions": len(rows),
+        "active": sum(1 for s in rows if s["mark"] in ("🟢", "🟩")),
+        "states": counts,
+        "latest_task": latest.get("task", ""),
+        "latest_tab": latest["tab"],
+        "last_update_ago": min((s["ago"] for s in rows if s.get("ago") is not None), default=None),
+        "today_requests": sum(s["today_requests"] for s in rows),
+        "today_requests_partial": any(s["today_requests_partial"] for s in rows),
+        "tabs": [s["tab"] for s in rows],
+    }
+
+
+def grouped(sess):
+    """顧客プロダクト(顧客ごと) → 自社プロジェクト(フォルダごと) の順にまとめる。"""
+    clients, projects = {}, {}
+    for s in sess:
+        if s["mark"] == "⚪":
+            continue
+        c = s.get("client")
+        if c:
+            g = clients.setdefault(c["id"], {"client": c, "rows": []})
+        else:
+            g = projects.setdefault(s["cwd"] or "?", {"cwd": s["cwd"], "name": s["project"] or "?", "rows": []})
+        g["rows"].append(s)
+    cl = [{"id": k, **v["client"], **_group_summary(v["rows"])} for k, v in clients.items()]
+    pr = [{"cwd": v["cwd"], "name": v["name"], **_group_summary(v["rows"])} for v in projects.values()]
+    cl.sort(key=lambda g: -g["active"])
+    pr.sort(key=lambda g: (-g["active"], g["last_update_ago"] if g["last_update_ago"] is not None else 1e12))
+    return cl, pr
+
+
+# ---------------------------------------------------------------- このMac ----
+def _run(cmd, timeout=10):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout, r.stderr, r.returncode
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return "", str(e), -1
+
+
+def machine(procs=None):
+    """メモリの使用率・圧縮・スワップ・内訳と、JetsamEvent(メモリ不足の強制終了)の回数。"""
+    out = {"ok": True, "reason": ""}
+    vm, err, rc = _run(["vm_stat"])
+    if rc != 0:
+        return {"ok": False, "reason": f"vm_stat 失敗: {err.strip()}"}
+    page = int(re.search(r"page size of (\d+)", vm).group(1))
+    v = {m.group(1): int(m.group(2)) for m in re.finditer(r"^(.+?):\s+(\d+)\.", vm, re.M)}
+    total = int(_run(["sysctl", "-n", "hw.memsize"])[0].strip() or 0)
+    wired = v.get("Pages wired down", 0) * page
+    anon = v.get("Anonymous pages", 0) * page
+    purgeable = v.get("Pages purgeable", 0) * page
+    compressed = v.get("Pages occupied by compressor", 0) * page
+    stored = v.get("Pages stored in compressor", 0) * page
+    # Activity Monitor の「使用済み」= App(anonymous−purgeable) + 確保済み(wired) + 圧縮
+    used = anon - purgeable + wired + compressed
+    swap = _run(["sysctl", "-n", "vm.swapusage"])[0]
+    m = re.search(r"used = ([\d.]+)M", swap)
+    swap_used_mb = float(m.group(1)) if m else None
+    mp, _, _ = _run(["memory_pressure"], timeout=15)
+    m = re.search(r"free percentage:\s*(\d+)%", mp)
+    free_pct = int(m.group(1)) if m else None
+    out.update(total_gb=round(total / 2**30, 1), used_gb=round(used / 2**30, 2),
+               used_pct=round(used / total * 100) if total else None,
+               free_pct_kernel=free_pct,
+               compressed_gb=round(compressed / 2**30, 2), compressed_saves_gb=round((stored - compressed) / 2**30, 2),
+               wired_gb=round(wired / 2**30, 2), swap_used_mb=swap_used_mb)
+    # 内訳(RSS 合計。共有メモリを重複して数えるので合計は used_gb より大きくなり得る)
+    procs = procs or cs.processes()
+    cat = {"Chrome": 0, "AI(claude+codex)": 0, "Docker": 0, "iTerm": 0, "その他": 0}
+    kids = {}
+    for p, x in procs.items():
+        kids.setdefault(x["ppid"], []).append(p)
+    ai_roots = [p for p, x in procs.items() if (cs.is_claude(x["cmd"]) or cs.is_codex(x["cmd"]))
+                and not (cs.is_claude(procs.get(x["ppid"], {}).get("cmd", "")) or cs.is_codex(procs.get(x["ppid"], {}).get("cmd", "")))]
+    ai_pids = set()
+    stack = list(ai_roots)
+    while stack:
+        p = stack.pop()
+        if p in ai_pids:
+            continue
+        ai_pids.add(p)
+        stack.extend(kids.get(p, []))
+    for p, x in procs.items():
+        c = x["cmd"]
+        if p in ai_pids:
+            cat["AI(claude+codex)"] += x["rss"]
+        elif "Google Chrome" in c or "/Chrome" in c:
+            cat["Chrome"] += x["rss"]
+        elif "ocker" in c and ("com.docker" in c or "Docker" in c):
+            cat["Docker"] += x["rss"]
+        elif "iTerm" in c:
+            cat["iTerm"] += x["rss"]
+        else:
+            cat["その他"] += x["rss"]
+    out["breakdown_gb"] = {k: round(v / 2**20, 2) for k, v in cat.items()}
+    out["breakdown_note"] = "RSS合計(共有分を重複して数える)。AI は claude/codex とその子プロセス"
+    out["jetsam"] = jetsam()
+    return out
+
+
+def jetsam():
+    """/Library/Logs/DiagnosticReports/JetsamEvent-*.ips の件数(今日・直近24h)と最後の1件。
+    1行目がヘッダJSON(timestamp)、2行目以降が本体JSON(processes[].reason が殺された理由)。"""
+    files = sorted(glob.glob("/Library/Logs/DiagnosticReports/JetsamEvent-*.ips"))
+    res = {"ok": True, "today": 0, "last24h": 0, "last": None, "last_killed": None, "files": len(files)}
+    if not files:
+        return res
+    now = time.time()
+    today = local_today()
+    last_ts = None
+    unreadable = 0
+    for f in files:
+        try:
+            with open(f, errors="replace") as fh:
+                hdr = json.loads(fh.readline())
+            ts = dt.datetime.strptime(hdr["timestamp"][:19], "%Y-%m-%d %H:%M:%S").timestamp()
+        except (OSError, ValueError, KeyError):
+            unreadable += 1
+            continue
+        if ts > now - 86400:
+            res["last24h"] += 1
+        if dt.date.fromtimestamp(ts) == today:
+            res["today"] += 1
+        if last_ts is None or ts > last_ts:
+            last_ts, last_file = ts, f
+    if unreadable:
+        res["ok"] = False
+        res["reason"] = f"{unreadable} 件が読めない(権限)"
+    if last_ts:
+        res["last"] = last_ts
+        res["last_ago"] = now - last_ts
+        try:
+            with open(last_file, errors="replace") as fh:
+                fh.readline()
+                body = json.loads(fh.read())
+            killed = [p for p in body.get("processes", []) if p.get("reason")]
+            res["last_killed"] = [{"name": p.get("name"), "reason": p.get("reason"),
+                                   "mb": round(p.get("rpages", 0) * body.get("memoryStatus", {}).get("pageSize", 16384) / 2**20)}
+                                  for p in killed][:5]
+            res["largest_process"] = body.get("largestProcess")
+        except (OSError, ValueError):
+            res["last_killed"] = None
+    return res
+
+
+# ---------------------------------------------------------------- macmini ----
+# ---------------------------------------------------------------- 遠隔の無人ジョブ ----
+# 既定は汎用の探り(PM2 と cron の件数)。利用者固有の探り方は ~/.aiboard/config.json の
+# "remote_module"(REMOTE_SCRIPT と parse(text) を持つ Python ファイル)で差し替える。
+REMOTE_SCRIPT = r'''
+echo "@@meta"; date +%s; hostname; uptime
+echo "@@pm2"; NB=$(ls -d ~/.nvm/versions/node/*/bin 2>&1 | tail -1); PATH="$NB:/opt/homebrew/bin:/usr/local/bin:$PATH"
+pm2 jlist 2>&1 | /usr/bin/python3 -c '
+import json,sys
+raw=sys.stdin.read()
+try: L=json.loads(raw)
+except Exception as e: print("ERR "+str(e)+" "+raw[:200]); sys.exit(0)
+for p in L:
+    e=p.get("pm2_env",{}); print(json.dumps({"name":p.get("name"),"status":e.get("status"),"restarts":e.get("restart_time")}))
+'
+echo "@@cron"; crontab -l 2>&1 | grep -v "^#" | grep -c .
+echo "@@end"
+'''
+
+
+def _parse_remote(text):
+    sec, cur = {}, None
+    for line in text.splitlines():
+        if line.startswith("@@"):
+            cur = line[2:].strip(); sec[cur] = []
+        elif cur:
+            sec[cur].append(line)
+    meta = sec.get("meta", [])
+    data = {"host": meta[1] if len(meta) > 1 else "", "load1": None, "remote_now": int(meta[0]) if meta and meta[0].isdigit() else None}
+    m = re.search(r"load averages?: ([\d.]+)", " ".join(meta))
+    if m:
+        data["load1"] = float(m.group(1))
+    pm2 = []
+    for l in sec.get("pm2", []):
+        try:
+            pm2.append(json.loads(l))
+        except ValueError:
+            continue
+    data["pm2"] = {"total": len(pm2), "online": sum(1 for p in pm2 if p.get("status") == "online"),
+                   "bad": [p["name"] for p in pm2 if p.get("status") != "online"]}
+    cron = sec.get("cron", [])
+    data["cron_wrap"] = {"today": {"ok": None, "FAIL": None}, "jobs": int(cron[0]) if cron and cron[0].strip().isdigit() else 0}
+    data["ytfactory"] = None
+    data["cronai"] = []
+    return data
+
+
+def _remote_impl():
+    """(REMOTE_SCRIPT, parse) を返す。config の remote_module があればそれを読む(失敗は理由つきで汎用に落とす)。"""
+    path = aiboard_paths.config().get("remote_module")
+    if path:
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("aiboard_remote_probe", os.path.expanduser(path))
+            mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+            return mod.REMOTE_SCRIPT, mod.parse, ""
+        except Exception as e:  # 私物モジュールの失敗で盤全体を止めない
+            return REMOTE_SCRIPT, _parse_remote, f"remote_module を読めない: {e}"
+    return REMOTE_SCRIPT, _parse_remote, ""
+
+
+def macmini(force=False):
+    """macmini の無人AIジョブの状態。60秒キャッシュ(ステージング内 macmini_cache.json)。
+    ssh 失敗時は ok=False と reason を返し、前回成功分があれば stale として添える。"""
+    now = time.time()
+    cache = {}
+    try:
+        cache = json.load(open(MACMINI_CACHE))
+    except (OSError, ValueError):
+        pass
+    if not force and cache.get("fetched") and now - cache["fetched"] < MACMINI_TTL:
+        return cache["data"]
+    errors = []
+    if not MACMINI_HOSTS:
+        return {"ok": False, "reason": "未設定(~/.aiboard/config.json の remote_hosts)", "unconfigured": True}
+    for host in MACMINI_HOSTS:
+        t0 = time.time()
+        try:
+            script, parse, impl_err = _remote_impl()
+            r = subprocess.run(["ssh"] + SSH_OPTS + [host, script], capture_output=True, text=True, timeout=40)
+        except subprocess.TimeoutExpired:
+            errors.append(f"{host}: 40秒で応答なし")
+            continue
+        except OSError as e:
+            errors.append(f"{host}: {e}")
+            continue
+        if r.returncode != 0 or "@@end" not in r.stdout:
+            errors.append(f"{host}: rc={r.returncode} {r.stderr.strip()[:200]}")
+            continue
+        try:
+            data = parse(r.stdout)
+            if impl_err:
+                data["impl_error"] = impl_err
+        except ValueError as e:
+            errors.append(f"{host}: {e}")
+            continue
+        data.update(host=host, fetched=now, took=round(time.time() - t0, 1), ok=True, reason="")
+        json.dump({"fetched": now, "data": data}, open(MACMINI_CACHE + ".tmp", "w"), ensure_ascii=False)
+        os.replace(MACMINI_CACHE + ".tmp", MACMINI_CACHE)
+        return data
+    stale = cache.get("data") if cache.get("data", {}).get("ok") else None
+    data = {"ok": False, "reason": "取得失敗: " + " / ".join(errors), "fetched": now,
+            "stale": stale, "stale_age": (now - stale["fetched"]) if stale else None}
+    json.dump({"fetched": now, "data": data}, open(MACMINI_CACHE + ".tmp", "w"), ensure_ascii=False)
+    os.replace(MACMINI_CACHE + ".tmp", MACMINI_CACHE)
+    return data
+
+
+# ---------------------------------------------------------------- 全体 ----
+def snapshot(with_macmini=True):
+    t0 = time.time()
+    procs = cs.processes()
+    sess = sessions(procs)
+    cl, pr = grouped(sess)
+    snap = {
+        "time": time.time(),
+        "sessions": sess,
+        "attention": attention(sess),
+        "clients": cl,
+        "projects": pr,
+        "machine": machine(procs),
+        "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
+        "counts": {
+            "your_turn": sum(1 for s in sess if s["state"] == "確認待ち"),
+            "working": sum(1 for s in sess if s["mark"] in ("🟢", "🟩")),
+            "waiting": sum(1 for s in sess if s["state"] in ("返答待ち", "codex 返答待ち")),
+            "tabs": len(sess),
+        },
+    }
+    snap["took"] = round(time.time() - t0, 2)
+    return snap
+
+
+# ---------------------------------------------------------------- 詳細(1タブ) ----
+def _load_describe_tool():
+    """hooks/tab-status.py の describe_tool を借りる(ツール操作の言い方を1か所にする)。"""
+    import importlib.util
+    p = os.path.join(HOME, ".claude", "hooks", "tab-status.py")
+    try:
+        spec = importlib.util.spec_from_file_location("tab_status", p)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.describe_tool
+    except Exception:  # フックが無くても詳細は出す
+        return lambda name, inp: name
+
+
+def timeline_claude(path, limit=20, tail_bytes=3_000_000, with_text=False, sidechain_ok=False):
+    """トランスクリプト末尾から、最後の依頼とその後のツール操作(最大 limit 件)を時系列で。
+    with_text=True なら AI の返答本文も入れる(過去の会話を読む用)。"""
+    describe = _load_describe_tool()
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    events = []
+    for line in chunk.splitlines():
+        if '"type":"user"' in line:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if sidechain_ok:
+                d["isSidechain"] = False   # サブエージェントの記録は全行 isSidechain=true なので外す
+            text = cs.prompt_text(d)
+            if text:
+                events.append({"t": d.get("timestamp", ""), "kind": "依頼", "text": text[:2000]})
+        elif '"type":"assistant"' in line:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("isSidechain") and not sidechain_ok:
+                continue
+            for b in d.get("message", {}).get("content", []) or []:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "tool_use":
+                    events.append({"t": d.get("timestamp", ""), "kind": "操作",
+                                   "text": describe(b.get("name", ""), b.get("input") or {})})
+                elif b.get("type") == "text" and with_text and b.get("text", "").strip():
+                    events.append({"t": d.get("timestamp", ""), "kind": "返答", "text": b["text"][:4000]})
+    # 最後の依頼以降を優先し、足りなければその前も足す
+    idx = max((i for i, e in enumerate(events) if e["kind"] == "依頼"), default=0)
+    picked = events[idx:]
+    if len(picked) > limit:
+        picked = [picked[0]] + picked[-(limit - 1):]
+    elif len(picked) < limit:
+        picked = events[max(0, idx - (limit - len(picked))):idx] + picked
+    for e in picked:
+        e["text"] = redact(e["text"])
+    return picked
+
+
+def timeline_codex(path, limit=20, with_text=False):
+    events = []
+    try:
+        with open(path, errors="replace") as fh:
+            for line in fh:
+                if '"response_item"' not in line:
+                    continue
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                pl = d.get("payload") or {}
+                ts = d.get("timestamp", "")
+                if pl.get("type") in ("function_call", "custom_tool_call"):
+                    arg = str(pl.get("arguments") or pl.get("input") or "")
+                    cmd = re.search(r'cmd["\']?\s*[:=]\s*["\']([^"\']+)', arg)
+                    files = re.findall(r"\*\*\* (?:Update|Add|Delete) File: (\S+)", arg)
+                    desc = ", ".join(os.path.basename(x) for x in files) if files else " ".join((cmd.group(1) if cmd else arg).split())[:120]
+                    events.append({"t": ts, "kind": "操作", "text": f"{pl.get('name', '操作')}: {desc}"})
+                elif pl.get("type") == "message":
+                    txt = "".join(x.get("text", "") for x in (pl.get("content") or []) if isinstance(x, dict))
+                    if pl.get("role") == "user" and txt.strip() and not txt.lstrip().startswith("<"):
+                        events.append({"t": ts, "kind": "依頼", "text": " ".join(txt.split())[:2000]})
+                    elif pl.get("role") == "assistant" and with_text and txt.strip():
+                        events.append({"t": ts, "kind": "返答", "text": txt[:4000]})
+    except OSError:
+        return []
+    idx = max((i for i, e in enumerate(events) if e["kind"] == "依頼"), default=0)
+    picked = events[idx:]
+    if len(picked) > limit:
+        picked = [picked[0]] + picked[-(limit - 1):]
+    for e in picked:
+        e["text"] = redact(e["text"])
+    return picked
+
+
+def screen_tail(tab, lines=40, tty=None):
+    """iTerm の画面(contents of session)の末尾。AppleScript は読むだけ。tty があればそれで指す(位置ずれに強い)。"""
+    m = re.fullmatch(r"(\d+)-(\d+)", tab)
+    if not m:
+        return None
+    txt = cs.screen_text(int(m.group(1)), int(m.group(2)), tty=tty)
+    rows = [r.rstrip() for r in txt.splitlines()]
+    while rows and not rows[-1]:
+        rows.pop()
+    return redact("\n".join(rows[-lines:]))
+
+
+def detail(tab, sess=None):
+    """1タブ分の詳細(記録・直近の流れ・画面末尾)。秘密情報は redact() を通す。"""
+    sess = sess or sessions()
+    s = next((x for x in sess if x["tab"] == tab), None)
+    if not s:
+        return {"ok": False, "reason": f"タブ {tab} が無い"}
+    tl = []
+    if s["transcript"]:
+        tl = timeline_codex(s["transcript"]) if s["ai"].startswith("Codex") else timeline_claude(s["transcript"])
+    return {"ok": True, "session": s, "timeline": tl, "screen": screen_tail(tab, tty=s.get("tty"))}
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "macmini":
+        print(json.dumps(macmini(force="--force" in sys.argv), ensure_ascii=False, indent=1))
+    elif len(sys.argv) > 1 and sys.argv[1] == "detail":
+        print(json.dumps(detail(sys.argv[2]), ensure_ascii=False, indent=1))
+    else:
+        print(json.dumps(snapshot(), ensure_ascii=False, indent=1))

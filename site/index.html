@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AIBoard — the whiteboard for your coding agents</title>
+<meta name="description" content="A native macOS app that puts every Claude Code and Codex session on one canvas, with real terminals inside. When an agent needs you, its card lights up.">
+<meta property="og:title" content="AIBoard — the whiteboard for your coding agents">
+<meta property="og:description" content="Every Claude Code and Codex session on one canvas, with real terminals inside. Native macOS, open source, local only.">
+<meta property="og:image" content="img/og.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="img/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23070A12'/%3E%3Crect x='6' y='8' width='9' height='7' rx='2' fill='%237DD3FC'/%3E%3Crect x='17' y='8' width='9' height='7' rx='2' fill='%239B4DE0'/%3E%3Crect x='6' y='17' width='9' height='7' rx='2' fill='%233DF2A6'/%3E%3Crect x='17' y='17' width='9' height='7' rx='2' fill='%23FF5C6C'/%3E%3C/svg%3E">
+<style>
+  :root{--bg:#070A12;--bg2:#0B0F1A;--panel:#0F1420;--ink:#E6EAF2;--ink2:#B6BDCB;--muted:#8B94A7;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.14);
+        --accent:#7DD3FC;--green:#3DF2A6;--red:#FF5C6C;--violet:#9B4DE0;--mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;color-scheme:dark}
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Inter",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.06) 1px,transparent 1.5px) 0 0/28px 28px}
+  .wrap{position:relative;z-index:1;max-width:1080px;margin:0 auto;padding:0 20px}
+  a{color:var(--accent);text-decoration:none}
+  nav{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.01em}
+  .logo i{display:grid;grid-template-columns:1fr 1fr;gap:2px;width:22px;height:22px}
+  .logo i b{border-radius:3px}
+  nav .links{display:flex;gap:18px;font-size:14px;color:var(--ink2)}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--ink);font-weight:600;font-size:14px;transition:background .12s}
+  .btn:hover{background:rgba(255,255,255,.09)}
+  .btn.primary{background:rgba(125,211,252,.16);color:var(--accent);border-color:rgba(125,211,252,.5);box-shadow:0 0 22px -8px var(--accent)}
+  header.hero{padding:56px 0 30px;display:grid;gap:22px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  h1{font-size:clamp(34px,5.6vw,60px);line-height:1.08;margin:0;letter-spacing:-.02em;max-width:18ch;text-wrap:balance}
+  h1 em{font-style:normal;color:var(--accent)}
+  .lede{font-size:19px;color:var(--ink2);max-width:60ch;margin:0}
+  .cta{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .install{font-family:var(--mono);font-size:14px;background:#05070C;border:1px solid var(--line2);border-radius:10px;padding:10px 14px;color:var(--ink);display:inline-flex;gap:10px;align-items:center}
+  .install span{color:var(--muted)}
+  .shot{border:1px solid var(--line2);border-radius:14px;overflow:hidden;background:#05070C;box-shadow:0 30px 80px -40px rgba(0,0,0,.9)}
+  .shot img{display:block;width:100%;height:auto}
+  .pain{margin:64px 0 0;padding:28px 30px;border:1px solid var(--line2);border-radius:14px;background:linear-gradient(180deg,rgba(255,92,108,.08),transparent);display:grid;gap:8px}
+  .pain h2{margin:0;font-size:26px;letter-spacing:-.01em}
+  .pain p{margin:0;color:var(--ink2);max-width:70ch}
+  .glow{display:inline-block;width:12px;height:12px;border-radius:50%;background:var(--red);box-shadow:0 0 0 0 rgba(255,92,108,.7);animation:ring 1.6s ease-out infinite;vertical-align:-1px;margin-right:8px}
+  @keyframes ring{0%{box-shadow:0 0 0 0 rgba(255,92,108,.7)}100%{box-shadow:0 0 0 12px rgba(255,92,108,0)}}
+  section{margin:72px 0 0}
+  h2.sec{font-size:30px;letter-spacing:-.015em;margin:0 0 8px}
+  .sub{color:var(--muted);margin:0 0 22px;max-width:70ch}
+  .feat{display:grid;gap:18px}
+  @media(min-width:800px){.feat{grid-template-columns:repeat(3,1fr)}}
+  .card{border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.025);padding:20px 20px 18px;display:grid;gap:8px;align-content:start}
+  .card::before{content:"";display:block;width:34px;height:3px;border-radius:3px;background:var(--c,var(--accent));box-shadow:0 0 12px var(--c,var(--accent))}
+  .card h3{margin:2px 0 0;font-size:17px}
+  .card p{margin:0;color:var(--ink2);font-size:14.5px}
+  .num{font-family:var(--mono);font-size:30px;font-weight:600;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .num small{font-size:13px;color:var(--muted);margin-left:6px;font-weight:400}
+  .how{font-size:12.5px;color:var(--muted)}
+  .two{display:grid;gap:22px;align-items:center}
+  @media(min-width:860px){.two{grid-template-columns:1.1fr .9fr}.two.flip{grid-template-columns:.9fr 1.1fr}.two.flip .shot{order:2}}
+  .scroll{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.02)}
+  table{border-collapse:collapse;width:100%;min-width:680px;font-size:14px}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600}
+  tbody tr:last-child td{border-bottom:0}
+  td.y{color:var(--green)} td.n{color:var(--muted)}
+  .steps{display:grid;gap:12px;counter-reset:s}
+  .step{display:grid;grid-template-columns:34px 1fr;gap:14px;align-items:start;counter-increment:s}
+  .step::before{content:counter(s);font-family:var(--mono);font-size:12px;color:var(--accent);border:1px solid var(--line2);border-radius:999px;width:28px;height:28px;display:grid;place-items:center}
+  .step code{font-family:var(--mono);font-size:13px;background:#05070C;border:1px solid var(--line);border-radius:6px;padding:2px 7px}
+  .step p{margin:4px 0 0;color:var(--ink2);font-size:14px}
+  .privacy{border:1px solid rgba(61,242,166,.35);border-radius:12px;padding:20px 22px;background:rgba(61,242,166,.05)}
+  .privacy ul{margin:8px 0 0;padding-left:20px;color:var(--ink2);font-size:15px}
+  footer{margin:80px 0 40px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:13px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  .kbd{font-family:var(--mono);font-size:12px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:0 6px;background:rgba(255,255,255,.04)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <div class="logo"><i><b style="background:#7DD3FC"></b><b style="background:#9B4DE0"></b><b style="background:#3DF2A6"></b><b style="background:#FF5C6C"></b></i>AIBoard</div>
+    <div class="links"><a href="#why">Why</a><a href="#install">Install</a><a href="#privacy">Privacy</a><a href="https://github.com/REPO_OWNER/aiboard">GitHub</a></div>
+  </nav>
+
+  <header class="hero">
+    <div class="eyebrow">Native macOS · Open source · Local only</div>
+    <h1>The whiteboard for your <em>coding agents</em>.</h1>
+    <p class="lede">Every Claude Code and Codex session on one canvas, grouped by client and project, with real terminals inside. When an agent needs you, its card lights up — and your Dock tells you how many are waiting.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/REPO_OWNER/aiboard/releases">Download for macOS</a>
+      <a class="btn" href="https://github.com/REPO_OWNER/aiboard">Star on GitHub</a>
+      <span class="install"><span>$</span>brew install --cask aiboard</span>
+    </div>
+    <div class="shot"><img src="img/board-overview-crop.png" alt="AIBoard: sessions grouped by client and project on a dark canvas; live cards glow, one is waiting for you" width="1600" height="1000"></div>
+  </header>
+
+  <div class="pain">
+    <h2><span class="glow"></span>Running six agents? You are the bottleneck — and you don't know which one is waiting.</h2>
+    <p>Terminal tabs all look the same. Tmux hides them. AIBoard watches every session (via Claude Code hooks and Codex's own records), turns each one into a card, and lights the card up the moment it needs a decision. Click it, and you're typing in that terminal in 0.2 seconds.</p>
+  </div>
+
+  <section>
+    <h2 class="sec">What you get</h2>
+    <p class="sub">Three things that didn't exist together before: an infinite canvas, real terminals, and a task board — for more than one AI vendor.</p>
+    <div class="feat">
+      <div class="card" style="--c:#9B4DE0"><h3>One canvas, every agent</h3><p>Claude Code and Codex, live and past. Grouped by client (square) and project. Model shown as a colored dot. Lines connect a session to the one it continued from, reviewed, or edited the same files as.</p></div>
+      <div class="card" style="--c:#FF5C6C"><h3>Lights up when it needs you</h3><p>Permission prompts, questions, stopped sessions. The card pulses red, the Dock badge counts them, and a macOS notification takes you straight to that terminal.</p></div>
+      <div class="card" style="--c:#3DF2A6"><h3>Real terminals inside</h3><p>Not a chat wrapper. A native terminal (SwiftTerm) runs the actual CLI. ⌘T for a new Claude, ⌥⌘T for Codex, ⇧⌘W for Claude in a fresh git worktree.</p></div>
+    </div>
+  </section>
+
+  <section class="two">
+    <div class="shot"><img src="img/board-terminal.png" alt="Clicking a card opens the real terminal on the right, with the agent's recent activity below" width="1600" height="1000"></div>
+    <div>
+      <h2 class="sec">Click a card. Type.</h2>
+      <p class="sub">The right pane is the session's own terminal. Approve with one key, send a message, or jump into it fullscreen. Sessions still running in iTerm show up too — AIBoard finds them by tty, so nothing changes about how you already work.</p>
+      <div class="feat" style="grid-template-columns:1fr 1fr">
+        <div class="card"><div class="num">0.22<small>s</small></div><p>from click to typing</p><div class="how">measured with Playwright, 145 cards on the board</div></div>
+        <div class="card"><div class="num">18<small>ms</small></div><p>worst frame while panning</p><div class="how">10 s of continuous panning, 3 background refreshes</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="two flip">
+    <div class="shot"><img src="img/board-working.png" alt="Zoomed-out view: dozens of past sessions per project, with live ones highlighted" width="1600" height="1000"></div>
+    <div>
+      <h2 class="sec">Your last 30 days, on the same board.</h2>
+      <p class="sub">13,000+ sessions indexed into SQLite, queried in under half a second. Resume any of them into a new terminal with one click. Subagents fold under their parent. Unattended runs (cron, <code class="kbd">claude -p</code>) stay out of the way unless you ask.</p>
+      <div class="feat" style="grid-template-columns:1fr 1fr">
+        <div class="card"><div class="num">67<small>MB</small></div><p>board server, resident</p><div class="how">top · mem+cmprs, after 50 refreshes</div></div>
+        <div class="card"><div class="num">46<small>MB</small></div><p>the app itself</p><div class="how">plus WebKit ~80MB for the canvas</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="why">
+    <h2 class="sec">Why not cmux, Conductor, or a kanban?</h2>
+    <p class="sub">They're good. They solve a different slice. AIBoard is for the person who runs several agents across several clients and needs to <em>see</em> all of it at once.</p>
+    <div class="scroll"><table>
+      <thead><tr><th></th><th>AIBoard</th><th>cmux</th><th>Conductor</th><th>Nimbalyst</th><th>Claude Agent View</th></tr></thead>
+      <tbody>
+        <tr><td>Claude Code + Codex</td><td class="y">both</td><td class="y">both</td><td class="y">both (+Cursor)</td><td class="y">both (+OpenCode)</td><td class="n">Claude only</td></tr>
+        <tr><td>Infinite canvas, grouped by client/project</td><td class="y">yes</td><td class="n">vertical tabs</td><td class="n">workspace list</td><td class="n">kanban</td><td class="n">list in the CLI</td></tr>
+        <tr><td>Real terminal inside</td><td class="y">yes (SwiftTerm)</td><td class="y">yes (libghostty)</td><td class="n">—</td><td class="y">yes</td><td class="n">CLI</td></tr>
+        <tr><td>Past sessions on the same board</td><td class="y">30 days, resumable</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
+        <tr><td>Native macOS</td><td class="y">Swift/AppKit</td><td class="y">Swift/AppKit</td><td class="y">native</td><td class="n">Electron</td><td class="n">—</td></tr>
+        <tr><td>Open source</td><td class="y">MIT</td><td class="y">yes</td><td class="n">no</td><td class="y">yes</td><td class="n">—</td></tr>
+        <tr><td>Telemetry</td><td class="y">none, ever</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table></div>
+    <p class="how" style="margin-top:8px">Feature claims about other products are from their public pages as of 2026-09-17; “—” means we couldn't confirm. Corrections welcome.</p>
+  </section>
+
+  <section id="install">
+    <h2 class="sec">Install</h2>
+    <div class="steps">
+      <div class="step"><div><code>brew install --cask aiboard</code><p>or download the .app from Releases. macOS 13+. Requires Python 3 (ships with Xcode Command Line Tools) for the board server.</p></div></div>
+      <div class="step"><div><code>Open AIBoard</code><p>Your running Claude Code and Codex sessions appear on the board within a few seconds — including the ones already open in iTerm.</p></div></div>
+      <div class="step"><div><code>⌘T</code><p>Opens a new Claude Code terminal in the current folder. <span class="kbd">⌥⌘T</span> Codex · <span class="kbd">⇧⌘W</span> Claude in a git worktree · <span class="kbd">⌘B</span> hide the board.</p></div></div>
+    </div>
+  </section>
+
+  <section id="privacy">
+    <div class="privacy">
+      <h2 class="sec" style="font-size:22px">Local only. No telemetry. No account.</h2>
+      <ul>
+        <li>AIBoard reads the session files Claude Code and Codex already keep on your Mac (<code class="kbd">~/.claude</code>, <code class="kbd">~/.codex</code>). It never uploads them.</li>
+        <li>The board server binds to <code class="kbd">127.0.0.1</code> only, checks Host and Origin, and refuses cross-site writes.</li>
+        <li>Secrets that appear in transcripts (tokens, keys) are masked before display.</li>
+        <li>Client names and folders are yours; a <code class="kbd">?demo=1</code> mode replaces them with fake ones for screenshots.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <div>AIBoard · MIT License · built by one person who runs too many agents</div>
+    <div><a href="https://github.com/REPO_OWNER/aiboard">GitHub</a> · <a href="https://github.com/REPO_OWNER/aiboard/issues">Issues</a></div>
+  </footer>
+</div>
+</body>
+</html>

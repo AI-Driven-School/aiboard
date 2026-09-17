@@ -1,0 +1,7 @@
+{
+  "_doc": "顧客(クライアント)ごとに色を付ける規則。~/.aiboard/clients.json にコピーして使う。paths=作業フォルダの一部一致, accounts=Claude のアカウント名, keywords=依頼文の語(1 つの顧客だけ当たった時に有効)",
+  "clients": [
+    {"id": "example", "label": "Example Inc.", "emoji": "🟪", "rgb": [155, 77, 224],
+     "paths": ["/Users/you/example-inc"], "accounts": [], "keywords": ["example inc"]}
+  ]
+}

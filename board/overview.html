@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="ja" data-look="figma">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI作業の全体像</title>
+<style>
+/* 見た目の方針(2026-09-17): 深い夜空の地に、ガラスのカード。色相は「誰が」(顧客=四角・モデル=丸)、光は「状態」。
+   暗い世界に振り切る(端末と同じ地)。文字色はコントラストを計算して選ぶ(fgFor)。 */
+:root{
+  --bg:#070A12;--bg2:#0B0F1A;--panel:rgba(12,16,26,.94);--ink:#E6EAF2;--muted:#8B94A7;--line:rgba(255,255,255,.08);--line2:rgba(255,255,255,.14);
+  --frame:rgba(255,255,255,.025);--frame-line:rgba(255,255,255,.07);
+  --card:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.02));--card-past:rgba(255,255,255,.015);
+  --shadow:0 1px 2px rgba(0,0,0,.5),0 8px 24px -12px rgba(0,0,0,.8);--accent:#7DD3FC;--red:#FF5C6C;--green:#3DF2A6;--yellow:#FFD166;
+  --edge:rgba(150,170,210,.45);--edge-hi:#7DD3FC;--glow:0 0 0 1px rgba(125,211,252,.45),0 0 28px -6px rgba(125,211,252,.7);
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  color-scheme:dark;
+}
+/* 見た目2「figma」: 光を消し、灰の地に 1px の線。選択は青 2px。切替は右上の「見た目」 */
+:root[data-look="figma"]{
+  --bg:#1E1E1E;--bg2:#252525;--panel:#2C2C2C;--ink:#E6E6E6;--muted:#A0A0A0;--line:#3A3A3A;--line2:#4A4A4A;
+  --frame:#232323;--frame-line:#3A3A3A;--card:#2C2C2C;--card-past:#262626;--shadow:0 1px 2px rgba(0,0,0,.35);
+  --accent:#0D99FF;--red:#F24822;--green:#14AE5C;--yellow:#FFCD29;--edge:#6B6B6B;--edge-hi:#0D99FF;--glow:0 0 0 2px #0D99FF;
+}
+:root[data-look="figma"] body::before{background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.09) 1px,transparent 1.4px) 0 0/16px 16px}
+:root[data-look="figma"] .card{border-radius:6px;box-shadow:var(--shadow) !important;background:var(--card);padding-left:10px}
+:root[data-look="figma"] .card::before{box-shadow:none;width:2px;left:0;top:0;bottom:0;border-radius:0}
+:root[data-look="figma"] .card.sel{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent) !important;transform:none}
+:root[data-look="figma"] .card.turn{animation:none;box-shadow:0 0 0 2px var(--red) !important}
+:root[data-look="figma"] .card .dot.work{animation:none;box-shadow:none}
+:root[data-look="figma"] .frame{border-radius:6px}
+:root[data-look="figma"] .frame::before,:root[data-look="figma"] .frame::after{display:none}
+:root[data-look="figma"] .frame .flabel b{box-shadow:none;border-radius:4px}
+:root[data-look="figma"] #toolbar .chip{border-radius:6px;background:transparent}
+:root[data-look="figma"] #toolbar .chip.on{background:rgba(13,153,255,.18);box-shadow:none}
+:root[data-look="figma"] #toolbar .chip.red.on{background:rgba(242,72,34,.18);box-shadow:none}
+:root[data-look="figma"] #edges path.hi{filter:none}
+:root[data-look="figma"] #panel button.primary{background:var(--accent);color:#fff;box-shadow:none}
+:root[data-look="figma"] .sendrow input{border-color:var(--line2);box-shadow:none}
+:root[data-look="figma"] .sendrow input:focus{border-color:var(--accent);box-shadow:none}
+:root[data-look="figma"] pre.screen{box-shadow:none;background:#111}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Noto Sans JP",sans-serif;overflow:hidden}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.07) 1px,transparent 1.5px) 0 0/28px 28px;}
+/* ぼかし(backdrop-filter)と大きな放射光は、パン中のフレーム時間を 8→18ms にした(2026-09-17 実測)ので使わない */
+#stage,#toolbar,#panel,#status{position:relative;z-index:1}
+#toolbar{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;flex-direction:column;gap:6px;padding:8px 12px;}
+#toolbar .row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
+#toolbar .row.more{padding-top:6px;border-top:1px solid var(--line)}
+#toolbar .row[hidden]{display:none}
+#toolbar .seg{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+#toolbar .seg .chip{border:0;border-radius:0;padding:4px 12px}
+#toolbar .seg .chip+.chip{border-left:1px solid var(--line2)}
+#toolbar{background:var(--panel);border-bottom:1px solid var(--line);box-shadow:0 10px 30px -18px rgba(0,0,0,.9)}
+:root[data-app] #toolbar{padding-left:84px}
+#toolbar .chip{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;border:1px solid var(--line2);background:rgba(255,255,255,.03);color:var(--ink);cursor:pointer;font-size:12px;white-space:nowrap;transition:background .12s,box-shadow .12s}
+#toolbar .chip:hover{background:rgba(255,255,255,.07)}
+#toolbar .chip.on{background:rgba(125,211,252,.16);color:var(--accent);border-color:rgba(125,211,252,.5);box-shadow:0 0 16px -6px var(--accent)}
+#toolbar .chip.red{border-color:var(--red);color:var(--red);font-weight:700}
+#toolbar .chip.red.on{background:rgba(255,92,108,.16);box-shadow:0 0 16px -6px var(--red)}
+#toolbar .sep{width:1px;height:20px;background:var(--line)}
+#toolbar input,#toolbar select{font:inherit;padding:3px 8px;border:1px solid var(--line2);border-radius:8px;background:rgba(0,0,0,.35);color:var(--ink)}
+#toolbar input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(125,211,252,.18)}
+#toolbar #q{width:220px}
+.membar{display:inline-flex;align-items:center;gap:6px;font-size:12px}
+.membar .bar{width:90px;height:7px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden}
+.membar .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green),#7DD3FC);box-shadow:0 0 10px var(--green)}
+.warn{color:var(--red);font-weight:700}
+.ok{color:var(--green)}
+/* 「いま」のレール: 生きているセッションだけを、判断待ち→返答済み→作業中の順に 1 列。盤を見る前にここだけで答えが出る */
+#rail{position:fixed;left:0;right:0;z-index:19;display:flex;gap:8px;align-items:center;padding:8px 12px;overflow-x:auto;background:var(--panel);border-bottom:1px solid var(--line);scrollbar-width:none}
+#rail::-webkit-scrollbar{display:none}
+#rail:empty{display:none}
+#rail .rl{flex:none;display:inline-flex;align-items:center;gap:8px;padding:6px 10px 6px 8px;border-radius:8px;border:1px solid var(--line2);background:rgba(255,255,255,.03);cursor:pointer;max-width:320px;font-size:12px;color:var(--ink);transition:background .12s}
+#rail .rl:hover{background:rgba(255,255,255,.08)}
+#rail .rl.turn{border-color:var(--red);background:rgba(255,92,108,.12)}
+#rail .rl.wait{border-color:rgba(255,209,102,.5)}
+#rail .rl.sel{box-shadow:var(--glow)}
+#rail .rl .sq{width:10px;height:10px;border-radius:2px;flex:none}
+#rail .rl .dt{width:10px;height:10px;border-radius:50%;flex:none}
+#rail .rl .lbl{font-weight:700;white-space:nowrap}
+#rail .rl .lbl.turn{color:var(--red)} #rail .rl .lbl.wait{color:var(--yellow)} #rail .rl .lbl.work{color:var(--green)}
+#rail .rl .dg{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#rail .rlhead{flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding-right:4px}
+/* 空状態: 何も動いていない時は「次の一手」を 1 つだけ */
+#empty{position:absolute;left:50%;top:45%;transform:translate(-50%,-50%);z-index:5;text-align:center;max-width:460px;padding:24px 28px;border:1px dashed var(--line2);border-radius:12px;background:rgba(7,10,18,.7);color:var(--ink2);font-size:14px;line-height:1.7}
+#empty b{display:block;font-size:18px;color:var(--ink);margin-bottom:6px}
+#empty .kbd{font-family:var(--mono);font-size:12px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 6px;background:rgba(255,255,255,.04);color:var(--ink)}
+/* 初回ガイド(コーチマーク): 対象を切り抜いて暗くし、吹き出しで 1 つずつ */
+#tour{position:fixed;inset:0;z-index:60;display:none}
+#tour.on{display:block}
+#tour .hole{position:absolute;border-radius:10px;box-shadow:0 0 0 9999px rgba(3,5,10,.72),0 0 0 2px var(--accent),0 0 30px -4px var(--accent);pointer-events:none;transition:all .25s ease}
+#tour .bub{position:absolute;max-width:380px;padding:16px 18px;border-radius:10px;background:#0F1420;border:1px solid var(--line2);box-shadow:0 20px 60px -20px rgba(0,0,0,.9);color:var(--ink);font-size:14px;line-height:1.6}
+#tour .bub b{display:block;font-size:16px;margin-bottom:4px}
+#tour .bub .st{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.1em;margin-bottom:8px}
+#tour .bub .btns{display:flex;gap:8px;justify-content:flex-end;margin-top:12px}
+#tour .bub button{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--ink);cursor:pointer}
+#tour .bub button.primary{background:rgba(125,211,252,.16);color:var(--accent);border-color:rgba(125,211,252,.5)}
+#tour .bub .kbd{font-family:var(--mono);font-size:12px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 6px;background:rgba(255,255,255,.04)}
+/* 会話ビュー: ターミナルの字面で、読みやすさは会話 */
+.convwrap{display:flex;flex-direction:column;height:calc(100vh - 70px);gap:8px}
+.convhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.convhead button{margin-left:auto}
+.cvstate{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.cvstate .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)} .cvstate .dot.work{background:var(--green)} .cvstate .dot.turn{background:var(--red)} .cvstate .dot.wait{background:var(--yellow)}
+.convlog{flex:1;overflow:auto;background:#141414;border:1px solid var(--line2);border-radius:6px;padding:10px 12px;font:12.5px/1.6 var(--mono);color:#D6D6D6}
+.convlog.past{flex:none;max-height:60vh}
+.cv{margin:0 0 10px}
+.cv.you{display:grid;grid-template-columns:14px 1fr auto;gap:6px;color:#FFFFFF}
+.cv.you .pr{color:var(--accent);font-weight:700}
+.cv.you .tx{white-space:pre-wrap;word-break:break-word;font-weight:600}
+.cv.you .ts{color:#777;font-size:10.5px}
+.cv.ai .tx{white-space:pre-wrap;word-break:break-word;padding-left:20px}
+.cv.ai code{background:#262626;border-radius:3px;padding:0 4px}
+.cv.ai pre.cb{background:#0B0B0B;border:1px solid #2A2A2A;border-radius:4px;padding:6px 8px;margin:6px 0;white-space:pre-wrap;overflow-x:auto}
+.cv.op{padding-left:20px;color:#8A8A8A;font-size:11.5px}
+.cv.op .opn{color:#6A6A6A}
+.cv.op summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cv.op .opl{padding-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cv.empty{color:#777}
+.convask{border:1px solid var(--red);border-radius:6px;padding:10px 12px;background:rgba(242,72,34,.08)}
+.convask .q{font:12.5px/1.5 var(--mono);color:var(--ink);margin-bottom:8px;white-space:pre-wrap}
+.convask .opts{display:flex;gap:6px;flex-wrap:wrap}
+.convin{display:grid;grid-template-columns:16px 1fr;align-items:center;gap:6px;background:#141414;border:1px solid var(--line2);border-radius:6px;padding:8px 10px}
+.convin:focus-within{border-color:var(--accent)}
+.convin .pr{color:var(--accent);font:700 13px var(--mono)}
+.convin input{background:transparent;border:0;outline:none;color:var(--ink);font:13px/1.4 var(--mono)}
+#stage{position:absolute;inset:0;top:0;cursor:grab;overflow:hidden}
+#stage.drag{cursor:grabbing}
+#stage.hand{cursor:grab}
+#stage.hand .card{cursor:grab}
+#zoomctl{position:fixed;right:12px;bottom:10px;z-index:25;display:flex;align-items:center;gap:0;border:1px solid var(--line2);border-radius:8px;background:var(--panel);overflow:hidden;box-shadow:var(--shadow)}
+#zoomctl button{font:12px/1 var(--mono);color:var(--ink);background:transparent;border:0;padding:7px 10px;cursor:pointer;min-width:32px}
+#zoomctl button:hover{background:rgba(255,255,255,.08)}
+#zoomctl #zoomPct{min-width:56px;border-left:1px solid var(--line2);border-right:1px solid var(--line2)}
+:root[data-look="figma"] .card{transition:box-shadow .08s,border-color .08s}
+:root[data-look="figma"] .card:hover{border-color:#0D99FF;box-shadow:0 0 0 1px #0D99FF !important;opacity:1;transform:none}
+:root[data-look="figma"] .card.sel{border-color:#0D99FF;box-shadow:0 0 0 1.5px #0D99FF !important}
+:root[data-look="figma"] .card.turn{box-shadow:0 0 0 1.5px var(--red) !important}
+:root[data-look="figma"] .card.yourturn{box-shadow:0 0 0 1.5px var(--yellow) !important}
+:root[data-look="figma"] .frame{background:rgba(255,255,255,.02);border-color:#383838}
+:root[data-look="figma"] .frame .flabel{font-weight:500;color:#B3B3B3}
+:root[data-look="figma"] .frame .flabel b{background:transparent !important;color:#E6E6E6;padding:0;font-weight:600}
+:root[data-look="figma"] #toolbar,:root[data-look="figma"] #panel,:root[data-look="figma"] #zoomctl,:root[data-look="figma"] #status{background:#2C2C2C;border-color:#3A3A3A}
+:root[data-look="figma"] #toolbar .chip{border-color:#3A3A3A}
+:root[data-look="figma"] #toolbar .seg{border-color:#3A3A3A}
+#world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+#edges{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+#edges path{fill:none;stroke:var(--edge);stroke-width:1.2;opacity:.6}
+#edges path.samefile{stroke-dasharray:3 4;stroke-width:1;opacity:.35}
+#edges path.hi{stroke:var(--edge-hi);stroke-width:2.2;opacity:1;filter:drop-shadow(0 0 6px rgba(125,211,252,.9))}
+#edges path.continue{stroke-dasharray:6 6;animation:flow 1.6s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-24}}
+#edges path.dimmed{opacity:.08}
+#edges text{font-size:11px;fill:var(--muted);paint-order:stroke;stroke:var(--bg);stroke-width:3px}
+#edges text.hi{fill:var(--edge-hi);font-weight:700}
+.frame{position:absolute;border:1px solid var(--frame-line);border-radius:8px;background:var(--frame);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.frame::before{content:"";position:absolute;left:14px;right:14px;top:-1px;height:1px;background:linear-gradient(90deg,transparent,var(--fc,rgba(255,255,255,.35)),transparent);opacity:.9}
+.frame::after{content:"";position:absolute;inset:0;border-radius:8px;pointer-events:none;background:radial-gradient(400px 120px at 0% 0%,color-mix(in srgb,var(--fc,#fff) 10%,transparent),transparent 70%)}
+.frame .flabel{position:absolute;top:-22px;left:8px;font-size:12px;font-weight:700;color:var(--muted);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.frame .flabel b{padding:1px 9px;border-radius:6px;color:#fff;box-shadow:0 0 14px -4px currentColor;letter-spacing:.02em}
+.frame .fsum{position:absolute;top:-22px;right:10px;font-size:11px;color:var(--muted);white-space:nowrap}
+.card{position:absolute;width:var(--cw,250px);height:var(--ch,118px);border-radius:6px;background:var(--card);box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.06);border:1px solid var(--line2);padding:7px 9px 6px 12px;cursor:pointer;overflow:hidden;transition:box-shadow .15s,transform .15s,border-color .15s}
+.card::before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--mc);box-shadow:0 0 12px var(--mc)}
+.card:not(.past){box-shadow:var(--shadow),0 0 0 1px color-mix(in srgb,var(--mc) 35%,transparent),0 0 32px -10px var(--mc)}
+.card.past{background:var(--card-past);opacity:.62}
+.card.past::before{box-shadow:none;opacity:.7}
+.card.ghost{opacity:.45;border-style:dashed}
+.card.sel{border-color:var(--accent);box-shadow:var(--glow),var(--shadow);opacity:1;transform:translateY(-1px)}
+.card.dimmed{opacity:.18}
+.card.yourturn{border-color:var(--yellow);box-shadow:0 0 0 1px var(--yellow),0 0 22px -8px var(--yellow)}
+.card.turn{border-color:var(--red);box-shadow:0 0 0 1px var(--red),0 0 30px -4px var(--red);animation:turnpulse 1.8s ease-in-out infinite}
+@keyframes turnpulse{0%,100%{box-shadow:0 0 0 1px var(--red),0 0 30px -4px var(--red)}50%{box-shadow:0 0 0 2px var(--red),0 0 44px 0 var(--red)}}
+.card:hover{opacity:1;border-color:var(--line2);transform:translateY(-1px)}
+.card .row1{display:flex;align-items:center;justify-content:space-between;gap:4px}
+.card .mbadge{display:inline-flex;align-items:center;gap:5px;font-weight:800;font-size:14px;padding:2px 8px 2px 4px;border-radius:999px;color:var(--tagfg,#fff);white-space:nowrap}
+.card .mbadge i{width:12px;height:12px;border-radius:50%;background:currentColor;opacity:.9;display:inline-block}
+.card .ctag{font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;color:var(--tagfg,#fff);white-space:nowrap;max-width:110px;overflow:hidden;text-overflow:ellipsis}
+.card .st{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:12px;color:var(--muted)}
+.card .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+.card .dot.work{background:var(--green);box-shadow:0 0 0 0 rgba(61,242,166,.7);animation:ring 1.8s ease-out infinite}
+@keyframes ring{0%{box-shadow:0 0 0 0 rgba(61,242,166,.7)}100%{box-shadow:0 0 0 9px rgba(61,242,166,0)}}
+.card .dot.turn{background:var(--red)}
+.card .dot.wait{background:var(--yellow)}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.8)}}
+.card .doing{margin-top:3px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .task{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .foot{position:absolute;bottom:5px;left:12px;right:8px;display:flex;justify-content:space-between;gap:8px;font-size:10.5px;color:var(--muted);font-family:var(--mono);letter-spacing:-.01em;white-space:nowrap;overflow:hidden}
+.card .foot span{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.card .kids{font-size:10.5px;color:var(--muted);flex:none;max-width:45%}
+.jobcard{width:230px;height:70px}
+.jobcard .doing{font-weight:600}
+#panel{position:fixed;top:0;right:0;bottom:0;width:560px;max-width:100%;z-index:30;background:var(--panel);border-left:1px solid var(--line2);box-shadow:-20px 0 50px -30px rgba(0,0,0,.9);transform:translateX(102%);transition:transform .18s;display:flex;flex-direction:column}
+#panel.open{transform:none}
+#panel header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line);gap:8px}
+#panel header h2{margin:0;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#panel .body{overflow:auto;padding:10px 12px;flex:1}
+#panel .kv{display:grid;grid-template-columns:86px 1fr;gap:3px 8px;font-size:12px;margin-bottom:10px}
+#panel .kv div:nth-child(odd){color:var(--muted)}
+#panel h3{font-size:12px;margin:12px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+#panel button{font:inherit;padding:5px 11px;border-radius:8px;border:1px solid var(--line2);background:rgba(255,255,255,.04);color:var(--ink);cursor:pointer;transition:background .12s}
+#panel button:hover{background:rgba(255,255,255,.09)}
+#panel button.primary{background:rgba(125,211,252,.16);color:var(--accent);border-color:rgba(125,211,252,.5);box-shadow:0 0 18px -6px var(--accent);font-weight:700}
+.tl{list-style:none;margin:0;padding:0;font-size:12px}
+.tl li{padding:4px 0 4px 10px;border-left:2px solid var(--line);margin-left:4px;position:relative}
+.tl li.依頼{border-left-color:var(--accent)}
+.tl li.返答{border-left-color:var(--green)}
+.tl li .t{color:var(--muted);font-size:10.5px;margin-right:6px}
+.tl li .k{font-weight:700;margin-right:4px}
+.tl li .txt{white-space:pre-wrap;word-break:break-word}
+.tl details summary{cursor:pointer;color:var(--accent)}
+pre.screen{background:#05070C;color:#d5dbe5;font:11px/1.35 var(--mono);padding:10px;border-radius:10px;border:1px solid var(--line);box-shadow:inset 0 0 40px rgba(0,0,0,.6);overflow:auto;height:46vh;min-height:220px;margin:8px 0;white-space:pre-wrap;word-break:break-all}
+.termhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.termhead button{margin-left:auto}
+.sendrow input{width:100%;box-sizing:border-box;font:13px/1.4 var(--mono);padding:9px 12px;border-radius:10px;border:1px solid rgba(125,211,252,.45);background:rgba(0,0,0,.4);color:var(--ink);box-shadow:0 0 0 0 rgba(125,211,252,0);transition:box-shadow .15s}
+.sendrow input:focus{outline:none;box-shadow:0 0 0 3px rgba(125,211,252,.2),0 0 24px -6px var(--accent)}
+.keys{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}.keys button{padding:3px 9px !important;font:12px ui-monospace,Menlo,monospace !important}
+#panel details{margin-top:10px}#panel summary{cursor:pointer;color:var(--muted);font-size:12px}
+.pill{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;color:#fff;font-weight:700;margin-right:4px}
+#world{--inv:1}
+/* 引きの見出しは枠の「上」に1行で置く。枠の中に敷くとカードの下に潜って文字とカードが重なる(2026-09-17) */
+.frame .fbig{display:none;position:absolute;left:0;right:0;bottom:100%;padding:0 4px calc(5px*var(--inv));font-size:min(calc(15px*var(--inv)),58px);line-height:1.25;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none}
+.frame .fbig > *{display:inline !important;margin-right:.5em}
+.frame .fbig .task{display:none !important}
+.lod-mid .frame .flabel,.lod-mid .frame .fsum{font-size:calc(12px*var(--inv));top:calc(-22px*var(--inv))}
+.frame .fbig b{font-size:1.25em}
+.frame .fbig .dots i{display:inline-block;width:.85em;height:.85em;border-radius:50%;margin-right:.2em;vertical-align:middle}
+.frame .fbig .task{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60em}
+.lod-far .frame .fbig{display:block}
+.lod-far .frame .flabel,.lod-far .frame .fsum{display:none}
+.lod-far .card > *{visibility:hidden}
+.lod-far .card{background:color-mix(in srgb,var(--mc) 55%,transparent);opacity:.9;border-color:transparent;box-shadow:0 0 18px -6px var(--mc)}
+.lod-far .card.past{background:color-mix(in srgb,var(--mc) 22%,transparent);opacity:.7;box-shadow:none}
+.lod-far .card::before{display:none}
+.lod-far .card.past{opacity:.3}
+.lod-far .card.turn{opacity:1;box-shadow:0 0 0 5px var(--red),0 0 40px var(--red)}
+.lod-far .card .dot.work{visibility:visible;position:absolute;left:50%;top:50%;width:26px;height:26px;margin:-13px 0 0 -13px;border:3px solid #fff}
+.lod-mid .card .task,.lod-mid .card .foot,.lod-mid .card .ctag{display:none}
+.lod-mid .card .mbadge{font-size:18px}
+.lod-mid .card .doing,.lod-mid .card .st{font-size:16px}
+.frame .fmore{pointer-events:auto;cursor:pointer;color:var(--accent);text-decoration:underline;margin-left:8px}
+.card.bundle{border-style:dashed;background:var(--card-past)}
+#status{position:fixed;left:10px;bottom:8px;z-index:20;font-size:11px;color:var(--muted);background:var(--panel);padding:4px 10px;border-radius:8px;border:1px solid var(--line);font-family:var(--mono)}
+.legend{font-size:11px;color:var(--muted)}
+@media (max-width:700px){
+  #panel{width:100%;top:45%;border-left:none;border-top:1px solid var(--line);transform:translateY(102%)}
+  #panel.open{transform:none}
+  #toolbar #q{width:140px}
+}
+</style>
+</head>
+<body>
+<div id="toolbar">
+  <div class="row main">
+    <span class="seg" id="modeSeg"><button class="chip on" data-mode="now">● いま</button><button class="chip" data-mode="history">◷ 過去</button></span>
+    <button class="chip red" id="btnTurn" title="該当カードへズーム">🔴 あなたの番 <b id="nTurn">0</b></button>
+    <button class="chip" id="btnWork">🟢 作業中 <b id="nWork">0</b></button>
+    <input id="q" placeholder="検索: 依頼文・フォルダ・ファイル名" />
+    <button class="chip" id="btnFit" title="F キー">⛶ 全体</button>
+    <button class="chip" id="btnTour" title="使い方の案内">? 使い方</button>
+    <button class="chip" id="btnMore" title="絞り込み・見た目・マシン">⋯ もっと</button>
+  </div>
+  <div class="row more" id="moreRow" hidden>
+    <span class="membar" id="mem" title="このMacのメモリ"><span>メモリ</span><span class="bar"><i id="memBar"></i></span><span id="memTxt">-</span></span>
+    <span class="membar" id="jet" title="JetsamEvent(メモリ不足の強制終了)">💥 今日 <b id="jetToday">-</b>回</span>
+    <span class="membar" id="mm">▣ macmini <span id="mmTxt">-</span></span>
+    <span class="sep"></span>
+    <span id="models"></span>
+    <span class="sep"></span>
+    <select id="days"><option value="1">今日</option><option value="7">7日</option><option value="30" selected>30日</option><option value="all">全部</option></select>
+    <select id="fClient"><option value="">顧客: 全部</option></select>
+    <select id="fAi"><option value="">AI: 全部</option><option value="Claude">Claude</option><option value="Codex">Codex</option></select>
+    <label class="chip"><input type="checkbox" id="fUnatt"> 無人実行も</label>
+    <label class="chip"><input type="checkbox" id="fSub"> サブエージェントも</label>
+    <label class="chip"><input type="checkbox" id="fHelp"> 査読・補助も</label>
+    <label class="chip"><input type="checkbox" id="fSame"> 同じファイルの線</label>
+    <span class="legend" id="idxCounts"></span>
+    <button class="chip" id="btnLook" title="見た目を切り替える(夜空 / figma)">◐ 見た目</button>
+  </div>
+</div>
+<div id="rail"></div>
+<div id="zoomctl"><button id="zOut" title="−">−</button><button id="zoomPct" title="100% (0)">100%</button><button id="zIn" title="+">+</button><button id="zFit" title="⇧1">⛶</button></div>
+<div id="tour"><div class="hole"></div><div class="bub"></div></div>
+<div id="empty" hidden></div>
+<div id="stage"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></div>
+<div id="status">…</div>
+<aside id="panel"><header><h2 id="pTitle">詳細</h2><div><button id="pClose">✕</button></div></header><div class="body" id="pBody"></div></aside>
+<script>
+    // 背景の明るさから文字色を選ぶ(2026-09-17 実測: 白文字だと 6色中5色が WCAG AA 未達。
+    // 例: 金 #E6BE28 は白文字で 1.79。相対輝度 0.179 を境に黒へ切り替えると全色 4.6 以上)
+    function fgFor(rgb) {
+      const f = c => { c /= 255; return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      const L = 0.2126 * f(rgb[0]) + 0.7152 * f(rgb[1]) + 0.0722 * f(rgb[2]);
+      return L > 0.179 ? '#000' : '#fff';
+    }
+
+(() => {
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const rgb = a => a ? `rgb(${a[0]},${a[1]},${a[2]})` : 'var(--muted)';
+const fmtDur = s => { if (s == null) return '-'; s = Math.max(0, s|0); if (s < 60) return s + T('秒'); if (s < 3600) return (s/60|0) + T('分'); if (s < 86400) return (s/3600).toFixed(1) + T('時間'); return (s/86400).toFixed(1) + T('日'); };
+const fmtT = t => { if (!t) return '-'; const d = new Date(t*1000); return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+const fmtIso = t => { if (!t) return ''; const d = new Date(t); if (isNaN(d)) return t; return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+
+// ---------------- 状態 ----------------
+let snap = null, index = {records: [], edges: []}, sel = null, detailTimer = null;
+let view = {x: 40, y: 80, k: 0.8};
+const slots = {};        // sid → {frame, i}  (配置は sid 基準で固定。再描画でガタつかない)
+const frameOrder = [];   // frame key の登場順
+const frameCols = {};    // frame key → 列数
+let filters = {q: '', days: '30', client: '', ai: '', model: '', unatt: false, same: false, sub: false, help: false};
+// 既定は「いま」: 動いているセッションだけ。過去 30 日は「過去」を選んだときだけ描く(情報量を最初は最小に。2026-09-18 本人の指摘)
+let mode = 'now'; try { mode = localStorage.getItem('mode') || 'now'; } catch (e) {}
+let homeExpanded = false, firstFit = true;
+const HOME_TOP = 20;
+let statusBase = '';
+let CARD_W = 250, CARD_H = 118; const GAP = 14, FRAME_PAD = 26, FRAME_GAP = 96; let ROW_W = 4200;
+function applyCardSize() { const st = document.getElementById('stage'); const ar = st ? Math.max(1, st.clientWidth / Math.max(1, st.clientHeight)) : 1.6; ROW_W = mode === 'now' ? Math.round(1500 * ar) : 4200; CARD_W = mode === 'now' ? 300 : 250; CARD_H = mode === 'now' ? 132 : 118; document.documentElement.style.setProperty('--cw', CARD_W + 'px'); document.documentElement.style.setProperty('--ch', CARD_H + 'px'); }
+
+// ---------------- 取得 ----------------
+// ---------------- 言語(既定 英語。?lang=ja / localStorage / アプリのシステム言語 / ブラウザの言語) ----------------
+// 文言は日本語をキーにした辞書で英語に引く。辞書に無いキーは日本語のまま出るので、取りこぼしは画面の日本語を数えれば分かる
+const LANG = (() => { try { const q = new URLSearchParams(location.search).get('lang'); if (q) return q; const l = localStorage.getItem('lang'); if (l) return l; } catch (e) {}
+  const sys = window.AIBOARD_LANG || navigator.language || 'en'; return sys.startsWith('ja') ? 'ja' : 'en'; })();
+const JA = {
+  'tour.1.t': 'これが盤です', 'tour.1.b': '動いている Claude Code / Codex のセッション 1 つが 1 枚のカード。四角は顧客、丸はモデル。ドラッグで移動、ホイールで拡大、F で全体。「過去」に切り替えると 30 日分が出ます。',
+  'tour.2.t': 'あなたの番', 'tour.2.b': 'この数が「判断を待っている AI」の数。押すとそこへ寄ります。「過去」では上に緊急度順の列が出ます。',
+  'tour.3.t': '色を見れば状態がわかる', 'tour.3.b': '赤＝許可や質問で止まっている。黄＝返答済み、あなたの番。緑＝作業中。Dock のバッジと macOS の通知でも知らせます。',
+  'tour.4.t': 'カードを押して、打つ', 'tour.4.b': '右のパネルはそのセッションの本物の端末。1 キーで承認、文章も送れます。ダブルクリックで全幅。',
+  'tour.5.t': 'ここから AI を起動する', 'tour.5.b': '⌘T 新しい Claude · ⌥⌘T Codex · ⇧⌘W git worktree で Claude · ⌘B 盤を畳む。全部この Mac の中で完結します。',
+  'tour.next': '次へ', 'tour.done': 'わかった', 'tour.skip': 'とばす',
+};
+const EN = {
+  '🔴 あなたの番': '🔴 Your turn', '🟢 作業中': '🟢 Working', 'メモリ': 'Memory', 'このMacのメモリ': 'Memory of this Mac', '💥 今日': '💥 Today', '回': 'x',
+  'JetsamEvent(メモリ不足の強制終了)': 'Jetsam events (killed for memory pressure)', '該当カードへズーム': 'Zoom to those cards',
+  '検索: 依頼文・フォルダ・ファイル名': 'Search: prompt, folder, file', '今日': 'Today', '7日': '7 days', '30日': '30 days', '全部': 'All',
+  '顧客: 全部': 'Client: all', 'AI: 全部': 'AI: all', '無人実行も': 'Unattended too', 'サブエージェントも': 'Subagents too', '査読・補助も': 'Reviews/helpers too',
+  '同じファイルの線': 'Same-file links', 'F キー': 'Key F', '⛶ 全体': '⛶ Fit all', '見た目を切り替える(夜空 / figma)': 'Switch look (night / figma)', '◐ 見た目': '◐ Look',
+  '顧客=四角(🟪🟦🟨🟥) モデル=丸 ／ ドラッグで移動・ホイールで拡大・F で全体': 'Client = square · Model = dot · drag to pan · wheel to zoom · F to fit',
+  '詳細': 'Details', '秒': 's', '分': 'm', '時間': 'h', '日': 'd',
+  '更新': 'Updated', '取得': 'fetch', 'タブ': 'tab', 'snapshot 取得失敗': 'snapshot failed', '索引エラー': 'index error', '索引': 'index', '件': '', '更新中…': 'building…', '読込中…': 'loading…',
+  '補助（元不明）': 'Helpers (origin unknown)', '元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開': 'codex exec runs (reviews/helpers) whose parent Claude session could not be identified. Click to expand',
+  'サブエージェント': 'Subagent', '終了': 'Ended', '束': 'Bundle',
+  'YouTube工場': 'YouTube factory', '⏸ PAUSE中(publish停止)': '⏸ PAUSED (publishing off)', '稼働': 'running', '最後': 'last', '停止: ': 'down: ', '全部 online': 'all online',
+  '今日 ok': 'today ok', '本': ' jobs', '前': ' ago', ' 外部送信あり': ' (sends externally)', '取得失敗': 'fetch failed', '未設定(~/.aiboard/config.json の remote_hosts)': 'not configured (remote_hosts in ~/.aiboard/config.json)',
+  '▣ macmini 無人AIジョブ': '▣ Remote unattended jobs', '● 自社・その他（直近）': '● Home & others (recent)', 'さらに表示': 'show more', '直近だけに戻す': 'recent only',
+  'モデル不明': 'unknown model', '子: ': 'children: ', '子 ': 'children ', ' 動作中': ' running', '↳ サブエージェント': '↳ subagent', '↳ 査読': '↳ review', '↳ 補助': '↳ helper', '🤖 無人': '🤖 unattended',
+  '発言': ' msgs', '操作': ' ops', 'ok': 'ok', '動作中': 'live', '過去': 'past', '今日の依頼': "today's prompts", '未測定': 'not measured', '取得OK': 'OK',
+  '人の会話': 'human', '査読/補助': 'reviews/helpers', '無人': 'unattended', '子': 'children', '作業中': 'working',
+  '(全文': '(full', '字)': ' chars)', '作業中(端末)': 'working', '端末へ': 'To terminal', 'iTerm で開く': 'Open in iTerm', 'ここに打って Enter で送る（空で Enter = Enter キー）': 'Type here, Enter to send (empty Enter = Enter key)',
+  '送り先: タブ': 'Target: tab', '中身が入れ替わっていたら送らない': 'not sent if the tab changed', 'AI セッションではないので、ここからは送れない（iTerm で開く）': 'Not an AI session — cannot send from here (open in iTerm)',
+  '直近の流れ・詳細': 'Recent activity & details', '(取得できない)': '(unavailable)', '送った': 'sent', 'アカウント': 'account', '状態': 'State', 'フォルダ': 'Folder', '今日の依頼(件)': "Today's prompts",
+  '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
+  '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
+  '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
+  '無人ジョブ': 'Unattended jobs', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
+  'tour.1.t': 'This is your board', 'tour.1.b': 'Each running Claude Code or Codex session is a card. Squares are clients, dots are models. Drag to pan, wheel to zoom, F fits everything. Switch to History to see the last 30 days.',
+  'tour.2.t': 'Your turn', 'tour.2.b': 'This number is how many agents are waiting for a decision. Click it to zoom to them. In History, a strip at the top lists live sessions by urgency.',
+  'tour.3.t': 'Color tells you the state', 'tour.3.b': 'Red = stuck on a permission or question. Yellow = replied, your turn. Green = working. Your Dock badge and macOS notifications tell you too.',
+  'tour.4.t': 'Click a card, type', 'tour.4.b': 'The panel shows the real terminal for that session. Approve with one key or send a message. Double-click opens it full width.',
+  'tour.5.t': 'Start agents from here', 'tour.5.b': '⌘T new Claude · ⌥⌘T new Codex · ⇧⌘W Claude in a git worktree · ⌘B hide the board. Everything stays on this Mac — nothing is uploaded.',
+  'tour.next': 'Next', 'tour.done': 'Got it', 'tour.skip': 'Skip', '判断待ち': 'needs you', '返答済み': 'replied', '停止': 'stopped', '動いている AI はありません': 'No agents running', 'Claude Code か Codex を端末で起動すると、ここにカードとして現れます。': 'Start Claude Code or Codex in a terminal and it appears here as a card.', 'で Claude を開く': 'opens a new Claude terminal', '依頼': 'prompt', '返答': 'reply', '自社': 'home', '~(ホーム)': '~ (home)', 'カードをダブルクリックでも開く': 'Double-click a card also opens it', 'エラーで停止': 'stopped: error', '中断された': 'interrupted', '考え中': 'thinking', '返答済み（あなたの番）': 'replied (your turn)', '考え中（直前の操作は未記録）': 'thinking (last op not recorded)',
+};
+// サーバが返す状態名(cs.py)の表示
+const STATE_EN = {'作業中': 'working', '返答待ち': 'replied', 'codex 返答待ち': 'replied', '確認待ち': 'needs you', 'codex 停止': 'codex stopped', '終了(古い題名)': 'ended', '起動中?': 'starting?', '確認画面で停止': 'stuck at trust prompt', '他のジョブ': 'other job', 'codex': 'codex working', 'サブエージェント': 'subagent', '終了': 'ended', '束': 'bundle'};
+function T(k) { if (LANG === 'ja') { const j = JA[k]; return j === undefined ? k : j; } const v = EN[k]; return v === undefined ? k : v; }
+function TS(state) { return LANG === 'ja' ? state : (STATE_EN[state] || (state.startsWith('⛔') ? state.replace('⛔ エラーで停止: ', '⛔ stopped: ') : state)); }
+function TD(doing) { // 「いまやっていること」の定型部分だけ
+  if (LANG === 'ja' || !doing) return doing || '';
+  return doing.replace('✅ 返答済み（あなたの番）', '✅ ' + EN['返答済み（あなたの番）']).replace('考え中（直前の操作は未記録）', EN['考え中（直前の操作は未記録）']).replace(/^考え中$/, EN['考え中']).replace('⛔ エラーで停止: ', '⛔ stopped: ').replace('⏹ 中断された', '⏹ interrupted');
+}
+function translateStatic() {   // ツールバーとパネル見出しの固定文言
+  if (LANG === 'ja') return;
+  const walk = document.createTreeWalker(document.getElementById('toolbar'), NodeFilter.SHOW_TEXT); let n;
+  while ((n = walk.nextNode())) { const t = n.textContent; const k = t.trim(); if (k && EN[k] !== undefined) n.textContent = t.replace(k, EN[k]); }
+  document.querySelectorAll('#toolbar [title], #toolbar [placeholder], #toolbar option, #pTitle').forEach(e => {
+    for (const a of ['title', 'placeholder']) { const v = e.getAttribute(a); if (v && EN[v] !== undefined) e.setAttribute(a, EN[v]); }
+    if (e.tagName === 'OPTION' || e.id === 'pTitle') { const k = e.textContent.trim(); if (EN[k] !== undefined) e.textContent = EN[k]; } });
+}
+document.documentElement.lang = LANG;
+translateStatic();
+if (window.AIBOARD) document.documentElement.dataset.app = '1';
+
+// ---------------- デモモード(?demo=1): 公開スクショ・動画用。顧客名・依頼文・フォルダ名・アカウントを架空の英語に置き換える ----------------
+// 本物の顧客名や依頼文は絶対に出さない(利用者の指示)。置換は表示直前に行い、サーバのデータは触らない
+const DEMO = (() => { try { return new URLSearchParams(location.search).get('demo') === '1'; } catch (e) { return false; } })();
+const DEMO_CLIENTS = [['acme', 'Acme Corp', '🟪', [155, 77, 224]], ['globex', 'Globex', '🟦', [40, 120, 230]], ['initech', 'Initech', '🟨', [230, 190, 40]], ['umbrella', 'Umbrella', '🟥', [220, 60, 150]]];
+const DEMO_TASKS = ['Fix the refund flow so stock is restored', 'Add dark mode to the settings page', 'Write integration tests for the billing API', 'Migrate the search index to SQLite', 'Investigate the memory leak in the worker', 'Draft the release notes for v2.3', 'Refactor the auth middleware', 'Profile the render loop and cut frame time', 'Set up the CI pipeline for the mobile app', 'Review the PR for the new onboarding', 'Generate OpenAPI docs from the router', 'Fix flaky e2e test on checkout', 'Summarize customer feedback from last week', 'Build the CSV export for reports', 'Optimize the Docker image size'];
+const DEMO_PROJECTS = ['acme-app', 'globex-api', 'initech-web', 'umbrella-mobile', 'infra', 'docs', 'data-pipeline', 'design-system'];
+const DEMO_DOING = ['Running tests…', 'Editing src/api/refund.ts', 'Reading logs', 'Bash: npm run build', 'Thinking', '✅ Replied (your turn)', 'Searching the codebase', 'Writing the migration'];
+function hashStr(x) { let h = 2166136261; for (const c of String(x)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; }
+function pick(arr, key) { return arr[hashStr(key) % arr.length]; }
+function demoClient(c, key) { if (!DEMO) return c; if (!c) return null; const d = DEMO_CLIENTS[hashStr(c.id || c.label) % DEMO_CLIENTS.length]; return {id: d[0], label: d[1], emoji: d[2], rgb: d[3], by: 'demo'}; }
+function demoText(t, key, list) { return DEMO ? (t ? pick(list, key + t) : '') : t; }
+// プロジェクト名は「元の名前」だけから決める(セッションごとに変えると同じプロジェクトが散って枠が崩れる)
+function demoProject(p, key) { return DEMO ? (p ? pick(DEMO_PROJECTS, 'p:' + p) : '') : p; }
+function demoCwd(p, key) { if (!DEMO) return p; if (isHome(p)) return '/Users/dev'; return '/Users/dev/' + demoProject(p ? p.split('/').pop() : 'home', key); }
+
+// AIBoard.app の中では、アプリの端末("0-N")はアプリ自身が前面に出す。iTerm のタブは従来どおり AppleScript
+const APP = !!window.AIBOARD;
+function toApp(msg) { try { window.webkit.messageHandlers.aiboard.postMessage(msg); return true; } catch (e) { return false; } }
+function isAppTab(tab) { return typeof tab === 'string' && tab.startsWith('0-'); }
+async function goTab(tab) { if (APP && isAppTab(tab)) { toApp({type: 'focus', tab}); return {ok: true}; } return getJSON('/api/go', {method: 'POST', body: JSON.stringify({tab})}); }
+async function getJSON(u, opt) { opt = opt || {}; opt.headers = Object.assign({'X-Overview': '1'}, opt.headers || {}); const r = await fetch(u, opt); return r.json(); }
+async function loadSnap() {
+  try { snap = await getJSON('/api/snapshot'); statusBase = `${T('更新')} ${new Date().toLocaleTimeString()}  ${T('取得')} ${snap.took}s  ${T('タブ')} ${snap.counts.tabs}`; }
+  catch (e) { $('#status').innerHTML = `<span class="warn">${T('snapshot 取得失敗')}: ${esc(e)}</span>`; return; }
+  if (APP) toApp({type: 'sessions', list: snap.sessions.filter(x => isAppTab(x.tab)).map(x => ({tab: x.tab, sid: x.sid, ai: x.ai, cwd: x.cwd}))});
+  render();
+}
+async function loadIndex() {
+  if (mode !== 'history') return;   // 「いま」では過去を描かないので取りに行かない(WebKit のメモリと通信を削る)
+  const days = filters.days === 'all' ? 'all' : filters.days;
+  try { index = await getJSON(`/api/index?days=${days}&unattended=${filters.unatt ? 1 : 0}&children=${filters.sub || filters.help ? 1 : 0}`); }
+  catch (e) { index = {records: [], edges: [], error: String(e)}; }
+  render();
+  if (firstFit) { firstFit = false; fitLive(); }   // 索引が入るとフレームが広がって位置が動くので、初回は入った後に合わせ直す
+}
+
+// ---------------- フレームとカードの集合 ----------------
+function liveBySid() { const m = {}; (snap?.sessions || []).forEach(s => { if (s.sid) m[s.sid] = s; }); return m; }
+function nodeList() {
+  // 生きているセッション(snapshot) + 過去(index)。同じ sid は生きている方を採用。「いま」では過去を入れない
+  const live = liveBySid();
+  const nodes = [];
+  const seen = new Set();
+  (snap?.sessions || []).forEach(s => { if (s.mark === '⚪') return; nodes.push(liveNode(s)); seen.add(s.sid); });
+  if (mode === 'history') (index.records || []).forEach(r => { if (seen.has(r.id)) return; if (r.live && live[r.id]) return; nodes.push(pastNode(r)); seen.add(r.id); });
+  // 子(サブエージェント/査読/補助)は親と同じフレームに。親が無い査読・補助は「補助（元不明）」の束に
+  const byId = {}; nodes.forEach(n => byId[n.id] = n);
+  let orphans = 0;
+  nodes.forEach(n => {
+    if (!n.parentId) return;
+    const p = byId[n.parentId];
+    if (p) n.frameKey = p.frameKey;
+    else if (n.role !== 'subagent') { n.parentId = 'bundle:helpers'; n.frameKey = 'home'; orphans++; }
+    else n.parentId = null;
+  });
+  if (orphans) nodes.push({id: 'bundle:helpers', live: false, bundle: true, n: orphans, ai: '', model: null, client: null, cwd: '', project: '', frameKey: 'home', state: '束', mark: '⚪', doing: `${T('補助（元不明）')}×${orphans}`, task: T('元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開'), t: 0, text: '補助 元不明', tab: null, role: 'bundle', kind: 'bundle'});
+  return nodes;
+}
+function liveNode(s) {
+  if (DEMO) s = Object.assign({}, s, {client: demoClient(s.client, s.sid), cwd: demoCwd(s.cwd, s.sid), project: demoProject(s.project, s.sid), doing: demoText(s.doing, s.sid + 'd', DEMO_DOING), task: demoText(s.task, s.sid + 't', DEMO_TASKS), topic: demoText(s.topic, s.sid + 'o', DEMO_TASKS), account: s.account ? 'demo' : ''});
+  return {id: s.sid, live: true, s, ai: s.ai.startsWith('Codex') ? 'Codex' : 'Claude', model: s.model_style, client: s.client, cwd: s.cwd, project: s.project,
+    frameKey: s.client ? 'c:' + s.client.id : isHome(s.cwd) ? 'home' : 'p:' + (s.project || '?'), state: s.state, mark: s.mark, doing: s.doing, task: s.task, t: s.ago != null ? (snap.time - s.ago) : snap.time,
+    text: [s.task, s.topic, s.cwd, s.doing].join(' '), tab: s.tab, unattended: false, kind: 'live', role: 'live', title: s.topic, parentId: null};
+}
+function pastNode(r) {
+  if (DEMO) r = Object.assign({}, r, {client: demoClient(r.client, r.id), cwd: demoCwd(r.cwd, r.id), project: demoProject(r.project, r.id), first_prompt: demoText(r.first_prompt, r.id + 'f', DEMO_TASKS), last_prompt: demoText(r.last_prompt, r.id + 'l', DEMO_TASKS), title: demoText(r.title, r.id + 'i', DEMO_TASKS), files: [], files_top: [], account: r.account ? 'demo' : ''});
+  return {id: r.id, live: false, r, ai: r.ai, model: r.model_style, client: r.client, cwd: r.cwd, project: r.project,
+    frameKey: r.client ? 'c:' + r.client.id : isHome(r.cwd) ? 'home' : 'p:' + (r.project || '?'), state: r.kind === 'subagent' ? 'サブエージェント' : '終了', mark: '⚪', doing: r.last_prompt, task: r.first_prompt, t: r.end,
+    text: [r.title, r.first_prompt, r.last_prompt, r.cwd, (r.files || []).join(' ')].join(' '), tab: null, unattended: r.unattended, ghost: r.ghost, kind: r.kind, role: r.role || 'human', title: r.title || '',
+    parentId: r.kind === 'subagent' ? r.parent : (r.role === 'review' || r.role === 'helper') ? (r.parent_session || 'bundle:helpers') : null};
+}
+function isHome(cwd) { return !cwd || /^\/Users\/[^/]+\/?$/.test(cwd); }
+function isChild(n) { return n.role === 'subagent' || n.role === 'review' || n.role === 'helper';
+}
+function passes(n) {
+  if (n.role === 'subagent' && !filters.sub && !(sel && (n.parentId === sel || n.id === sel))) return false;
+  if ((n.role === 'review' || n.role === 'helper') && !filters.help && !(sel && (n.parentId === sel || n.id === sel))) return false;
+  if (n.bundle) return !filters.help;
+  if (filters.q && !n.text.toLowerCase().includes(filters.q.toLowerCase())) return false;
+  if (filters.client && (!n.client || n.client.id !== filters.client)) return false;
+  if (filters.ai && n.ai !== filters.ai) return false;
+  if (filters.model && (!n.model || n.model.label !== filters.model)) return false;
+  return true;
+}
+
+// ---------------- 配置 ----------------
+function layout(nodes) {
+  // frame ごとに、生きている→新しい順で並べるが、既に配置済みの sid は動かさない(新規は末尾の空きへ)
+  const groups = {};
+  nodes.forEach(n => (groups[n.frameKey] = groups[n.frameKey] || []).push(n));
+  Object.keys(groups).forEach(k => { if (!frameOrder.includes(k)) frameOrder.push(k); });
+  // 顧客 → 自社 → macmini の順
+  const rank = k => k.startsWith('c:') ? 0 : k === 'home' ? 2 : 1;
+  const keys = frameOrder.filter(k => groups[k]).sort((a, b) => rank(a) - rank(b));
+  const frames = [];
+  let x = 0, y = 0, rowH = 0;
+  keys.forEach(k => {
+    let g = groups[k].sort((a, b) => (b.live - a.live) || (b.t - a.t));
+    let hidden = 0;
+    if (k === 'home' && !homeExpanded) {   // ホームは何でも入る場所なので、直近 20 件だけ(動いているもの・選択中・子は常に)
+      const keep = [], rest = [];
+      g.forEach(n => (n.live || n.id === sel || n.parentId || n.bundle || keep.length < HOME_TOP ? keep : rest).push(n));
+      hidden = rest.length; g = keep;
+    }
+    const COLS = Math.max(2, Math.min(10, Math.ceil(Math.sqrt(g.length) * 1.4)));
+    if (frameCols[k] && frameCols[k] !== COLS) Object.keys(slots).forEach(id => { if (slots[id].frame === k) delete slots[id]; });   // 列数が変わったら組み直す
+    frameCols[k] = COLS;
+    const used = new Set(Object.values(slots).filter(sl => sl.frame === k).map(sl => sl.i));
+    let next = 0;
+    g.forEach(n => { if (!(slots[n.id]?.frame === k)) { while (used.has(next)) next++; slots[n.id] = {frame: k, i: next}; used.add(next); } });
+    const maxI = Math.max(...g.map(n => slots[n.id].i));
+    const rows = Math.floor(maxI / COLS) + 1;
+    const cols = Math.min(COLS, maxI + 1);
+    const w = cols * (CARD_W + GAP) - GAP + FRAME_PAD * 2, h = rows * (CARD_H + GAP) - GAP + FRAME_PAD * 2;
+    if (x + w > ROW_W && x > 0) { x = 0; y += rowH + FRAME_GAP; rowH = 0; }
+    frames.push({key: k, x, y, w, h, nodes: g, sample: g[0], hidden});
+    g.forEach(n => { const i = slots[n.id].i; n.x = x + FRAME_PAD + (i % COLS) * (CARD_W + GAP); n.y = y + FRAME_PAD + Math.floor(i / COLS) * (CARD_H + GAP); });
+    x += w + FRAME_GAP; rowH = Math.max(rowH, h);
+  });
+  // macmini フレーム
+  const mm = snap?.macmini;
+  const jobs = [];
+  if (mm && mode === 'history' && !mm.unconfigured) {   // 「いま」では出さない(状態は「もっと」の行にある)
+    if (mm.ok) {
+      const y0 = mm.ytfactory;
+      if (y0) jobs.push({id: 'mm:ytf', title: T('YouTube工場') + ' ' + y0.label, sub: (y0.paused ? T('⏸ PAUSE中(publish停止)') : T('稼働')) + ` ${T('最後')} ${fmtT(y0.out_log_mtime)} exit ${y0.last_exit} runs ${y0.runs}`, ok: y0.last_exit === 0, note: y0.note});
+      (mm.cronai || mm.cron_ai || []).forEach((c, i) => jobs.push({id: 'mm:cron' + i, title: 'cron claude -p ' + c.schedule, sub: '「' + c.prompt + '」', ok: true}));
+      const down = (mm.pm2.list || []).filter(p => p.status !== 'online').map(p => p.name);
+      if (mode === 'history') jobs.push({id: 'mm:pm2', title: `PM2 online ${mm.pm2.online}/${mm.pm2.total}`, sub: down.length ? T('停止: ') + down.join(', ') : T('全部 online'), ok: !down.length});
+      const cw = mm.cron_wrap || {today: {}, last24h: {}, jobs: []};
+      if (mode === 'history') jobs.push({id: 'mm:wrap', title: `cron-wrap ${T('今日 ok')} ${cw.today.ok} / FAIL ${cw.today.FAIL}`, sub: `24h ok ${cw.last24h.ok} / FAIL ${cw.last24h.FAIL}・${cw.jobs.length}${T('本')}`, ok: cw.today.FAIL === 0});
+      if (mode === 'history') cw.jobs.filter(j => !j.ok && j.ago < 86400).slice(0, 12).forEach(j => jobs.push({id: 'mm:job:' + j.name, title: 'FAIL ' + j.name, sub: `exit=${j.exit} ${fmtDur(j.ago)}${T('前')}` + (j.external ? T(' 外部送信あり') : ''), ok: false, note: j.ledger_note}));
+    } else {
+      jobs.push({id: 'mm:err', title: T('取得失敗'), sub: T(mm.reason), ok: false});
+    }
+  }
+  if (jobs.length) {
+    if (x > 0) { x = 0; y += rowH + FRAME_GAP; }
+    const cols = Math.min(4, jobs.length), rows = Math.ceil(jobs.length / 4);
+    const w = cols * (230 + GAP) - GAP + FRAME_PAD * 2, h = rows * (70 + GAP) - GAP + FRAME_PAD * 2;
+    jobs.forEach((j, i) => { j.x = x + FRAME_PAD + (i % 4) * (230 + GAP); j.y = y + FRAME_PAD + Math.floor(i / 4) * (70 + GAP); });
+    frames.push({key: 'mm', x, y, w, h, nodes: [], jobs, mm});
+  }
+  return frames;
+}
+
+// ---------------- 描画 ----------------
+function render() {
+  if (!snap) return;
+  const all = nodeList();
+  const vis = all.filter(passes);
+  const frames = layout(vis);
+  const nodesEl = $('#nodes');
+  const placed = new Set(); frames.forEach(f => f.nodes.forEach(n => placed.add(n.id)));
+  const shown = vis.filter(n => placed.has(n.id));   // ホームの「直近20件」から外れたものは描かない(線も引かない)
+  const byId = {}; shown.forEach(n => byId[n.id] = n);
+  // エッジ(両端が見えているもの)
+  const edges = (index.edges || []).filter(e => byId[e.from] && byId[e.to] && (filters.same || e.kind !== 'samefile'));
+  const related = new Set(); if (sel) edges.forEach(e => { if (e.from === sel || e.to === sel) { related.add(e.from); related.add(e.to); } });
+  const items = [];   // [key, html]。patchNodes() が変わったものだけ DOM に反映する
+  frames.forEach(f => {
+    let label, color = null, sum = '';
+    if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
+    else if (f.key.startsWith('c:')) { const c = f.sample.client; label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
+    else if (f.key === 'home') { label = T('● 自社・その他（直近）'); sum = frameSummary(f) + (f.hidden ? ` <span class="fmore" data-more="1">${T('さらに表示')} (+${f.hidden})</span>` : homeExpanded ? ` <span class="fmore" data-more="0">${T('直近だけに戻す')}</span>` : ''); }
+    else { label = '● ' + f.key.slice(2); sum = frameSummary(f); }
+    if (f.w < 420) sum = '';   // 狭い枠では見出しと重なるので要約を出さない
+    items.push(['f:' + f.key, `<div class="frame" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}"><div class="flabel">${color ? `<b style="background:${color}">${esc(label)}</b>` : esc(label)}</div><div class="fsum">${sum}</div>${bigLabel(f, label, color)}</div>`]);
+    (f.jobs || []).forEach((j, ji) => { items.push(['j:' + f.key + ':' + ji, `<div class="card jobcard" style="left:${j.x}px;top:${j.y}px;border-left-color:${j.ok ? 'var(--green)' : 'var(--red)'}" title="${esc(j.note || '')}"><div class="doing">${esc(j.title)}</div><div class="task">${esc(j.sub)}</div></div>`]); });
+  });
+  shown.forEach(n => {
+    const m = Object.assign({}, n.model || {emoji: '❔', label: 'モデル不明', rgb: [120, 120, 120]}); m.label = T(m.label);
+    const mc = rgb(m.rgb);
+    if (n.bundle) { items.push(['n:' + n.id, `<div class="card past bundle ${sel === n.id ? 'sel' : ''}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:var(--muted)"><div class="doing">${esc(n.doing)}</div><div class="task">${esc(n.task)}</div></div>`]); return; }
+    const cls = ['card', n.live ? 'live' : 'past', n.ghost ? 'ghost' : '', sel === n.id ? 'sel' : '', (sel && sel !== n.id && !related.has(n.id) && n.parentId !== sel) ? 'dimmed' : '', (n.live && n.state === '確認待ち') ? 'turn' : (n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち')) ? 'yourturn' : ''].join(' ');
+    const dot = n.live ? (n.mark === '🟢' || n.mark === '🟩' ? 'work' : n.state === '確認待ち' ? 'turn' : 'wait') : '';
+    const kidsRec = n.r?.child_models || (index.records || []).find(r => r.id === n.id)?.child_models;
+    const liveKids = n.live && n.s.subagents ? Object.keys(n.s.subagents).length : 0;
+    const kids = kidsRec && Object.keys(kidsRec).length ? T('子: ') + Object.entries(kidsRec).map(([k, v]) => `${T(k)}×${v}`).join(' ') : liveKids ? `${T('子 ')}${liveKids}${T(' 動作中')}` : '';
+    const roleLabel = {subagent: T('↳ サブエージェント'), review: T('↳ 査読'), helper: T('↳ 補助'), unattended: T('🤖 無人')}[n.role] || T('終了');
+    const st = n.live ? `${TS(n.state)} ${n.s.state_for != null ? fmtDur(n.s.state_for) : ''}` : `${roleLabel} ${fmtT(n.t)}`;
+    items.push(['n:' + n.id, `<div class="card ${cls}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;border-left-color:${mc};--mc:${mc}" title="${esc(n.task)}">
+      <div class="row1"><span class="mbadge" style="background:${mc};--tagfg:${fgFor(m.rgb)}"><i></i>${esc(m.label)}${n.s?.account ? ' (' + esc(n.s.account) + ')' : ''}</span>${n.client ? `<span class="ctag" style="background:${rgb(n.client.rgb)};--tagfg:${fgFor(n.client.rgb)}">${esc(n.client.emoji)}${esc(n.client.label)}</span>` : ''}</div>
+      <div class="st"><span class="dot ${dot}"></span><span>${esc(st)}</span>${n.tab && mode === 'history' ? `<span style="margin-left:auto">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
+      <div class="doing">${esc(n.live ? TD(n.doing) : (n.title || n.r.last_prompt || ''))}</div>
+      <div class="task">${esc(n.live ? n.task : n.r.first_prompt)}</div>
+      <div class="foot"><span>${esc(T(n.project || ''))}${n.live ? ' · ' + n.s.mem_mb + 'MB' : ' · ' + n.r.prompts + T('発言') + '/' + n.r.tools + T('操作')}</span><span class="kids">${mode === 'history' ? esc(kids) : ''}</span></div></div>`]);
+  });
+  patchNodes(nodesEl, items);
+  // エッジ描画
+  const svg = $('#edges');
+  const W = Math.max(...frames.map(f => f.x + f.w), 800) + 100, H = Math.max(...frames.map(f => f.y + f.h), 600) + 100;
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  let e = '';
+  edges.forEach(ed => {
+    const a = byId[ed.from], b = byId[ed.to];
+    const x1 = a.x + CARD_W, y1 = a.y + CARD_H / 2, x2 = b.x, y2 = b.y + CARD_H / 2;
+    const dx = Math.max(60, Math.abs(x2 - x1) / 2);
+    const hi = sel && (ed.from === sel || ed.to === sel);
+    const cls = [ed.kind, hi ? 'hi' : '', sel && !hi ? 'dimmed' : ''].join(' ');
+    e += `<path class="${cls}" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}"><title>${esc(T(ed.label))}: ${DEMO ? 'evidence hidden in demo' : esc(typeof ed.evidence === 'string' ? ed.evidence : JSON.stringify(ed.evidence))}</title></path>`;
+    if (hi || ed.kind !== 'samefile') e += `<text class="${hi ? 'hi' : ''}" x="${(x1 + x2) / 2}" y="${(y1 + y2) / 2 - 4}" text-anchor="middle">${esc(T(ed.label))}</text>`;
+  });
+  if (e !== _lastEdges) { svg.innerHTML = e; _lastEdges = e; }
+  renderToolbar(all, vis);
+  renderRail(all);
+  applyView();
+  window._frames = frames; window._vis = shown;
+}
+function bigLabel(f, label, color) {
+  if (f.key === 'mm') return `<div class="fbig"><b>${esc(label)}</b><div>${f.mm.ok ? `ok ${f.mm.cron_wrap.today.ok} / FAIL ${f.mm.cron_wrap.today.FAIL} · PM2 ${f.mm.pm2.online}/${f.mm.pm2.total}` : `<span class="warn">${T('取得失敗')}</span>`}</div></div>`;
+  const live = f.nodes.filter(n => n.live), turn = live.filter(n => n.state === '確認待ち').length, work = live.filter(n => n.mark === '🟢' || n.mark === '🟩').length;
+  const models = {}; f.nodes.forEach(n => { if (n.model && !isChild(n)) { models[n.model.label] = models[n.model.label] || {rgb: n.model.rgb, n: 0}; models[n.model.label].n++; } });
+  const dots = Object.entries(models).sort((a, b) => b[1].n - a[1].n).map(([k, v]) => `<i style="background:${rgb(v.rgb)}" title="${esc(k)}"></i>`).join('');
+  const latest = live[0] || f.nodes[0];
+  return `<div class="fbig"><b style="${color ? 'color:' + color : ''}">${esc(label)}</b> &nbsp;${turn ? `<span class="warn">${T('🔴 あなたの番')} ${turn}</span>` : ''} ${work ? `<span class="ok">${T('🟢 作業中')} ${work}</span>` : ''} <span style="color:var(--muted)">${T('過去')} ${f.nodes.filter(n => !n.live && !isChild(n) && !n.bundle).length}</span><div class="dots">${dots}</div><div class="task">${esc(latest ? (latest.live ? latest.task : latest.title || latest.task) : '')}</div></div>`;
+}
+function frameSummary(f) {
+  const live = f.nodes.filter(n => n.live);
+  const turn = live.filter(n => n.state === '確認待ち').length, work = live.filter(n => n.mark === '🟢' || n.mark === '🟩').length;
+  const g = (snap.clients || []).find(c => 'c:' + c.id === f.key) || (snap.projects || []).find(p => 'p:' + p.name === f.key);
+  const today = g ? `${T('今日の依頼')} ${g.today_requests}${g.today_requests_partial ? '+' : ''}${T('件')}` : '';
+  if (mode === 'now') return `${turn ? `<span class="warn">🔴 ${turn}</span> ` : ''}${work ? `<span class="ok">🟢 ${work}</span>` : ''}`;
+  return `${live.length ? `${T('動作中')} ${live.length}(🔴${turn} 🟢${work}) ` : ''}${T('過去')} ${f.nodes.length - live.length} ${today}`;
+}
+function chromeH() { return $('#toolbar').offsetHeight + ($('#rail').offsetHeight || 0); }   // 盤の上に重なる部品の高さ
+function renderRail(all) {
+  // 生きているセッションを、緊急度順(判断待ち→返答済み→作業中)に並べる。盤を読む前にここで答えが出る
+  const live = all.filter(n => n.live && !n.bundle);
+  const rank = n => n.state === '確認待ち' ? 0 : (n.state === '返答待ち' || n.state === 'codex 返答待ち') ? 1 : n.state === 'codex 停止' ? 0 : 2;
+  live.sort((a, b) => rank(a) - rank(b) || (b.s.state_for || 0) - (a.s.state_for || 0));
+  const rail = $('#rail');
+  const html = (live.length && mode === 'history') ? `<span class="rlhead">${T('いま')}</span>` + live.map(n => {
+    const r = rank(n), cls = r === 0 ? 'turn' : r === 1 ? 'wait' : 'work';
+    const m = n.model || {rgb: [120, 120, 120], label: '?'};
+    const lbl = r === 0 ? (n.state === 'codex 停止' ? T('停止') : T('判断待ち')) : r === 1 ? T('返答済み') : T('作業中');
+    const who = n.client ? `<span class="sq" style="background:${rgb(n.client.rgb)}" title="${esc(n.client.label)}"></span>` : '';
+    return `<div class="rl ${cls} ${sel === n.id ? 'sel' : ''}" data-id="${esc(n.id)}" title="${esc((n.s.project || '') + ' · ' + (n.task || ''))}">${who}<span class="dt" style="background:${rgb(m.rgb)}" title="${esc(m.label)}"></span><span class="lbl ${cls}">${esc(lbl)}</span><span class="dg">${esc(n.s.project || n.tab || '')} · ${esc(TD(n.doing) || n.task || '')}</span></div>`; }).join('') : '';
+  if (rail.dataset.html !== html) { rail.innerHTML = html; rail.dataset.html = html; }
+  rail.style.top = $('#toolbar').offsetHeight + 'px';   // ツールバーの直下に重ねる(盤はその下に見える)
+  // 空状態: 動いているものが無い(過去はあるかもしれない)
+  const empty = $('#empty');
+  if (!live.length) { empty.hidden = false; empty.innerHTML = `<b>${T('動いている AI はありません')}</b>${T('Claude Code か Codex を端末で起動すると、ここにカードとして現れます。')}${APP ? `<br><span class="kbd">⌘T</span> ${T('で Claude を開く')}` : ''}`; }
+  else empty.hidden = true;
+}
+$('#rail').addEventListener('click', ev => { const c = ev.target.closest('.rl[data-id]'); if (!c) return; select(c.dataset.id); const n = (window._vis || []).find(x => x.id === c.dataset.id); if (n) fitTo([n]); });
+function renderToolbar(all, vis) {
+  $('#nTurn').textContent = snap.attention.length;
+  $('#nWork').textContent = snap.counts.working;
+  const m = snap.machine;
+  if (m.ok) { $('#memBar').style.width = m.used_pct + '%'; $('#memBar').style.background = m.used_pct >= 85 ? 'var(--red)' : m.used_pct >= 70 ? 'var(--yellow)' : 'var(--green)'; $('#memTxt').textContent = `${m.used_pct}% (${m.used_gb}/${m.total_gb}GB, swap ${((m.swap_used_mb || 0) / 1024).toFixed(1)}GB)`; }
+  else { $('#memTxt').innerHTML = `<span class="warn">${T('未測定')}: ${esc(m.reason)}</span>`; }
+  const j = m.jetsam || {}; $('#jetToday').textContent = j.today ?? '?'; $('#jet').title = `24h ${j.last24h}${T('回')}・${T('最後')} ${j.last_ago != null ? fmtDur(j.last_ago) + T('前') : '-'} ${j.last_killed ? j.last_killed.map(k => k.name + '(' + k.reason + ')').join(', ') : ''}`;
+  const mm = snap.macmini; $('#mmTxt').innerHTML = mm.ok ? `<span class="ok">${T('取得OK')}</span> ${fmtDur(snap.time - mm.fetched)}${T('前')}` : `<span class="warn">${T(mm.unconfigured ? '未設定(~/.aiboard/config.json の remote_hosts)' : '取得失敗')}</span>`; $('#mm').title = mm.ok ? `${mm.host} load ${mm.load1}` : mm.reason;
+  // モデル別集計(生きている分。クリックで絞り込み)
+  const cnt = {};
+  (snap.sessions || []).forEach(s => { if (s.mark === '⚪' || !s.model_style) return; const k = s.model_style.label; cnt[k] = cnt[k] || {n: 0, busy: 0, st: s.model_style}; cnt[k].n++; if (s.mark === '🟢' || s.mark === '🟩') cnt[k].busy++; });
+  $('#models').innerHTML = Object.entries(cnt).map(([k, v]) => `<button class="chip ${filters.model === k ? 'on' : ''}" data-model="${esc(k)}" style="border-color:${rgb(v.st.rgb)}">${esc(v.st.emoji)} ${esc(T(k))} ×${v.n} <small>${T('作業中')}${v.busy}</small></button>`).join('');
+  document.querySelectorAll('#models .chip').forEach(b => b.onclick = () => { filters.model = filters.model === b.dataset.model ? '' : b.dataset.model; render(); });
+  const ic = index.counts; $('#idxCounts').textContent = ic ? `💬 ${T('人の会話')} ${ic.human} · ${T('査読/補助')} ${ic.review_helper} · 🤖 ${T('無人')} ${ic.unattended} · ↳ ${T('子')} ${ic.subagent}` : '';
+  const cs = $('#fClient'); const have = new Set([...cs.options].map(o => o.value));
+  all.forEach(n => { if (n.client && !have.has(n.client.id)) { have.add(n.client.id); cs.insertAdjacentHTML('beforeend', `<option value="${esc(n.client.id)}">${esc(n.client.emoji)} ${esc(n.client.label)}</option>`); } });
+  const st = index.built ? ` ${T('索引')} ${index.records.length}${T('件')} (${index.building ? T('更新中…') : T('更新') + ' ' + fmtT(index.built)})` : (index.error ? ' ' + T('索引エラー') + ': ' + index.error : ' ' + T('索引') + ' ' + T('読込中…'));
+  $('#status').textContent = statusBase + st;
+}
+
+// ---------------- パン・ズーム ----------------
+const stage = $('#stage'), world = $('#world');
+// 3秒ごとに innerHTML を総入れ替えしていた頃は、操作中に最大 3.2 秒固まり、押そうとしたカードが消えた(2026-09-17 実測)。
+// キーごとに要素を覚えておき、中身の文字列が変わったものだけ差し替える。
+const _els = new Map(); let _lastEdges = null;
+function patchNodes(root, items) {
+  const seen = new Set();
+  for (const [key, html] of items) {
+    seen.add(key);
+    const ent = _els.get(key);
+    if (ent && ent.html === html) continue;
+    const tpl = document.createElement('template'); tpl.innerHTML = html.trim();
+    const el = tpl.content.firstElementChild;
+    if (ent) {
+      // 要素は同じものを使い続ける(差し替えると、押した瞬間に消えてクリックが落ちる。2026-09-17 実測)
+      const cur = ent.el;
+      for (const a of [...cur.attributes]) if (!el.hasAttribute(a.name)) cur.removeAttribute(a.name);
+      for (const a of [...el.attributes]) if (cur.getAttribute(a.name) !== a.value) cur.setAttribute(a.name, a.value);
+      if (cur.innerHTML !== el.innerHTML) cur.innerHTML = el.innerHTML;
+      ent.html = html;
+    } else { if (key.startsWith('f:')) root.prepend(el); else root.appendChild(el); _els.set(key, {el, html}); }
+  }
+  for (const [key, ent] of _els) if (!seen.has(key)) { ent.el.remove(); _els.delete(key); }
+}
+function applyView() {
+  const z = document.getElementById('zoomPct'); if (z) z.textContent = Math.round(view.k * 100) + '%';
+  world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.k})`;
+  world.style.setProperty('--inv', (1 / view.k).toFixed(3));
+  world.className = view.k < 0.42 ? 'lod-far' : view.k < 0.85 ? 'lod-mid' : 'lod-near';
+}
+window._zoomTo = k => { const r = stage.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, k / view.k); };
+// ---------------- 操作(Figma と同じ手触り) ----------------
+// トラックパッド: 2 本指スクロール=移動 / ピンチ=拡大(ctrlKey 付き wheel で届く)
+// マウス: ホイール=移動、⌘/Ctrl+ホイール=拡大 / Space+ドラッグ・中ボタン・余白ドラッグ=移動
+// キー: ⇧1 全体 / ⇧2 選択へ / 0 100% / + − 拡大縮小 / Esc 選択解除
+let drag = null, spaceDown = false, anim = null;
+stage.addEventListener('mousedown', ev => {
+  const onCard = ev.target.closest('.card');
+  if (onCard && !spaceDown && ev.button === 0) return;
+  if (ev.button === 2) return;
+  ev.preventDefault(); cancelAnim();
+  drag = {x: ev.clientX, y: ev.clientY, vx: view.x, vy: view.y}; stage.classList.add('drag');
+});
+window.addEventListener('mousemove', ev => { if (!drag) return; view.x = drag.vx + ev.clientX - drag.x; view.y = drag.vy + ev.clientY - drag.y; schedule(); });
+window.addEventListener('mouseup', () => { drag = null; stage.classList.remove('drag'); });
+window.addEventListener('keydown', ev => { if (ev.code === 'Space' && !isTyping()) { spaceDown = true; stage.classList.add('hand'); ev.preventDefault(); } });
+window.addEventListener('keyup', ev => { if (ev.code === 'Space') { spaceDown = false; stage.classList.remove('hand'); } });
+function isTyping() { const a = document.activeElement; return a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' || a.isContentEditable); }
+stage.addEventListener('wheel', ev => {
+  ev.preventDefault(); cancelAnim();
+  const r = stage.getBoundingClientRect(), px = ev.clientX - r.left, py = ev.clientY - r.top;
+  if (ev.ctrlKey || ev.metaKey) { const f = Math.exp(-ev.deltaY * (ev.deltaMode === 1 ? 0.05 : 0.01)); zoomAt(px, py, f); }
+  else { view.x -= ev.deltaX; view.y -= ev.deltaY; schedule(); }
+}, {passive: false});
+// Safari/WebKit のピンチ(gesture イベント)
+let gk = 1; stage.addEventListener('gesturestart', ev => { ev.preventDefault(); gk = 1; });
+stage.addEventListener('gesturechange', ev => { ev.preventDefault(); const r = stage.getBoundingClientRect(); zoomAt(ev.clientX - r.left, ev.clientY - r.top, ev.scale / gk); gk = ev.scale; });
+// 描画は 1 フレームに 1 回だけ(連続イベントでも transform の書き換えは 60 回/秒まで)
+let rafPending = false;
+function schedule() { if (rafPending) return; rafPending = true; requestAnimationFrame(() => { rafPending = false; applyView(); }); }
+function zoomAt(px, py, f) { const k2 = Math.min(4, Math.max(0.05, view.k * f)); f = k2 / view.k; view.x = px - (px - view.x) * f; view.y = py - (py - view.y) * f; view.k = k2; schedule(); }
+// なめらかに移る(全体・選択へ・拡大ボタン)。180ms、ease-out
+function cancelAnim() { if (anim) { cancelAnimationFrame(anim); anim = null; } }
+function animateTo(target, ms = 180) {
+  cancelAnim(); if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) { view = target; applyView(); return; }
+  const from = {...view}, t0 = performance.now();
+  const step = t => { const u = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - u, 3);
+    // 拡大率は対数で補間(Figma と同じく、倍率によらず同じ速さに見える)
+    const k = Math.exp(Math.log(from.k) + (Math.log(target.k) - Math.log(from.k)) * e);
+    const cx = (x0, x1) => x0 + (x1 - x0) * e;
+    view = {k, x: cx(from.x, target.x), y: cx(from.y, target.y)}; applyView();
+    anim = u < 1 ? requestAnimationFrame(step) : null; };
+  anim = requestAnimationFrame(step);
+}
+function zoomBy(f) { const r = stage.getBoundingClientRect(); const k2 = Math.min(4, Math.max(0.05, view.k * f)), g = k2 / view.k, px = r.width / 2, py = r.height / 2; animateTo({k: k2, x: px - (px - view.x) * g, y: py - (py - view.y) * g}); }
+function zoomTo100() { zoomBy(1 / view.k); }
+window.addEventListener('keydown', ev => {
+  if (isTyping() || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if (ev.shiftKey && ev.code === 'Digit1') { fitAll(); ev.preventDefault(); }
+  else if (ev.shiftKey && ev.code === 'Digit2') { const n = sel && (window._vis || []).find(x => x.id === sel); if (n) fitTo([n]); ev.preventDefault(); }
+  else if (!ev.shiftKey && ev.code === 'Digit0') { zoomTo100(); ev.preventDefault(); }
+  else if (ev.key === '+' || ev.key === '=') { zoomBy(1.25); ev.preventDefault(); }
+  else if (ev.key === '-' || ev.key === '_') { zoomBy(0.8); ev.preventDefault(); }
+});
+// タッチ(ピンチ/パン)
+let touches = null;
+stage.addEventListener('touchstart', ev => { touches = [...ev.touches].map(t => ({x: t.clientX, y: t.clientY})); touches.v = {...view}; }, {passive: true});
+stage.addEventListener('touchmove', ev => {
+  if (!touches) return; ev.preventDefault();
+  const ts = [...ev.touches];
+  if (ts.length === 1 && touches.length === 1) { view.x = touches.v.x + ts[0].clientX - touches[0].x; view.y = touches.v.y + ts[0].clientY - touches[0].y; }
+  else if (ts.length === 2 && touches.length === 2) {
+    const d0 = Math.hypot(touches[0].x - touches[1].x, touches[0].y - touches[1].y), d1 = Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+    const cx = (ts[0].clientX + ts[1].clientX) / 2, cy = (ts[0].clientY + ts[1].clientY) / 2;
+    view = {...touches.v}; zoomAt(cx, cy, d1 / d0); return;
+  }
+  applyView();
+}, {passive: false});
+stage.addEventListener('touchend', () => { touches = null; });
+function fitTo(nodes) {
+  if (!nodes.length) return;
+  const x0 = Math.min(...nodes.map(n => n.x)) - 40, y0 = Math.min(...nodes.map(n => n.y)) - 130 /* 枠の上に出る見出しのぶん */, x1 = Math.max(...nodes.map(n => n.x + (n.w || CARD_W))) + 40, y1 = Math.max(...nodes.map(n => n.y + (n.h || CARD_H))) + 40;
+  const r = stage.getBoundingClientRect(), top = chromeH();
+  const k = Math.min(3, Math.min(r.width / (x1 - x0), (r.height - top) / (y1 - y0)));
+  animateTo({k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: top + ((r.height - top) - (y1 - y0) * k) / 2 - y0 * k});
+}
+function fitAll() { fitTo(window._frames || []); }
+window._setView = (k, f) => { const r = stage.getBoundingClientRect(), top = chromeH(); view = {k, x: (r.width - f.w * k) / 2 - f.x * k, y: top + 40 - f.y * k}; applyView(); };
+$('#btnFit').onclick = fitAll;
+$('#zIn').onclick = () => zoomBy(1.25); $('#zOut').onclick = () => zoomBy(0.8); $('#zoomPct').onclick = zoomTo100; $('#zFit').onclick = fitAll;
+// 「いま / 過去」と「もっと」
+function applyMode() { if (mode === 'history' && !(index.records || []).length) loadIndex(); applyCardSize(); Object.keys(slots).forEach(k => delete slots[k]); $('#modeSeg').querySelectorAll('.chip').forEach(b => b.classList.toggle('on', b.dataset.mode === mode)); document.documentElement.dataset.mode = mode; render(); setTimeout(fitAll, 50); }
+$('#modeSeg').addEventListener('click', ev => { const b = ev.target.closest('[data-mode]'); if (!b) return; mode = b.dataset.mode; try { localStorage.setItem('mode', mode); } catch (e) {} applyMode(); });
+$('#btnMore').onclick = () => { const r = $('#moreRow'); r.hidden = !r.hidden; $('#btnMore').classList.toggle('on', !r.hidden); setTimeout(render, 0); };
+applyCardSize(); document.documentElement.dataset.mode = mode; $('#modeSeg').querySelectorAll('.chip').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+// ---------------- 初回ガイド ----------------
+// 5 歩。対象の要素を切り抜いて示す。初回だけ自動で出し、以後は「? 使い方」から。
+const TOUR = [
+  {sel: () => $('#stage'), pad: -8, key: 1, before: () => fitAll()},
+  {sel: () => $('#btnTurn'), pad: 6, key: 2},
+  {sel: () => $('.card.turn') || $('.card.yourturn') || $('.card.live') || $('.card'), pad: 8, key: 3, before: n => { const el = $('.card.turn') || $('.card.yourturn') || $('.card.live'); if (el) { const v = (window._vis || []).find(x => x.id === el.dataset.id); const f = v && (window._frames || []).find(fr => fr.nodes.includes(v)); if (f) fitTo([f]); } }},
+  {sel: () => $('#panel.open') || $('.card.live') || $('.card'), pad: 8, key: 4, before: () => { const el = $('.card.live') || $('.card'); if (el && !$('#panel.open')) select(el.dataset.id); }},
+  {sel: () => $('#btnWork'), pad: 6, key: 5},
+];
+let tourStep = -1;
+function tourShow(i) {
+  const t = $('#tour'); if (i >= TOUR.length || i < 0) { t.classList.remove('on'); tourStep = -1; try { localStorage.setItem('tour_done', '1'); } catch (e) {} return; }
+  tourStep = i; const step = TOUR[i]; if (step.before) step.before();
+  setTimeout(() => {
+    const el = step.sel(); const r = el ? el.getBoundingClientRect() : {left: innerWidth / 2 - 100, top: innerHeight / 2 - 60, width: 200, height: 120};
+    const p = step.pad || 0, hole = t.querySelector('.hole');
+    Object.assign(hole.style, {left: (r.left - p) + 'px', top: (r.top - p) + 'px', width: (r.width + 2 * p) + 'px', height: (r.height + 2 * p) + 'px'});
+    const bub = t.querySelector('.bub');
+    bub.innerHTML = `<div class="st">${i + 1} / ${TOUR.length}</div><b>${esc(T('tour.' + step.key + '.t'))}</b>${esc(T('tour.' + step.key + '.b')).replace(/⌘T|⌥⌘T|⇧⌘W|⌘B|F/g, m => `<span class="kbd">${m}</span>`)}
+      <div class="btns"><button data-t="skip">${esc(T('tour.skip'))}</button><button class="primary" data-t="next">${esc(i === TOUR.length - 1 ? T('tour.done') : T('tour.next'))}</button></div>`;
+    // 吹き出しは対象の下、入らなければ上、それでも入らなければ中央
+    const bw = Math.min(380, innerWidth - 32); bub.style.maxWidth = bw + 'px';
+    let bx = Math.max(16, Math.min(innerWidth - bw - 16, r.left)), by = r.bottom + p + 12;
+    if (by + 200 > innerHeight) by = Math.max(16, r.top - p - 12 - 200);
+    if (step.key === 1) { bx = innerWidth / 2 - bw / 2; by = innerHeight / 2 - 90; }
+    bub.style.left = bx + 'px'; bub.style.top = by + 'px';
+    t.classList.add('on');
+  }, step.before ? 350 : 0);
+}
+$('#tour').addEventListener('click', ev => { const b = ev.target.closest('button[data-t]'); if (!b) return; if (b.dataset.t === 'skip') tourShow(-1); else tourShow(tourStep + 1); });
+$('#btnTour').onclick = () => tourShow(0);
+window.addEventListener('keydown', ev => { if (tourStep >= 0 && ev.key === 'Escape') tourShow(-1); });
+(function () { let done = '1'; try { done = localStorage.getItem('tour_done') || ''; } catch (e) {} let force = false; try { force = new URLSearchParams(location.search).get('tour') === '1'; } catch (e) {}
+  if ((!done && !DEMO) || force) setTimeout(() => tourShow(0), 2500); })();
+// 見た目の切替(このブラウザだけに覚える。無くても夜空で描く)
+(function(){ let look = 'figma'; try { const v = localStorage.getItem('look'); if (v !== null) look = v; } catch (e) {}
+  const apply = l => { if (l) document.documentElement.dataset.look = l; else delete document.documentElement.dataset.look; $('#btnLook').classList.toggle('on', l === 'figma'); };
+  apply(look);
+  $('#btnLook').onclick = () => { look = look === 'figma' ? '' : 'figma'; apply(look); try { localStorage.setItem('look', look); } catch (e) {} }; })();
+$('#btnTurn').onclick = () => { const ids = new Set(snap.attention.map(a => a.sid)); const ns = (window._vis || []).filter(n => ids.has(n.id)); if (ns.length) fitTo(ns); };
+$('#btnWork').onclick = () => { const ns = (window._vis || []).filter(n => n.live && (n.mark === '🟢' || n.mark === '🟩')); if (ns.length) fitTo(ns); };
+window.addEventListener('keydown', ev => { if ((ev.key === 'f' || ev.key === 'F') && !ev.metaKey && !ev.ctrlKey) { if (!isTyping()) fitAll(); } if (ev.key === 'Escape') closePanel(); });
+
+// ---------------- フィルタ ----------------
+$('#q').oninput = ev => { filters.q = ev.target.value.trim(); render(); };
+$('#days').onchange = ev => { filters.days = ev.target.value; loadIndex(); };
+$('#fClient').onchange = ev => { filters.client = ev.target.value; render(); };
+$('#fAi').onchange = ev => { filters.ai = ev.target.value; render(); };
+$('#fUnatt').onchange = ev => { filters.unatt = ev.target.checked; loadIndex(); };
+$('#fSame').onchange = ev => { filters.same = ev.target.checked; render(); };
+$('#fSub').onchange = ev => { filters.sub = ev.target.checked; loadIndex(); };
+$('#fHelp').onchange = ev => { filters.help = ev.target.checked; loadIndex(); };
+$('#nodes').addEventListener('click', ev => { const m = ev.target.closest('.fmore'); if (m) { homeExpanded = m.dataset.more === '1'; render(); } });
+
+// ---------------- 詳細パネル ----------------
+$('#nodes').addEventListener('click', ev => { const c = ev.target.closest('.card[data-id]'); if (!c) return; if (c.dataset.id.startsWith('bundle:')) { sel = sel === c.dataset.id ? null : c.dataset.id; render(); return; } select(c.dataset.id); });
+function select(id) { sel = id; render(); openPanel(id); }
+$('#nodes').addEventListener('dblclick', async ev => {
+  const c = ev.target.closest('.card[data-id]'); if (!c) return;
+  const n = (window._vis || []).find(x => x.id === c.dataset.id); if (!n || !n.live || !n.tab) return;
+  const r = await goTab(n.tab); if (!r.ok) say(r.reason, true);
+});
+function say(msg, bad) { const el = $('#sendMsg'); if (el) { el.textContent = msg; el.className = bad ? 'warn' : 'legend'; } }
+function closePanel() { $('#panel').classList.remove('open'); sel = null; clearInterval(detailTimer); detailTimer = null; render(); }
+$('#pClose').onclick = closePanel;
+async function openPanel(id) {
+  $('#panel').classList.add('open');
+  clearInterval(detailTimer);
+  const n = (window._vis || []).find(x => x.id === id);
+  if (!n) return;
+  if (n.live) renderLive(n);
+  else renderPast(n);
+}
+function tlHtml(tl) {
+  if (DEMO) tl = tl.map((e, i) => Object.assign({}, e, {text: pick(DEMO_TASKS, 'tl' + i)}));
+  return `<ul class="tl">${tl.map(e => {
+    const long = e.text.length > 400;
+    const body = long ? `<details><summary>${esc(e.text.slice(0, 200))}… ${T('(全文')} ${e.text.length}${T('字)')}</summary><div class="txt">${esc(e.text)}</div></details>` : `<span class="txt">${esc(e.text)}</span>`;
+    return `<li class="${esc(e.kind)}"><span class="t">${esc(fmtIso(e.t))}</span><span class="k">${esc(T(e.kind))}</span>${body}</li>`; }).join('')}</ul>`;
+}
+// ---------------- 会話ビュー(カードを押した時の既定) ----------------
+// 端末の生の画面ではなく、記録から「依頼 / 返答 / 操作」を時系列で並べ、下に 1 行の入力欄。
+// 判断待ちの時だけ選択肢のボタンを出す(Claude Code の許可確認は数字キーで選ぶ)。本物の端末は「端末」ボタンかダブルクリック。
+function convHtml(tl) {
+  // 連続する「操作」は 1 行に畳む(最後の 1 件を見せ、件数を添える)
+  const out = []; let ops = [];
+  const flush = () => { if (!ops.length) return; const last = ops[ops.length - 1];
+    out.push(`<div class="cv op">${ops.length > 1 ? `<details><summary><span class="opn">⎿ ${ops.length} ${esc(T('操作'))}</span> ${esc(last.text)}</summary>${ops.slice(0, -1).map(o => `<div class="opl">${esc(o.text)}</div>`).join('')}</details>` : `<span class="opn">⎿</span> ${esc(last.text)}`}</div>`); ops = []; };
+  for (const e of tl) {
+    if (e.kind === '操作') { ops.push(e); continue; }
+    flush();
+    if (e.kind === '依頼') out.push(`<div class="cv you"><span class="pr">›</span><div class="tx">${esc(e.text)}</div><span class="ts">${esc(fmtIso(e.t))}</span></div>`);
+    else out.push(`<div class="cv ai"><div class="tx">${mdLite(e.text)}</div></div>`);
+  }
+  flush();
+  return out.join('') || `<div class="cv empty">${esc(T('まだ会話がありません'))}</div>`;
+}
+// 返答の最小限の整形: コードブロックとインラインコードと太字だけ(それ以外はそのまま)
+function mdLite(t) {
+  const parts = String(t).split(/```[a-zA-Z0-9_-]*\n?/);
+  return parts.map((p, i) => i % 2 ? `<pre class="cb">${esc(p.replace(/\n$/, ''))}</pre>` : esc(p).replace(/`([^`\n]+)`/g, '<code>$1</code>').replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')).join('');
+}
+async function sendTo(s, body) {
+  if (APP && isAppTab(s.tab)) { toApp(Object.assign({type: 'send', tab: s.tab}, body)); return {ok: true}; }
+  return getJSON('/api/send', {method: 'POST', body: JSON.stringify(Object.assign({tab: s.tab, sid: s.sid}, body))});
+}
+async function renderLive(n) {
+  const s0 = n.s, m = s0.model_style || {};
+  $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`;
+  $('#pBody').innerHTML = `
+    <div class="convwrap">
+      <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span><button id="goBtn" title="${T('カードをダブルクリックでも開く')}">${T('端末')}</button></div>
+      <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
+      <div class="convask" id="cvAsk" hidden></div>
+      ${s0.sid && !String(s0.sid).startsWith('tty:') ? `<div class="convin"><span class="pr">❯</span><input id="sendIn" autocomplete="off" placeholder="${T('メッセージを送る（Enter）')}"></div><div id="sendMsg" class="legend"></div>` : `<div class="legend">${T('AI セッションではないので、ここからは送れない（iTerm で開く）')}</div>`}
+    </div>`;
+  $('#goBtn').onclick = async () => { const r = await goTab(s0.tab); if (!r.ok) say(r.reason, true); };
+  let etag = '', stickBottom = true;
+  const log = $('#cvLog');
+  log.addEventListener('scroll', () => { stickBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 12; });
+  const pull = async () => {
+    let d; try { d = await getJSON('/api/conv?tab=' + encodeURIComponent(s0.tab) + '&etag=' + encodeURIComponent(etag)); } catch (e) { return; }
+    if (!d.ok || !$('#cvLog')) return;
+    // 状態と判断待ちのボタン
+    const need = d.state === '確認待ち';
+    $('#cvState').innerHTML = `<span class="dot ${need ? 'turn' : (d.mark === '🟢' || d.mark === '🟩') ? 'work' : 'wait'}"></span>${esc(TS(d.state))}`;
+    const ask = $('#cvAsk');
+    if (need) {
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">${esc(DEMO ? 'Allow Bash: npm test?' : (d.doing || T('判断を待っています')))}</div><div class="opts">
+        <button data-k="1" class="primary">1 ${T('はい')}</button><button data-k="2">2 ${T('はい、今後も')}</button><button data-k="esc">Esc ${T('いいえ')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = async () => { const r = await sendTo(d, b.dataset.k === 'esc' ? {key: 'esc'} : {text: b.dataset.k, enter: false}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 400); });
+    } else ask.hidden = true;
+    if (d.same) return;
+    etag = d.etag;
+    log.innerHTML = DEMO ? convHtml((d.timeline || []).map((e, i) => Object.assign({}, e, {text: e.kind === '操作' ? pick(DEMO_DOING, 'op' + i) : pick(DEMO_TASKS, 'cv' + i)}))) : convHtml(d.timeline || []);
+    if (stickBottom) log.scrollTop = log.scrollHeight;
+  };
+  pull(); clearInterval(detailTimer); detailTimer = setInterval(pull, 1500);
+  const inp = $('#sendIn');
+  if (inp) {
+    inp.focus();
+    inp.addEventListener('keydown', async ev => {
+      if (ev.key !== 'Enter' || ev.isComposing) return;   // 日本語変換の確定 Enter では送らない
+      ev.preventDefault(); const v = inp.value; if (!v.trim()) return; inp.value = '';
+      const r = await sendTo(s0, {text: v, enter: true}); say(r.ok ? T('送った') + ' ' + new Date().toLocaleTimeString() : r.reason, !r.ok);
+      stickBottom = true; setTimeout(pull, 500);
+    });
+  }
+}
+async function renderPast(n) {
+  const r0 = n.r;
+  $('#pTitle').textContent = `${r0.ai} ${r0.kind === 'subagent' ? T('サブエージェント') : T('過去セッション')} · ${fmtT(r0.start)}〜${fmtT(r0.end)}`;
+  $('#pBody').innerHTML = T('読込中…');
+  let d; try { d = await getJSON('/api/session?id=' + encodeURIComponent(n.id)); } catch (e) { $('#pBody').innerHTML = `<span class="warn">${esc(e)}</span>`; return; }
+  if (!d.ok) { $('#pBody').innerHTML = `<span class="warn">${esc(d.reason)}</span>`; return; }
+  let r = d.record; const m = r.model_style || {};
+  if (DEMO) r = Object.assign({}, r, {client: demoClient(r.client, r.id), cwd: demoCwd(r.cwd, r.id), account: r.account ? 'demo' : '', files_top: [], unattended_by: r.unattended_by ? 'cron' : '', first_prompt: '', last_prompt: ''});
+  $('#pBody').innerHTML = `
+    <div><span class="pill" style="background:${rgb(m.rgb)}">${esc(m.emoji)} ${esc(m.label)}</span>${r.client ? `<span class="pill" style="background:${rgb(r.client.rgb)}">${esc(r.client.emoji)}${esc(r.client.label)} <small>(${esc(r.client.by)})</small></span>` : `<span class="pill" style="background:var(--muted)">${T('自社')}</span>`}${r.unattended ? `<span class="pill" style="background:var(--muted)">🤖 ${T('無人')}: ${esc(r.unattended_by)}</span>` : ''}</div>
+    <div class="kv" style="margin-top:8px"><div>AI</div><div>${esc(r.ai)}${r.account ? ' / ' + esc(r.account) : ''} ${esc(r.entrypoint || '')}</div><div>${T('フォルダ')}</div><div>${esc(demoCwd(r.cwd, r.id))}</div><div>${T('期間')}</div><div>${fmtT(r.start)} 〜 ${fmtT(r.end)}</div><div>${T('発言/操作')}</div><div>${T('人')} ${r.prompts} · AI ${r.responses} · ${T('ツール')} ${r.tools}</div><div>${T('編集したファイル')}</div><div>${(r.files_top || []).map(f => esc(f[0].split('/').pop()) + '×' + f[1]).join(', ') || '-'}</div>${r.children?.length ? `<div>${T('サブエージェント')}</div><div>${r.children.length}${T('件')} ${esc(Object.entries(r.child_models || {}).map(([k, v]) => k + '×' + v).join(' '))}</div>` : ''}<div>id</div><div style="font-size:10px">${esc(r.id)}</div></div>
+    <div>${d.live_tab ? `<button class="primary" id="goBtn">${T('iTerm でタブ')} ${esc(d.live_tab)}${T('を開く')}</button>` : (r.kind !== 'subagent' ? `<button class="primary" id="resumeBtn">${T('iTerm で再開')} (${r.ai === 'Codex' ? 'codex resume' : 'claude --resume'})</button>` : '')}</div>
+    ${(r.model_history || []).length > 1 ? `<h3>${T('使ったモデルの履歴')}</h3><div class="kv">${r.model_history.map(h => `<div>${esc(fmtT(h.t))}</div><div>${esc(h.model)}</div>`).join('')}</div>` : ''}
+    <h3>${T('関係')}</h3><div id="rel"></div>
+    <h3>${T('会話(依頼・返答・操作)')}</h3><div class="convlog past">${convHtml(DEMO ? d.timeline.map((e, i) => Object.assign({}, e, {text: pick(DEMO_TASKS, 'p' + i)})) : d.timeline)}</div>`;
+  if ($('#goBtn')) $('#goBtn').onclick = async () => { const rr = await goTab(d.live_tab); if (!rr.ok) say(rr.reason, true); };
+  if ($('#resumeBtn') && APP) $('#resumeBtn').onclick = () => toApp({type: 'resume', ai: r.ai, id: r.id, cwd: r.cwd});
+  else if ($('#resumeBtn')) $('#resumeBtn').onclick = async () => { if (!confirm(`${T('新しい iTerm タブで再開します:')}\n${r.cwd}\n${r.ai === 'Codex' ? 'codex resume' : 'claude --resume'} ${r.id}`)) return; const rr = await getJSON('/api/resume', {method: 'POST', body: JSON.stringify({id: r.id})}); say(rr.ok ? T('送った') + ': ' + rr.cmd : rr.reason, !rr.ok); };
+  relatedHtml(r.id, d.edges);
+}
+function relatedHtml(id, edges) {
+  edges = edges || (index.edges || []).filter(e => e.from === id || e.to === id);
+  const el = $('#rel'); if (!el) return;
+  if (!edges.length) { el.innerHTML = `<span class="legend">${T('根拠のある関係は見つかっていない')}</span>`; return; }
+  el.innerHTML = `<ul class="tl">${edges.map(e => { const other = e.from === id ? e.to : e.from; const ev = DEMO ? 'evidence hidden in demo' : typeof e.evidence === 'string' ? e.evidence : (e.evidence.matched_lines ? T('一致行: ') + e.evidence.matched_lines.join(' / ') : JSON.stringify(e.evidence)); return `<li><span class="k">${esc(e.label)}</span> <a href="#" data-sel="${esc(other)}">${esc(other.slice(0, 20))}…</a><div class="legend">${esc(ev)}</div></li>`; }).join('')}</ul>`;
+  el.querySelectorAll('a[data-sel]').forEach(a => a.onclick = ev => { ev.preventDefault(); select(a.dataset.sel); });
+}
+
+// ---------------- 起動 ----------------
+function fitLive() { const ns = (window._vis || []).filter(n => n.live && (n.state === '確認待ち' || n.mark === '🟢' || n.mark === '🟩')); if (ns.length) fitTo(ns); else fitAll(); }
+loadSnap().then(() => { fitLive(); loadIndex(); });
+setInterval(loadSnap, 3000);
+setInterval(loadIndex, 300000);
+})();
+</script>
+</body>
+</html>

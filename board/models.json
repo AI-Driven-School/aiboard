@@ -1,0 +1,159 @@
+{
+  "_note": "どのAI・どのモデルかを一目で分けるための表(2026-09-17)。上から順に、モデルIDに pattern(正規表現)が当たった最初の行を使う。顧客は四角の絵文字(🟪🟦🟨🟥)、モデルは丸の絵文字で、形でも区別する。rgb は cs と全体地図の札の色。",
+  "models": [
+    {
+      "pattern": "fable-5-1|fable-5\\.1",
+      "label": "Fable 5.1",
+      "short": "Fable5.1",
+      "vendor": "Claude",
+      "emoji": "🟣",
+      "rgb": [
+        150,
+        90,
+        230
+      ]
+    },
+    {
+      "pattern": "fable",
+      "label": "Fable 5",
+      "short": "Fable5",
+      "vendor": "Claude",
+      "emoji": "🟣",
+      "rgb": [
+        130,
+        80,
+        200
+      ]
+    },
+    {
+      "pattern": "opus-5",
+      "label": "Opus 5",
+      "short": "Opus5",
+      "vendor": "Claude",
+      "emoji": "🟠",
+      "rgb": [
+        217,
+        119,
+        87
+      ]
+    },
+    {
+      "pattern": "opus-4",
+      "label": "Opus 4.x",
+      "short": "Opus4",
+      "vendor": "Claude",
+      "emoji": "🟤",
+      "rgb": [
+        160,
+        100,
+        70
+      ]
+    },
+    {
+      "pattern": "sonnet-5",
+      "label": "Sonnet 5",
+      "short": "Sonnet5",
+      "vendor": "Claude",
+      "emoji": "🔵",
+      "rgb": [
+        60,
+        130,
+        220
+      ]
+    },
+    {
+      "pattern": "sonnet",
+      "label": "Sonnet 4.x",
+      "short": "Sonnet4",
+      "vendor": "Claude",
+      "emoji": "🔵",
+      "rgb": [
+        90,
+        140,
+        200
+      ]
+    },
+    {
+      "pattern": "haiku-4-5|haiku",
+      "label": "Haiku 4.5",
+      "short": "Haiku4.5",
+      "vendor": "Claude",
+      "emoji": "⚪",
+      "rgb": [
+        170,
+        170,
+        170
+      ]
+    },
+    {
+      "pattern": "gpt-6-astra",
+      "label": "GPT-6 Astra",
+      "short": "GPT6A",
+      "vendor": "Codex",
+      "emoji": "🟢",
+      "rgb": [
+        16,
+        163,
+        127
+      ]
+    },
+    {
+      "pattern": "gpt-5\\.6",
+      "label": "GPT-5.6",
+      "short": "GPT5.6",
+      "vendor": "Codex",
+      "emoji": "🟢",
+      "rgb": [
+        40,
+        140,
+        110
+      ]
+    },
+    {
+      "pattern": "gpt-5\\.5",
+      "label": "GPT-5.5",
+      "short": "GPT5.5",
+      "vendor": "Codex",
+      "emoji": "🟢",
+      "rgb": [
+        40,
+        140,
+        110
+      ]
+    },
+    {
+      "pattern": "gpt-",
+      "label": "GPT",
+      "short": "GPT",
+      "vendor": "Codex",
+      "emoji": "🟢",
+      "rgb": [
+        40,
+        140,
+        110
+      ]
+    },
+    {
+      "pattern": "gemini",
+      "label": "Gemini",
+      "short": "Gemini",
+      "vendor": "Gemini",
+      "emoji": "🔷",
+      "rgb": [
+        70,
+        110,
+        240
+      ]
+    }
+  ],
+  "unknown": {
+    "label": "モデル不明",
+    "short": "?",
+    "emoji": "❔",
+    "rgb": [
+      120,
+      120,
+      120
+    ]
+  }
+}
