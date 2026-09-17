@@ -257,7 +257,181 @@ def codex_limit(doing):
     return {"kind": "usage", "resets": m.group(2), "at": "", "text": (doing or "")[:140]} if m else None
 
 
+# ---------------------------------------------------------------- loop / skill / MCP ----
+def _tool_uses(chunk):
+    """会話ログの断片から tool_use を (時刻, 名前, 入力) で順に返す。"""
+    for line in chunk.splitlines():
+        if '"tool_use"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        for b in (d.get("message") or {}).get("content") or []:
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                yield d.get("timestamp", ""), b.get("name") or "", b.get("input") or {}
+
+
+def _iso_epoch(ts):
+    import datetime as _dt
+    try:
+        return _dt.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, ValueError):
+        return None
+
+
+_TOOLS = {}   # path -> {"off": 読んだ位置, "ino": inode, "val": 集計}
+
+
+def session_tools(path):
+    """1 セッションで使った skill / MCP サーバの回数と、/loop(ScheduleWakeup)・予約(CronCreate)の最後の指示。
+    会話ログは追記しかされないので、前回の続きから 1 行ずつ読む(全体を毎回読み直さない・メモリに載せない)。"""
+    try:
+        st = os.stat(path)
+    except (OSError, TypeError):
+        return None
+    slot = _TOOLS.get(path)
+    if not slot or slot["ino"] != st.st_ino or st.st_size < slot["off"]:
+        slot = _TOOLS[path] = {"off": 0, "ino": st.st_ino, "val": {"skills": {}, "mcp": {}, "wake": None, "crons": []}}
+    if st.st_size == slot["off"]:
+        return slot["val"]
+    v = slot["val"]
+    with open(path, "rb") as f:
+        f.seek(slot["off"])
+        while True:
+            raw = f.readline()
+            if not raw or not raw.endswith(b"\n"):   # 書きかけの最終行は次回に回す
+                break
+            slot["off"] += len(raw)
+            if b'"tool_use"' not in raw:
+                continue
+            for ts, name, inp in _tool_uses(raw.decode("utf-8", errors="replace")):
+                if name == "Skill":
+                    k = str(inp.get("skill") or "?"); v["skills"][k] = v["skills"].get(k, 0) + 1
+                elif name.startswith("mcp__"):
+                    k = name.split("__")[1] if name.count("__") >= 2 else name[5:]; v["mcp"][k] = v["mcp"].get(k, 0) + 1
+                elif name == "ScheduleWakeup":
+                    v["wake"] = None if inp.get("stop") else {"at": _iso_epoch(ts), "delay": inp.get("delaySeconds") or 0, "reason": str(inp.get("reason") or "")[:140]}
+                elif name == "CronCreate":
+                    v["crons"].append({"cron": str(inp.get("cron") or ""), "recurring": bool(inp.get("recurring", True)), "prompt": str(inp.get("prompt") or "")[:140], "at": _iso_epoch(ts)})
+    return v
+
+
+def cron_next(expr, after, horizon_days=8):
+    """5 欄の cron(数値・*・*/n・a-b・a,b)の次の発火(ローカル時刻の epoch)。範囲内に無ければ None。"""
+    import datetime as _dt
+    parts = expr.split()
+    if len(parts) != 5:
+        return None
+    def field(txt, lo, hi):
+        vals = set()
+        for piece in txt.split(","):
+            step = 1
+            if "/" in piece:
+                piece, st = piece.split("/", 1); step = int(st)
+            if piece == "*":
+                a, b = lo, hi
+            elif "-" in piece:
+                a, b = map(int, piece.split("-", 1))
+            else:
+                a = b = int(piece)
+            vals.update(range(a, b + 1, step))
+        return vals
+    try:
+        mi, ho, dom, mon, dow = (field(parts[0], 0, 59), field(parts[1], 0, 23), field(parts[2], 1, 31), field(parts[3], 1, 12), field(parts[4], 0, 7))
+    except ValueError:
+        return None
+    t = _dt.datetime.fromtimestamp(after).replace(second=0, microsecond=0) + _dt.timedelta(minutes=1)
+    for _ in range(horizon_days * 24 * 60):
+        if t.minute in mi and t.hour in ho and t.month in mon and t.day in dom and ((t.isoweekday() % 7) in dow or (7 in dow and t.isoweekday() == 7)):
+            return t.timestamp()
+        t += _dt.timedelta(minutes=1)
+    return None
+
+
+def loop_state(tools, live=True):
+    """いま効いている /loop と予約。ループの次の起床が 15 分以上過ぎても次の指示が無ければ、止まったとみなす。"""
+    if not tools or not live:
+        return None
+    now = time.time()
+    out = {}
+    w = tools.get("wake")
+    if w and w.get("at"):
+        nxt = w["at"] + w["delay"]
+        if now < nxt + 900:
+            out["wake"] = {"next_at": nxt, "reason": redact(w["reason"])}
+    crons = []
+    for c in tools.get("crons") or []:
+        nxt = cron_next(c["cron"], max(now - 60, c["at"] or 0))
+        if nxt is None:
+            continue
+        crons.append({"cron": c["cron"], "recurring": c["recurring"], "next_at": nxt, "prompt": redact(c["prompt"])})
+    if crons:
+        out["crons"] = sorted(crons, key=lambda c: c["next_at"])[:5]
+    return out or None
+
+
+_EXT = {"t": 0, "health": None}
+
+
+def extensions_info(refresh=False):
+    """設定パネル用: 入っている skill・plugin・MCP サーバと、MCP の接続状態(claude mcp list, 10 分キャッシュ)。"""
+    skills = []
+    for base, src in ((os.path.join(HOME, ".claude", "skills"), "user"),):
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            names = []
+        for n in names:
+            desc = ""
+            try:
+                with open(os.path.join(base, n, "SKILL.md"), encoding="utf-8", errors="replace") as f:
+                    head = f.read(2000)
+                m = re.search(r"^description:\s*(.+)$", head, re.M)
+                desc = m.group(1).strip().strip('"')[:160] if m else ""
+            except OSError:
+                continue
+            skills.append({"name": n, "source": src, "description": desc})
+    plugins = []
+    try:
+        d = json.load(open(os.path.join(HOME, ".claude", "plugins", "installed_plugins.json"), encoding="utf-8"))
+        plugins = sorted((d.get("plugins") or d).keys())
+    except (OSError, ValueError, AttributeError):
+        pass
+    servers = []
+    try:
+        cj = json.load(open(os.path.join(HOME, ".claude.json"), encoding="utf-8"))
+        for k, v in (cj.get("mcpServers") or {}).items():   # 設定の中身(env, url)は秘密を含み得るので名前と種類だけ
+            servers.append({"name": k, "scope": "user", "type": v.get("type") or ("stdio" if v.get("command") else "")})
+        for proj, pv in (cj.get("projects") or {}).items():
+            for k, v in (pv.get("mcpServers") or {}).items():
+                servers.append({"name": k, "scope": "project", "project": project_name(proj), "type": v.get("type") or ("stdio" if v.get("command") else "")})
+    except (OSError, ValueError):
+        pass
+    if refresh or _EXT["health"] is None or time.time() - _EXT["t"] > 600:
+        health = {}
+        try:
+            r = subprocess.run(["zsh", "-l", "-c", "command claude mcp list"], capture_output=True, text=True, timeout=60, cwd=HOME)
+            for line in r.stdout.splitlines():
+                m = re.match(r"^(.+?): .*? - ([✔✘!⊘]) ?(.*)$", line)
+                if m:
+                    st = {"✔": "ok", "✘": "failed", "!": "auth", "⊘": "disabled"}[m.group(2)]
+                    health[m.group(1).strip()] = {"status": st, "note": re.sub(r"https?://\S+", "", m.group(3))[:80]}
+        except (subprocess.TimeoutExpired, OSError) as e:
+            health = {"_error": {"status": "failed", "note": type(e).__name__}}
+        _EXT.update(t=time.time(), health=health)
+    return {"skills": skills, "plugins": plugins, "servers": servers, "health": _EXT["health"], "checked_at": _EXT["t"]}
+
+
 # ---------------------------------------------------------------- セッション ----
+def _tools_brief(t):
+    tl = session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None
+    if not tl:
+        return None
+    top = lambda d: sorted(d.items(), key=lambda kv: -kv[1])[:6]
+    return {"skills": top(tl["skills"]), "mcp": top(tl["mcp"])} if (tl["skills"] or tl["mcp"]) else None
+
+
 def sessions(procs=None):
     """cs.classify() の結果を JSON 化できる形に整える(件数は cs と同じ)。"""
     now = time.time()
@@ -286,6 +460,8 @@ def sessions(procs=None):
             "transcript": t.get("transcript", ""),
             "today_requests": n_today, "today_requests_partial": partial,
             "subagents": t.get("subagents") or {},
+            "tools": _tools_brief(t),
+            "loop": loop_state(session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None),
             "limit": with_active(codex_limit(t.get("doing")) if (t.get("ai") or "").startswith("Codex")
                                  else claude_limit(t["transcript"]) if t.get("transcript") else None),
         })
@@ -300,6 +476,8 @@ def attention(sess):
         rank = None
         if s["state"] == "確認待ち":
             why, rank = "⚠ 確認待ち(承認か返事が要る)", 0
+        elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("loop") or {}).get("wake"):
+            continue   # /loop が次に自分で起きる。人の番ではない
         elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("state_for") or 0) >= IDLE_LONG:
             why, rank = f"返答済みのまま {fmt_dur(s['state_for'])} 放置", 1
         elif s["state"] == "codex 停止":

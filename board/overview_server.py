@@ -251,6 +251,8 @@ class Handler(BaseHTTPRequestHandler):
                 if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
                     _login.update(t=now, data=overview.login_status())
                 self._json(200, {"ok": True, "logins": _login["data"], "settings": overview.settings_info(), "fetched": _login["t"]})
+            elif path == "/api/extensions":
+                self._json(200, {"ok": True, **overview.extensions_info(refresh=q.get("refresh") == "1")})
             elif path == "/api/accounts":
                 now = time.time()
                 if not _acct.get("data") or now - _acct.get("t", 0) > 60:
