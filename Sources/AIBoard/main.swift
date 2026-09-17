@@ -61,7 +61,9 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
         // -i で .zshrc の関数(claude のアカウント切替など)が効く。終わったら素のシェルに戻る。
         let dirp = STATE_DIR + "/launch"; try? FileManager.default.createDirectory(atPath: dirp, withIntermediateDirectories: true)
         let path = dirp + "/pane-\(id).sh"
-        try? ("export AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + (command ?? "") + "\n").write(toFile: path, atomically: true, encoding: .utf8)
+        var body = command ?? ""
+        if ProcessInfo.processInfo.environment["AIBOARD_DRY"] != nil, !body.isEmpty { body = "echo WOULD_RUN: " + shellQuote(body) }   // 試験: 実行しない
+        try? ("export AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
         let cmdline = "/bin/zsh -l -i -c source\u{a0}\(path);exec\u{a0}/bin/zsh\u{a0}-l"
         view.configuration = TerminalSurfaceOptions(
             backend: .exec, workingDirectory: dir,
@@ -193,10 +195,12 @@ final class PaneManager {
     }
 
     /// 盤側の道具(cs.py)に、アプリが持っている端末を知らせる。復元用の状態も書く。
+    var terminating = false
     func publish() {
         let list: [[String: Any]] = panes.filter { !$0.tty.isEmpty }.map {
             ["pane": $0.id, "tty": $0.tty, "title": $0.title, "kind": $0.kind, "cwd": $0.cwd, "pid": $0.pid] }
         write(["updated": Date().timeIntervalSince1970, "app_pid": Int(ProcessInfo.processInfo.processIdentifier), "panes": list], to: PANES_FILE)
+        if terminating { return }   // 終了時に端末が 1 枚ずつ閉じるたびに書き直すと、保存した一覧が空になる
         let st: [[String: Any]] = panes.map { ["kind": $0.kind, "cwd": $0.cwd, "sid": $0.sid] }
         try? FileManager.default.createDirectory(atPath: STATE_DIR, withIntermediateDirectories: true)
         write(["saved": Date().timeIntervalSince1970, "panes": st], to: STATE_FILE)
@@ -357,6 +361,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         watcher.onOpen = { [weak self] tab, _ in self?.open(tab: tab) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.watcher.start() }
         if let cmd = ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] { selfTest(cmd) }
+        if let out = ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] {
+            // 読み込んだ state.json から復元し、各端末の起動スクリプトの中身を書き出して終わる
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                let before = self.lastState.count
+                self.restoreLast(nil)
+                let rows = self.pm.panes.map { p -> [String: Any] in
+                    let script = (try? String(contentsOfFile: STATE_DIR + "/launch/pane-\(p.id).sh", encoding: .utf8)) ?? ""
+                    return ["kind": p.kind, "cwd": p.cwd, "script": script]
+                }
+                let rep: [String: Any] = ["loaded": before, "opened": self.pm.panes.count, "panes": rows]
+                if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: out)) }
+                NSApp.terminate(nil)
+            }
+        }
         if let shot = ProcessInfo.processInfo.environment["AIBOARD_SHOT"] {
             // 実画面の確認用。自分のウィンドウは画面収録の権限なしで撮れる(cacheDisplay はレイヤーの中身を落とすことがある)
             let wait = Double(ProcessInfo.processInfo.environment["AIBOARD_SHOT_WAIT"] ?? "8") ?? 8
@@ -459,8 +477,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     @objc func restoreLast(_ s: Any?) {
         for st in lastState {
             let kind = st["kind"] as? String ?? "shell", cwd = st["cwd"] as? String ?? HOME, sid = st["sid"] as? String ?? ""
-            let cmd: String? = kind == "claude" ? (sid.isEmpty ? "claude --continue" : "claude --resume \(sid)")
-                             : kind == "codex" ? (sid.isEmpty ? "codex resume --last" : "codex resume \(sid)") : nil
+            // sid が分からない時は推測で最新を開かず、一覧から選ばせる(同じフォルダの 2 枚が同じ会話に化けるのを防ぐ)
+            let cmd: String? = kind == "claude" ? (sid.isEmpty ? "claude --resume" : "claude --resume \(sid)")
+                             : kind == "codex" ? (sid.isEmpty ? "codex resume" : "codex resume \(sid)") : nil
             pm.open(kind: kind, cwd: cwd, command: cmd)
         }
         lastState = []
@@ -479,6 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return a.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
     }
     func applicationWillTerminate(_ n: Notification) {
+        pm.publish(); pm.terminating = true
         // 盤の道具に「もう端末は無い」と知らせる(古い一覧を残さない)
         try? FileManager.default.removeItem(atPath: PANES_FILE)
     }
