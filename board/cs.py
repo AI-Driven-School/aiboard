@@ -509,6 +509,7 @@ def classify(tabs, procs):
         elif codex:
             root = min(p for p in codex if procs[p]["ppid"] not in codex)
             t["state"], t["mark"] = "codex", "🟩"
+            t["pid"] = root
             t["mem"] = sum(descendants_rss(procs, p) for p in codex if procs[p]["ppid"] not in codex)
             t["cwd"] = proc_cwd(root)
             t["started"] = proc_start(root)

@@ -22,7 +22,7 @@ let BOARD_DIR: String = {
     if let r = Bundle.main.resourcePath, FileManager.default.fileExists(atPath: r + "/board/cs.py") { return r + "/board" }
     return HOME + "/aiboard/board"
 }()
-let BOARD_URL = URL(string: "http://127.0.0.1:8791/")!
+let BOARD_URL = URL(string: "http://127.0.0.1:\(ProcessInfo.processInfo.environment["OVERVIEW_PORT"] ?? "8791")/")!   // 試験では別ポート
 
 func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 /// 表示言語。既定は英語、システムの第一言語が日本語なら日本語(盤も同じ規則。AIBOARD_LANG で強制できる)
@@ -321,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             """, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         web = WKWebView(frame: .zero, configuration: conf)
         web.navigationDelegate = self
+        web.uiDelegate = self   // confirm()/alert()/prompt() を出す。無いと WebKit は黙って「いいえ」を返す
 
         let right = NSView()
         right.wantsLayer = true
@@ -355,6 +356,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         split.setPosition(split.bounds.width * 0.5, ofDividerAt: 0)
         NSApp.activate(ignoringOtherApps: true)
         startServerThenLoad()
+        // 右の端末は空にしない: iTerm と同じく、起動したらシェルを 1 枚開いて打てる状態にする(復元の試験中は除く)
+        if ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_NO_SHELL"] == nil && pm.panes.isEmpty {
+            pm.open(kind: "shell", cwd: HOME, command: nil)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.offerHookIfNeeded() }
         // 通知と Dock バッジ(判断待ちの数)。通知を押すと、その端末へ
         watcher.center.delegate = self
@@ -362,6 +367,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         watcher.onOpen = { [weak self] tab, _ in self?.open(tab: tab) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.watcher.start() }
         if let cmd = ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] { selfTest(cmd) }
+        if let out = ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"], let js = ProcessInfo.processInfo.environment["AIBOARD_JS"] {
+            // UAT 用: 盤が読み込まれてから JS(async 可)を実行し、戻り値を JSON で書いて終わる
+            let wait = Double(ProcessInfo.processInfo.environment["AIBOARD_JS_WAIT"] ?? "8") ?? 8
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                self.web.callAsyncJavaScript(js, arguments: [:], in: nil, in: .page) { r in
+                    var rep: [String: Any] = [:]
+                    switch r {
+                    case .success(let v): rep["ok"] = true; rep["value"] = v ?? NSNull()
+                    // アプリ側の状態(JS からは見えない): 端末の枚数・選択中・キーボードの入力先
+                    rep["panes"] = self.pm.panes.map { ["tab": "0-\($0.id)", "kind": $0.kind, "cwd": $0.cwd] }
+                    rep["selected"] = self.pm.selected.map { "0-\($0.id)" } ?? NSNull()
+                    rep["firstResponderIsTerminal"] = self.pm.selected.map { self.window.firstResponder === $0.view } ?? false
+                    rep["terminalVisible"] = !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])
+                    case .failure(let e): rep["ok"] = false; rep["error"] = String(describing: e)
+                    }
+                    if !JSONSerialization.isValidJSONObject(rep) { rep["value"] = String(describing: rep["value"] ?? "") }
+                    if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: out)) }
+                    NSApp.terminate(nil)
+                }
+            }
+        }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_SWITCH_TEST"] {
             // 盤から switchAccount を送ったのと同じ経路で動かし、コピー先と起動コマンドを書き出す(AIBOARD_DRY と併用)
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
@@ -421,13 +447,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
         switch type {
         case "focus":
-            if let tab = b["tab"] as? String, let p = pm.pane(tab: tab) { showTerminal(); pm.select(p); lastFocusedTab = tab }
+            if let tab = b["tab"] as? String, let p = pm.pane(tab: tab) {
+                showTerminal(); pm.select(p); lastFocusedTab = tab
+                // 盤のボタンのクリック処理が終わると入力先が盤に戻ることがあるので、一拍おいて端末に入力を移し直す
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) }
+            }
         case "resume":
             guard let ai = b["ai"] as? String, let id = b["id"] as? String, id.range(of: "^[0-9a-fA-F-]{16,}$", options: .regularExpression) != nil else { return }
             let cwd = (b["cwd"] as? String) ?? HOME
             let codex = ai == "Codex"
             showTerminal()
             pm.open(kind: codex ? "codex" : "claude", cwd: cwd, command: codex ? "codex resume \(id)" : "claude --resume \(id)")
+            if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
         case "send":
             // 会話ビューからの入力を、アプリの端末へ。文章は貼り付け+Enter、1 文字はキーとして、esc はエスケープ
             guard let tab = b["tab"] as? String, let p = pm.pane(tab: tab) else { return }
@@ -506,7 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func offerHookIfNeeded(force: Bool = false) {
         let declined = STATE_DIR + "/hook-declined"
         if !force && FileManager.default.fileExists(atPath: declined) { return }
-        if ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] != nil { return }
+        if ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"] != nil { return }
         runHook("--check") { rc, _ in
             guard rc != 0 || force else { return }
             if rc == 0 { let a = NSAlert(); a.messageText = L("The Claude Code hook is already installed.", "Claude Code の hook は入っています。"); a.runModal(); return }
@@ -586,7 +617,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ s: NSApplication) -> NSApplication.TerminateReply {
         let busy = pm.panes.filter { $0.kind != "shell" }.count
-        if busy == 0 || ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil { return .terminateNow }
+        if busy == 0 || ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"] != nil { return .terminateNow }
         let a = NSAlert(); a.messageText = L("\(busy) AI terminal(s) are open", "AI の端末が \(busy) 枚開いています")
         a.informativeText = L("Quitting stops the sessions inside them (you can restore them next time with Restore last terminals).", "終了すると端末の中のセッションも止まります(次回「前回の端末を復元」で再開できます)。")
         a.addButton(withTitle: L("Quit", "終了する")); a.addButton(withTitle: L("Cancel", "やめる"))
@@ -683,4 +714,41 @@ MainActor.assumeIsolated {
     app.delegate = delegate
     app.setActivationPolicy(.regular)
     app.run()
+}
+
+
+// MARK: - 盤の confirm / alert / prompt を macOS のダイアログで出す
+// AIBOARD_DIALOG_AUTO=yes|no を付けると押さずに答える(自己試験用)。答えた内容は web ログに残す
+extension AppDelegate: WKUIDelegate {
+    private func dialogAuto() -> String? { ProcessInfo.processInfo.environment["AIBOARD_DIALOG_AUTO"] }
+
+    private func logDialog(_ kind: String, _ msg: String, _ answer: String) {
+        let line = "dialog: \(kind) answer=\(answer) message=\(msg.prefix(120))\n"
+        let path = STATE_DIR + "/dialog.log"
+        if let h = FileHandle(forWritingAtPath: path) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); h.closeFile() }
+        else { try? line.write(toFile: path, atomically: true, encoding: .utf8) }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+        if dialogAuto() != nil { logDialog("alert", message, "ok"); completionHandler(); return }
+        let a = NSAlert(); a.messageText = message; a.addButton(withTitle: "OK")
+        a.beginSheetModal(for: window) { _ in completionHandler() }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+        if let auto = dialogAuto() { logDialog("confirm", message, auto); completionHandler(auto == "yes"); return }
+        let a = NSAlert(); a.messageText = message
+        a.addButton(withTitle: L("OK", "OK")); a.addButton(withTitle: L("Cancel", "キャンセル"))
+        a.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn) }
+    }
+
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        if let auto = dialogAuto() { logDialog("prompt", prompt, auto); completionHandler(auto == "no" ? nil : (defaultText ?? "")); return }
+        let a = NSAlert(); a.messageText = prompt
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24)); field.stringValue = defaultText ?? ""
+        a.accessoryView = field
+        a.addButton(withTitle: L("OK", "OK")); a.addButton(withTitle: L("Cancel", "キャンセル"))
+        a.window.initialFirstResponder = field
+        a.beginSheetModal(for: window) { r in completionHandler(r == .alertFirstButtonReturn ? field.stringValue : nil) }
+    }
 }

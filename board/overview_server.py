@@ -31,7 +31,22 @@ import overview_index  # noqa: E402
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("OVERVIEW_PORT", "8791"))
 import aiboard_paths  # noqa: E402
-PIDFILE = aiboard_paths.data("server.pid")
+PIDFILE = aiboard_paths.data("server.pid" if PORT == 8791 else f"server-{PORT}.pid")   # 試験用の別ポートが本番の PID ファイルを上書きしないように
+
+
+def code_stamp():
+    """盤サーバのコードの版(.py の名前・サイズ・更新時刻)。アプリを入れ直した後に古いサーバを使い続けないために比べる。"""
+    import hashlib
+    h = hashlib.sha1()
+    for root, _, files in os.walk(HERE):
+        for n in sorted(files):
+            if n.endswith(".py"):
+                st = os.stat(os.path.join(root, n))
+                h.update(f"{os.path.relpath(os.path.join(root, n), HERE)}:{st.st_size}:{st.st_mtime_ns};".encode())
+    return h.hexdigest()[:12]
+
+
+CODE_STAMP = code_stamp()
 LOGFILE = aiboard_paths.data("server.log")
 HTML = os.path.join(HERE, "overview.html")
 INDEX_DAYS = 30
@@ -156,6 +171,55 @@ def send_to_tab(body):
     return (r.returncode == 0), (r.stderr.strip()[:200] or "送った")
 
 
+STOP_LOG = aiboard_paths.data("stop.log")
+
+
+def stop_session(body, wait=3.0):
+    """盤から AI セッションを終わらせる。{tab, sid, dry?}
+
+    送り先は盤が持っている pid を信じず、いまの ps からそのタブの tty 上の claude / codex 本体を引き直す。
+    sid が入れ替わっていたら送らない。SIGTERM だけ送り、SIGKILL はしない(終わらなければそう返す)。
+    """
+    import signal
+    tab, sid = str(body.get("tab", "")), str(body.get("sid", ""))
+    now = next((x for x in snapshot_cached()["sessions"] if x["tab"] == tab), None)
+    if not now:
+        return False, f"タブ {tab} が無い(閉じられた)", None
+    if not sid or now.get("sid") != sid or not now.get("ai"):
+        return False, "中身が入れ替わっているか AI セッションではない(止めなかった)", None
+    tty = (now.get("tty") or "").replace("/dev/", "")
+    procs = cs.processes()
+    cands = [p for p, v in procs.items() if tty and v["tty"] == tty and (cs.is_claude(v["cmd"]) or cs.is_codex(v["cmd"]))]
+    roots = [p for p in cands if procs[p]["ppid"] not in cands]
+    if len(roots) != 1:
+        return False, f"止める相手を 1 つに絞れない(候補 {len(roots)} 個。止めなかった)", None
+    pid = roots[0]
+    rec = {"t": time.strftime("%Y-%m-%d %H:%M:%S"), "tab": tab, "sid": sid, "pid": pid, "cmd": procs[pid]["cmd"][:120], "dry": bool(body.get("dry"))}
+    if body.get("dry"):
+        rec["result"] = "dry"
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            rec["result"] = "already gone"
+        except PermissionError:
+            rec["result"] = "permission denied"
+        else:
+            t0 = time.time()
+            while time.time() - t0 < wait:
+                st = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+                if not st or st.startswith("Z"):   # 終わって親の回収待ち(ゾンビ)も終了とみなす。kill(pid, 0) はゾンビにも成功する
+                    rec["result"] = "exited"; break
+                time.sleep(0.2)
+            else:
+                rec["result"] = "still running"
+    with open(STOP_LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    msg = {"dry": f"試しのみ: pid {pid} に送る", "exited": "終了した", "already gone": "既に終わっていた",
+           "still running": f"{wait:.0f} 秒待っても終わらない(強制終了はしていない)", "permission denied": "権限が無く送れなかった"}[rec["result"]]
+    return rec["result"] in ("dry", "exited", "already gone"), msg, pid
+
+
 def applescript_str(s):
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -239,6 +303,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/version":
+                self._json(200, {"ok": True, "stamp": CODE_STAMP, "pid": os.getpid()})
             elif path == "/api/snapshot":
                 self._json(200, snapshot_cached())
             elif path == "/api/detail":
@@ -329,6 +395,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/send":
             ok, reason = send_to_tab(body)
             return self._json(200 if ok else 409, {"ok": ok, "reason": reason})
+        if path == "/api/stop":
+            ok, reason, pid = stop_session(body)
+            return self._json(200 if ok else 409, {"ok": ok, "reason": reason, "pid": pid})
         if path == "/api/resume":
             sid = str(body.get("id", ""))
             if not re.fullmatch(r"[0-9a-f\-]{16,}", sid):
@@ -361,12 +430,19 @@ def serve():
             pass
 
 
+def listener_pid():
+    """このポートで実際に待ち受けている盤サーバの pid。PID ファイルは別の起動に上書きされ得るので使わない。"""
+    r = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP@{HOST}:{PORT}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
+    for tok in r.stdout.split():
+        cmd = subprocess.run(["/bin/ps", "-o", "command=", "-p", tok], capture_output=True, text=True).stdout
+        if "overview_server.py" in cmd and "--serve" in cmd:
+            return int(tok)
+    return None
+
+
 def alive():
-    """PID ファイルのプロセスが生きていて、かつ HTTP が返るか。"""
-    try:
-        pid = int(open(PIDFILE).read().strip())
-        os.kill(pid, 0)   # シグナル 0 は存在確認だけ(何も送らない)
-    except (OSError, ValueError):
+    """このポートで盤サーバが待ち受けていて、HTTP が返るか。"""
+    if listener_pid() is None:
         return False
     try:
         with urllib.request.urlopen(f"http://{HOST}:{PORT}/api/snapshot", timeout=3) as r:
@@ -378,14 +454,9 @@ def alive():
 def stop():
     """`cs web stop`: PID ファイルに記録された「このサーバー自身」だけを止める(メモリを空けたい時用)。"""
     import signal
-    try:
-        pid = int(open(PIDFILE).read().strip())
-    except (OSError, ValueError):
+    pid = listener_pid()   # ポート {PORT} で待ち受けている overview_server.py --serve だけ
+    if pid is None:
         print("動いていません。")
-        return
-    cmd = subprocess.run(["/bin/ps", "-o", "command=", "-p", str(pid)], capture_output=True, text=True).stdout
-    if "overview_server.py" not in cmd or "--serve" not in cmd:
-        print(f"PID {pid} は全体地図のサーバーではないので触りません。")
         return
     os.kill(pid, signal.SIGTERM)
     for _ in range(20):
@@ -394,14 +465,30 @@ def stop():
             os.kill(pid, 0)
         except OSError:
             break
-    if os.path.exists(PIDFILE):
-        os.remove(PIDFILE)
+    try:
+        if int(open(PIDFILE).read().strip()) == pid:
+            os.remove(PIDFILE)
+    except (OSError, ValueError):
+        pass
     print(f"止めました（pid {pid}）。もう一度開くときは cs web")
 
 
 def open_in_browser(args=()):
     if "stop" in args:
         return stop()
+    if alive():
+        try:
+            with urllib.request.urlopen(f"http://{HOST}:{PORT}/api/version", timeout=3) as r:
+                running = json.loads(r.read()).get("stamp")
+        except Exception:
+            running = None   # 版を返さない = 更新前のサーバ
+        if running != code_stamp():
+            print(f"盤サーバのコードが更新されている(動作中 {running} / 手元 {code_stamp()})。入れ替える")
+            stop()
+            for _ in range(30):
+                time.sleep(0.2)
+                if not alive():
+                    break
     if not alive():
         log = open(LOGFILE, "a")
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--serve"],
