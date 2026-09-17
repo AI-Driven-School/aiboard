@@ -119,6 +119,17 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .cv.op summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cv.op .opl{padding-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cv.empty{color:#777}
+.convlimit{border:1px solid #9747FF;border-radius:6px;padding:10px 12px;background:rgba(151,71,255,.1);font-size:13px}
+.convlimit .opts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.accts{display:flex;flex-direction:column;gap:10px}
+.acct{border:1px solid var(--line2);border-radius:8px;padding:12px 14px;background:rgba(255,255,255,.02)}
+.acct.lim{border-color:#9747FF;background:rgba(151,71,255,.08)}
+.acct .h{display:flex;align-items:center;gap:8px}
+.acct .ai{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line2);border-radius:4px;padding:1px 6px}
+.acct .st{margin-left:auto;font-size:12px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.acct .dot{width:8px;height:8px;border-radius:50%}.acct .dot.ok{background:var(--green)}.acct .dot.lim{background:#9747FF}
+.acct .sub{font-size:12px;color:var(--muted);margin-top:4px}
+.acct .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:10px;overflow:hidden}.acct .bar i{display:block;height:100%}
 .convask{border:1px solid var(--red);border-radius:6px;padding:10px 12px;background:rgba(242,72,34,.08)}
 .convask .q{font:12.5px/1.5 var(--mono);color:var(--ink);margin-bottom:8px;white-space:pre-wrap}
 .convask .opts{display:flex;gap:6px;flex-wrap:wrap}
@@ -169,6 +180,8 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .card.ghost{opacity:.45;border-style:dashed}
 .card.sel{border-color:var(--accent);box-shadow:var(--glow),var(--shadow);opacity:1;transform:translateY(-1px)}
 .card.dimmed{opacity:.18}
+.card.limited{border-color:#9747FF;box-shadow:0 0 0 1.5px #9747FF !important;opacity:.85}
+.card.limited .st{color:#C9A7FF}
 .card.yourturn{border-color:var(--yellow);box-shadow:0 0 0 1px var(--yellow),0 0 22px -8px var(--yellow)}
 .card.turn{border-color:var(--red);box-shadow:0 0 0 1px var(--red),0 0 30px -4px var(--red);animation:turnpulse 1.8s ease-in-out infinite}
 @keyframes turnpulse{0%,100%{box-shadow:0 0 0 1px var(--red),0 0 30px -4px var(--red)}50%{box-shadow:0 0 0 2px var(--red),0 0 44px 0 var(--red)}}
@@ -257,6 +270,7 @@ pre.screen{background:#05070C;color:#d5dbe5;font:11px/1.35 var(--mono);padding:1
     <button class="chip" id="btnWork">🟢 作業中 <b id="nWork">0</b></button>
     <input id="q" placeholder="検索: 依頼文・フォルダ・ファイル名" />
     <button class="chip" id="btnFit" title="F キー">⛶ 全体</button>
+    <button class="chip" id="btnAcct" title="アカウントと上限">◔ アカウント <b id="nLimit"></b></button>
     <button class="chip" id="btnTour" title="使い方の案内">? 使い方</button>
     <button class="chip" id="btnMore" title="絞り込み・見た目・マシン">⋯ もっと</button>
   </div>
@@ -555,13 +569,13 @@ function render() {
     const m = Object.assign({}, n.model || {emoji: '❔', label: 'モデル不明', rgb: [120, 120, 120]}); m.label = T(m.label);
     const mc = rgb(m.rgb);
     if (n.bundle) { items.push(['n:' + n.id, `<div class="card past bundle ${sel === n.id ? 'sel' : ''}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:var(--muted)"><div class="doing">${esc(n.doing)}</div><div class="task">${esc(n.task)}</div></div>`]); return; }
-    const cls = ['card', n.live ? 'live' : 'past', n.ghost ? 'ghost' : '', sel === n.id ? 'sel' : '', (sel && sel !== n.id && !related.has(n.id) && n.parentId !== sel) ? 'dimmed' : '', (n.live && n.state === '確認待ち') ? 'turn' : (n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち')) ? 'yourturn' : ''].join(' ');
+    const cls = ['card', n.live ? 'live' : 'past', n.ghost ? 'ghost' : '', sel === n.id ? 'sel' : '', (sel && sel !== n.id && !related.has(n.id) && n.parentId !== sel) ? 'dimmed' : '', (n.live && n.s.limit && n.s.limit.active) ? 'limited' : (n.live && n.state === '確認待ち') ? 'turn' : (n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち')) ? 'yourturn' : ''].join(' ');
     const dot = n.live ? (n.mark === '🟢' || n.mark === '🟩' ? 'work' : n.state === '確認待ち' ? 'turn' : 'wait') : '';
     const kidsRec = n.r?.child_models || (index.records || []).find(r => r.id === n.id)?.child_models;
     const liveKids = n.live && n.s.subagents ? Object.keys(n.s.subagents).length : 0;
     const kids = kidsRec && Object.keys(kidsRec).length ? T('子: ') + Object.entries(kidsRec).map(([k, v]) => `${T(k)}×${v}`).join(' ') : liveKids ? `${T('子 ')}${liveKids}${T(' 動作中')}` : '';
     const roleLabel = {subagent: T('↳ サブエージェント'), review: T('↳ 査読'), helper: T('↳ 補助'), unattended: T('🤖 無人')}[n.role] || T('終了');
-    const st = n.live ? `${TS(n.state)} ${n.s.state_for != null ? fmtDur(n.s.state_for) : ''}` : `${roleLabel} ${fmtT(n.t)}`;
+    const st = n.live && n.s.limit && n.s.limit.active ? `${T('上限')} · ${limitWhen(n.s.limit)} ` : n.live ? `${TS(n.state)} ${n.s.state_for != null ? fmtDur(n.s.state_for) : ''}` : `${roleLabel} ${fmtT(n.t)}`;
     items.push(['n:' + n.id, `<div class="card ${cls}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;border-left-color:${mc};--mc:${mc}" title="${esc(n.task)}">
       <div class="row1"><span class="mbadge" style="background:${mc};--tagfg:${fgFor(m.rgb)}"><i></i>${esc(m.label)}${n.s?.account ? ' (' + esc(n.s.account) + ')' : ''}</span>${n.client ? `<span class="ctag" style="background:${rgb(n.client.rgb)};--tagfg:${fgFor(n.client.rgb)}">${esc(n.client.emoji)}${esc(n.client.label)}</span>` : ''}</div>
       <div class="st"><span class="dot ${dot}"></span><span>${esc(st)}</span>${n.tab && mode === 'history' ? `<span style="margin-left:auto">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
@@ -762,6 +776,37 @@ function applyMode() { if (mode === 'history' && !(index.records || []).length) 
 $('#modeSeg').addEventListener('click', ev => { const b = ev.target.closest('[data-mode]'); if (!b) return; mode = b.dataset.mode; try { localStorage.setItem('mode', mode); } catch (e) {} applyMode(); });
 $('#btnMore').onclick = () => { const r = $('#moreRow'); r.hidden = !r.hidden; $('#btnMore').classList.toggle('on', !r.hidden); setTimeout(render, 0); };
 applyCardSize(); document.documentElement.dataset.mode = mode; $('#modeSeg').querySelectorAll('.chip').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+// ---------------- アカウントと上限 ----------------
+function limitWhen(lim) {
+  if (!lim) return '';
+  if (lim.resets_at) { const d = new Date(lim.resets_at * 1000), left = lim.resets_at - Date.now() / 1000;
+    const hm = d.toLocaleTimeString(LANG === 'ja' ? 'ja-JP' : 'en-US', {hour: '2-digit', minute: '2-digit'});
+    const day = new Date().toDateString() === d.toDateString() ? '' : d.toLocaleDateString(LANG === 'ja' ? 'ja-JP' : 'en-US', {month: 'numeric', day: 'numeric'}) + ' ';
+    return `${day}${hm} ${T('に解除')}${left > 0 ? ` (${T('あと')}${fmtDur(left)})` : ''}`; }
+  return lim.resets || T('解除時刻不明');
+}
+let accounts = [];
+async function loadAccounts() {
+  try { const d = await getJSON('/api/accounts'); accounts = d.accounts || []; } catch (e) { return; }
+  const n = accounts.filter(a => a.limit && a.limit.active).length;
+  $('#nLimit').textContent = n ? String(n) : ''; $('#btnAcct').classList.toggle('red', n > 0);
+  if ($('#panel.open') && $('#pTitle').dataset.kind === 'accounts') renderAccounts();
+}
+function renderAccounts() {
+  $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
+  $('#pTitle').textContent = T('アカウントと上限'); $('#pTitle').dataset.kind = 'accounts';
+  const rows = accounts.map(a => {
+    const lim = a.limit && a.limit.active ? a.limit : null;
+    const who = DEMO ? (a.ai === 'Codex' ? 'Codex' : 'account-' + a.profile.slice(0, 1)) : (a.email || a.profile);
+    const u = a.usage ? `<div class="bar"><i style="width:${Math.min(100, a.usage.used_percent)}%;background:${a.usage.used_percent >= 90 ? 'var(--red)' : a.usage.used_percent >= 70 ? 'var(--yellow)' : 'var(--green)'}"></i></div><div class="sub">${T('使用')} ${Math.round(a.usage.used_percent)}% · ${T('窓')} ${fmtDur(a.usage.window_minutes * 60)} · ${T('リセット')} ${new Date(a.usage.resets_at * 1000).toLocaleString(LANG === 'ja' ? 'ja-JP' : 'en-US', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</div>` : '';
+    return `<div class="acct ${lim ? 'lim' : ''}"><div class="h"><span class="ai">${esc(a.ai)}</span><b>${esc(who)}</b><span class="st">${lim ? `<span class="dot lim"></span>${T('上限')} · ${esc(limitWhen(lim))}` : `<span class="dot ok"></span>${T('使える')}`}</span></div>
+      ${a.org && !DEMO ? `<div class="sub">${esc(a.org)}</div>` : ''}${u}
+      ${a.limit && !a.limit.active ? `<div class="sub">${T('最後に上限')} ${esc(fmtIso(a.limit.at))}</div>` : ''}</div>`; }).join('');
+  $('#pBody').innerHTML = `<div class="accts">${rows || T('読込中…')}</div><p class="legend" style="margin-top:12px">${T('上限はセッションの記録から読んでいます（Claude は当たった時だけ分かる。Codex は使用率も分かる）。')}</p>`;
+}
+$('#btnAcct').onclick = () => { renderAccounts(); loadAccounts(); };
+loadAccounts(); setInterval(loadAccounts, 60000);
+
 // ---------------- 初回ガイド ----------------
 // 5 歩。対象の要素を切り抜いて示す。初回だけ自動で出し、以後は「? 使い方」から。
 const TOUR = [
@@ -825,7 +870,7 @@ $('#nodes').addEventListener('dblclick', async ev => {
   const r = await goTab(n.tab); if (!r.ok) say(r.reason, true);
 });
 function say(msg, bad) { const el = $('#sendMsg'); if (el) { el.textContent = msg; el.className = bad ? 'warn' : 'legend'; } }
-function closePanel() { $('#panel').classList.remove('open'); sel = null; clearInterval(detailTimer); detailTimer = null; render(); }
+function closePanel() { $('#pTitle').dataset.kind = ''; $('#panel').classList.remove('open'); sel = null; clearInterval(detailTimer); detailTimer = null; render(); }
 $('#pClose').onclick = closePanel;
 async function openPanel(id) {
   $('#panel').classList.add('open');
@@ -875,6 +920,7 @@ async function renderLive(n) {
     <div class="convwrap">
       <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span><button id="goBtn" title="${T('カードをダブルクリックでも開く')}">${T('端末')}</button></div>
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
+      <div class="convlimit" id="cvLimit" hidden></div>
       <div class="convask" id="cvAsk" hidden></div>
       ${s0.sid && !String(s0.sid).startsWith('tty:') ? `<div class="convin"><span class="pr">❯</span><input id="sendIn" autocomplete="off" placeholder="${T('メッセージを送る（Enter）')}"></div><div id="sendMsg" class="legend"></div>` : `<div class="legend">${T('AI セッションではないので、ここからは送れない（iTerm で開く）')}</div>`}
     </div>`;
@@ -886,6 +932,19 @@ async function renderLive(n) {
     let d; try { d = await getJSON('/api/conv?tab=' + encodeURIComponent(s0.tab) + '&etag=' + encodeURIComponent(etag)); } catch (e) { return; }
     if (!d.ok || !$('#cvLog')) return;
     // 状態と判断待ちのボタン
+    const lim = d.limit && d.limit.active ? d.limit : null;
+    const lb = $('#cvLimit');
+    if (lim && lb) {
+      lb.hidden = false;
+      const mine = s0.account && s0.account !== '自社' ? s0.account : 'default';
+      const others = accounts.filter(a => a.ai === 'Claude' && a.config_dir && !(a.limit && a.limit.active) && a.profile !== mine);
+      const html = `<b>${T('上限に当たっています')}</b> · ${esc(limitWhen(lim))}${(!(s0.ai || '').startsWith('Codex') && APP && others.length) ? `<div class="opts">${others.map(o => `<button data-prof="${esc(o.profile)}" data-dir="${esc(o.config_dir)}">${T('別アカウントで続ける')}: ${esc(DEMO ? o.profile : (o.email || o.profile))}</button>`).join('')}</div>` : ''}`;
+      if (lb.dataset.html !== html) { lb.innerHTML = html; lb.dataset.html = html;
+        lb.querySelectorAll('button[data-dir]').forEach(b => b.onclick = () => {
+          if (!confirm(T('この会話の記録を別アカウントにコピーし、そのアカウントで続きを開きます。元のセッションはそのまま残ります。'))) return;
+          toApp({type: 'switchAccount', tab: s0.tab, sid: s0.sid, cwd: s0.cwd, transcript: s0.transcript, configDir: b.dataset.dir, profile: b.dataset.prof});
+        }); }
+    } else if (lb) lb.hidden = true;
     const need = d.state === '確認待ち';
     $('#cvState').innerHTML = `<span class="dot ${need ? 'turn' : (d.mark === '🟢' || d.mark === '🟩') ? 'work' : 'wait'}"></span>${esc(TS(d.state))}`;
     const ask = $('#cvAsk');

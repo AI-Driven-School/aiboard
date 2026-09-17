@@ -169,6 +169,94 @@ def _codex_prompt_times(chunk):
         yield d.get("timestamp", "")
 
 
+# ---------------------------------------------------------------- 上限 ----
+LIMIT_RE = re.compile(r"hit your (session|weekly|opus|usage)[^·\n]*limit(?:\s*·\s*resets?\s+([^\"\n]+?))?\s*(?:$|\")", re.I)
+CODEX_LIMIT_RE = re.compile(r"(usage limit|hit your limit)[^\n]*?try again at ([A-Za-z]{3} \d{1,2}(?:st|nd|rd|th)?, \d{4} \d{1,2}:\d{2} ?[AP]M)", re.I)
+
+
+@cs.memo_by_file
+def claude_limit(path):
+    """記録の最後が「上限に当たった」なら {kind, resets, at, text}。その後に依頼や返答が続いていれば解けている(None)。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 400_000))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    last = None
+    for line in chunk.splitlines():
+        if '"type":"assistant"' in line or '"type":"user"' in line:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "assistant" and d.get("isApiErrorMessage") and d.get("error") == "rate_limit":
+                txt = "".join(b.get("text", "") for b in (d.get("message", {}).get("content") or []) if isinstance(b, dict))
+                m = LIMIT_RE.search(txt + '"')
+                last = {"kind": (m.group(1).lower() if m else "usage"), "resets": (m.group(2) or "").strip() if m else "", "at": d.get("timestamp", ""), "text": txt[:140]}
+            elif d.get("type") == "assistant" and (d.get("message", {}).get("model") or "") != "<synthetic>":
+                last = None
+            elif d.get("type") == "user" and cs.prompt_text(d):
+                last = None if last is None else last   # 依頼しただけでは解けない(また当たる)。返答が来たら解ける
+    return last
+
+
+def resets_epoch(resets, at_iso):
+    """「4:10am (Asia/Tokyo)」「Sep 14 at 6am (Asia/Tokyo)」「Sep 22nd, 2026 4:49 PM」を、当たった時刻より後の実時刻(epoch)に。分からなければ None。"""
+    import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        return None
+    if not resets:
+        return None
+    tzm = re.search(r"\(([A-Za-z_]+/[A-Za-z_]+)\)", resets)
+    tz = ZoneInfo(tzm.group(1)) if tzm else _dt.datetime.now().astimezone().tzinfo
+    base = None
+    if at_iso:
+        try:
+            base = _dt.datetime.fromisoformat(at_iso.replace("Z", "+00:00")).astimezone(tz)
+        except ValueError:
+            base = None
+    base = base or _dt.datetime.now(tz)
+    txt = re.sub(r"\(.*?\)", "", resets).strip()
+    m = re.search(r"([A-Z][a-z]{2}) (\d{1,2})(?:st|nd|rd|th)?,? (?:(\d{4}) )?(?:at )?(\d{1,2})(?::(\d{2}))? ?([ap]m)", txt, re.I)
+    if m:
+        mon = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].index(m.group(1).lower()) + 1
+        hour = int(m.group(4)) % 12 + (12 if m.group(6).lower() == "pm" else 0)
+        dt = _dt.datetime(int(m.group(3) or base.year), mon, int(m.group(2)), hour, int(m.group(5) or 0), tzinfo=tz)
+        return dt.timestamp()
+    m = re.search(r"(\d{1,2})(?::(\d{2}))? ?([ap]m)", txt, re.I)
+    if m:
+        hour = int(m.group(1)) % 12 + (12 if m.group(3).lower() == "pm" else 0)
+        dt = base.replace(hour=hour, minute=int(m.group(2) or 0), second=0, microsecond=0)
+        if dt <= base:
+            dt += _dt.timedelta(days=1)
+        return dt.timestamp()
+    return None
+
+
+def with_active(lim):
+    """上限の情報に、解除時刻(epoch)と「いまも上限中か」を足す。"""
+    if not lim:
+        return None
+    ts = resets_epoch(lim.get("resets"), lim.get("at"))
+    if ts is None:   # 解除時刻が書かれていない上限は、Claude の窓(5 時間)で解けたとみなす
+        try:
+            import datetime as _dt
+            age = time.time() - _dt.datetime.fromisoformat(lim["at"].replace("Z", "+00:00")).timestamp()
+        except (KeyError, ValueError):
+            age = 0
+        return dict(lim, resets_at=None, active=age < 5 * 3600)
+    return dict(lim, resets_at=ts, active=time.time() < ts)
+
+
+def codex_limit(doing):
+    m = CODEX_LIMIT_RE.search(doing or "")
+    return {"kind": "usage", "resets": m.group(2), "at": "", "text": (doing or "")[:140]} if m else None
+
+
 # ---------------------------------------------------------------- セッション ----
 def sessions(procs=None):
     """cs.classify() の結果を JSON 化できる形に整える(件数は cs と同じ)。"""
@@ -198,6 +286,8 @@ def sessions(procs=None):
             "transcript": t.get("transcript", ""),
             "today_requests": n_today, "today_requests_partial": partial,
             "subagents": t.get("subagents") or {},
+            "limit": with_active(codex_limit(t.get("doing")) if (t.get("ai") or "").startswith("Codex")
+                                 else claude_limit(t["transcript"]) if t.get("transcript") else None),
         })
     return out
 
@@ -485,6 +575,60 @@ def macmini(force=False):
 
 
 # ---------------------------------------------------------------- 全体 ----
+def accounts():
+    """持っている AI アカウントの一覧と、それぞれの上限の状態。読むだけ。
+
+    Claude: 既定の ~/.claude と ~/.claude-profiles/<名前>。各々の .claude.json のメールと、直近 48 時間の記録で最後に当たった上限。
+    Codex: 新しい rollout の rate_limits(使用率・窓・リセット時刻)と、最後の「try again at」。
+    """
+    out = []
+    homes = [("default", HOME + "/.claude", HOME + "/.claude.json")] + [
+        (os.path.basename(d), d, os.path.join(d, ".claude.json")) for d in sorted(glob.glob(HOME + "/.claude-profiles/*")) if os.path.isdir(d)]
+    now = time.time()
+    for name, base, cfg in homes:
+        acct = {}
+        try:
+            with open(cfg, encoding="utf-8") as f:
+                acct = (json.load(f).get("oauthAccount") or {})
+        except (OSError, ValueError):
+            pass
+        last = None
+        for fp in glob.glob(os.path.join(base, "projects", "*", "*.jsonl")):
+            try:
+                if now - os.path.getmtime(fp) > 48 * 3600:
+                    continue
+            except OSError:
+                continue
+            lim = claude_limit(fp)
+            if lim and (not last or lim["at"] > last["at"]):
+                last = dict(lim, session=os.path.basename(fp)[:-6])
+        out.append({"ai": "Claude", "profile": name, "config_dir": base, "email": acct.get("emailAddress") or "",
+                    "org": acct.get("organizationName") or "", "plan": acct.get("billingType") or "", "limit": with_active(last)})
+    # Codex
+    cx = {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "email": "", "org": "", "plan": "", "limit": None, "usage": None}
+    files = sorted(glob.glob(HOME + "/.codex/sessions/*/*/*/rollout-*.jsonl"), key=os.path.getmtime, reverse=True)[:40]
+    for fp in files:
+        try:
+            with open(fp, "rb") as f:
+                f.seek(max(0, os.path.getsize(fp) - 300_000)); tail = f.read().decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if cx["usage"] is None:
+            for m in re.finditer(r'"primary":\{"used_percent":([\d.]+),"window_minutes":(\d+),"resets_at":(\d+)\}', tail):
+                cx["usage"] = {"used_percent": float(m.group(1)), "window_minutes": int(m.group(2)), "resets_at": int(m.group(3))}
+        if cx["limit"] is None:
+            ms = list(CODEX_LIMIT_RE.finditer(tail))
+            if ms:
+                cx["limit"] = {"kind": "usage", "resets": ms[-1].group(2), "at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(os.path.getmtime(fp))), "text": ms[-1].group(0)[:140]}
+        if cx["usage"] is not None and cx["limit"] is not None:
+            break
+    cx["limit"] = with_active(cx["limit"])
+    if cx["usage"] and cx["limit"] and cx["limit"]["resets_at"] is None:
+        cx["limit"]["resets_at"] = cx["usage"]["resets_at"]; cx["limit"]["active"] = time.time() < cx["usage"]["resets_at"]
+    out.append(cx)
+    return out
+
+
 def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()

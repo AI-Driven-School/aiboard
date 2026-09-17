@@ -39,6 +39,7 @@ INDEX_REFRESH = 300
 
 _lock = threading.Lock()
 _snap = {"t": 0, "data": None}
+_acct = {}   # アカウント一覧は 60 秒使い回す(記録を舐めるので)
 _index = {"stats": None, "building": False, "error": ""}   # 索引そのものは持たない(index.db から期間で引く)
 
 
@@ -244,6 +245,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"\d+-\d+", tab):
                     return self._json(400, {"ok": False, "reason": "tab は <win>-<tab>"})
                 self._json(200, overview.detail(tab, sess=snapshot_cached()["sessions"]))
+            elif path == "/api/accounts":
+                now = time.time()
+                if not _acct.get("data") or now - _acct.get("t", 0) > 60:
+                    _acct.update(t=now, data=overview.accounts())
+                self._json(200, {"ok": True, "accounts": _acct["data"], "fetched": _acct["t"]})
             elif path == "/api/conv":
                 # 会話ビュー用: 依頼・返答・操作を時系列で(最大 150 件)。記録が変わっていなければ 304 相当で軽く返す
                 tab = q.get("tab", "")
@@ -255,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
                     st = os.stat(tr); etag = f"{st.st_size}-{int(st.st_mtime)}"
                 except OSError:
                     etag = ""
-                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for")}
+                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for", "limit")}
                 if etag and q.get("etag") == etag:
                     return self._json(200, dict(base, ok=True, same=True, etag=etag))
                 tl = []

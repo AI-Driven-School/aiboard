@@ -362,6 +362,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         watcher.onOpen = { [weak self] tab, _ in self?.open(tab: tab) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.watcher.start() }
         if let cmd = ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] { selfTest(cmd) }
+        if let out = ProcessInfo.processInfo.environment["AIBOARD_SWITCH_TEST"] {
+            // 盤から switchAccount を送ったのと同じ経路で動かし、コピー先と起動コマンドを書き出す(AIBOARD_DRY と併用)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+                let e = ProcessInfo.processInfo.environment
+                self.web.evaluateJavaScript("window.webkit.messageHandlers.aiboard.postMessage({type:'switchAccount', sid:'\(e["T_SID"] ?? "")', transcript:'\(e["T_TR"] ?? "")', configDir:'\(e["T_DIR"] ?? "")', cwd:'/tmp'}); 1") { _, _ in
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        var rep = self.lastSwitch
+                        if let p = self.pm.panes.last { rep["script"] = (try? String(contentsOfFile: STATE_DIR + "/launch/pane-\(p.id).sh", encoding: .utf8)) ?? "" }
+                        if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: out)) }
+                        NSApp.terminate(nil)
+                    }
+                }
+            }
+        }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] {
             // 読み込んだ state.json から復元し、各端末の起動スクリプトの中身を書き出して終わる
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
@@ -401,6 +415,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     // MARK: 盤からの連絡
     var webLog: [String] = []
     var lastFocusedTab = ""
+    var lastSwitch: [String: Any] = [:]
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         if m.name == "log" { webLog.append(String(describing: m.body)); if webLog.count > 200 { webLog.removeFirst(100) }; return }
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
@@ -423,6 +438,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if text.count == 1, !enter, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
                 else { _ = p.view.paste(text: text); if enter { _ = p.view.sendKey(.enter) } }
             }
+        case "switchAccount":
+            // 上限に当たった会話を、別アカウントで続ける: 記録を相手のアカウントの同じプロジェクト置き場へコピーし、そのアカウントで --resume
+            guard let sid = b["sid"] as? String, sid.range(of: "^[0-9a-fA-F-]{16,}$", options: .regularExpression) != nil,
+                  let tr = b["transcript"] as? String, tr.hasSuffix(".jsonl"), FileManager.default.fileExists(atPath: tr),
+                  let dir = b["configDir"] as? String, !dir.isEmpty else { return }
+            let cwd = (b["cwd"] as? String) ?? HOME
+            let proj = ((tr as NSString).deletingLastPathComponent as NSString).lastPathComponent
+            let destDir = dir + "/projects/" + proj
+            try? FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
+            let dest = destDir + "/" + sid + ".jsonl"
+            if !FileManager.default.fileExists(atPath: dest) { try? FileManager.default.copyItem(atPath: tr, toPath: dest) }
+            // 既定の ~/.claude なら CLAUDE_CONFIG_DIR を外す。zshrc の claude 関数(フォルダで切替)を通さず command claude で呼ぶ
+            let isDefault = (dir as NSString).standardizingPath == (HOME + "/.claude")
+            let cmd = (isDefault ? "env -u CLAUDE_CONFIG_DIR " : "CLAUDE_CONFIG_DIR=" + shellQuote(dir) + " ") + "command claude --resume " + sid
+            showTerminal()
+            pm.open(kind: "claude", cwd: cwd, command: cmd)
+            lastSwitch = ["dest": dest, "copied": FileManager.default.fileExists(atPath: dest), "cmd": cmd]
         case "sessions":
             // 盤が知っている sid を端末に結び付けておく(次回起動時の復元に使う)
             for s in (b["list"] as? [[String: Any]] ?? []) {
