@@ -29,6 +29,7 @@ BASE = f"http://127.0.0.1:{PORT}/"
 LIVE_DATA = os.path.join(HOME, ".aiboard")
 
 RESULTS = []
+CASE_TIMEOUT = int(os.environ.get("UAT_CASE_TIMEOUT", "240"))
 
 
 def case(cid, title, kind="auto"):
@@ -66,6 +67,52 @@ def http(path, method="GET", body=None, headers=None, raw=False):
             return e.code, json.loads(data or b"{}"), dict(e.headers)
         except ValueError:
             return e.code, data, dict(e.headers)
+
+
+def tmp_path(ctx, name):
+    """試験用の一時パス(ctx["data"] の下。本番のデータ置き場には触らない)。"""
+    p = os.path.join(ctx["data"], "fixtures", name)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    return p
+
+
+def write_jsonl(path, rows):
+    """仮の会話ログを書く。rows は dict の列。最後に改行を入れる。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    return path
+
+
+def tool_use_row(name, inp, ts="2026-09-18T00:00:00Z", model="claude-opus-5"):
+    """会話ログ 1 行(assistant の tool_use)。"""
+    return {"type": "assistant", "timestamp": ts, "isSidechain": False,
+            "message": {"model": model, "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_uat", "name": name, "input": inp}]}}
+
+
+def throwaway(ctx, name="claude", secs=120):
+    """試験が自分で起こす使い捨てプロセス(名前だけ claude/codex に見せた sleep)。実セッションではない。"""
+    d = tempfile.mkdtemp(dir=ctx["data"])
+    link = os.path.join(d, name)
+    os.symlink("/bin/sleep", link)
+    return subprocess.Popen([link, str(secs)]), link
+
+
+class patched:
+    """with patched(module, "name", value): の形で一時的に差し替える(試験の中だけ)。"""
+
+    def __init__(self, obj, attr, value):
+        self.obj, self.attr, self.value = obj, attr, value
+
+    def __enter__(self):
+        self.old = getattr(self.obj, self.attr)
+        setattr(self.obj, self.attr, self.value)
+        return self.value
+
+    def __exit__(self, *a):
+        setattr(self.obj, self.attr, self.old)
+        return False
 
 
 def env_for_test(data_dir):
@@ -855,12 +902,16 @@ def main():
             continue
         t0 = time.time()
         try:
+            signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(Fail(f"時間切れ({CASE_TIMEOUT}秒)")))
+            signal.alarm(CASE_TIMEOUT)   # 1 件が固まっても残りを走らせる
             ev = fn(ctx) or ""
             status = "SKIP" if str(ev).startswith("SKIP") else "PASS"
         except Fail as e:
             status, ev = "FAIL", str(e)
         except Exception as e:
             status, ev = "ERROR", f"{type(e).__name__}: {e}"
+        finally:
+            signal.alarm(0)
         RESULTS.append({"id": fn.cid, "title": fn.title, "status": status, "evidence": str(ev)[:600], "sec": round(time.time() - t0, 1)})
         print(f"{status:5} {fn.cid} {fn.title} ({RESULTS[-1]['sec']}s)\n      {str(ev)[:300]}", flush=True)
     # 後片付け: 試験サーバは自分で止める(ポートで引いた overview_server.py --serve だけ)
