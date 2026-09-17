@@ -100,7 +100,7 @@
 
   <section>
     <h2 class="sec">What you get</h2>
-    <p class="sub">Three things that didn't exist together before: an infinite canvas, real terminals, and a task board — for more than one AI vendor.</p>
+    <p class="sub">Built for people who run several agents across several clients, and need to see all of it at once.</p>
     <div class="feat">
       <div class="card" style="--c:#9B4DE0"><h3>One canvas, every agent</h3><p>Claude Code and Codex, live and past. Grouped by client (square) and project. Model shown as a colored dot. Lines connect a session to the one it continued from, reviewed, or edited the same files as.</p></div>
       <div class="card" style="--c:#FF5C6C"><h3>Lights up when it needs you</h3><p>Permission prompts, questions, stopped sessions. The card pulses red, the Dock badge counts them, and a macOS notification takes you straight to that terminal.</p></div>
@@ -133,21 +133,25 @@
   </section>
 
   <section id="why">
-    <h2 class="sec">Why not cmux, Conductor, or a kanban?</h2>
-    <p class="sub">They're good. They solve a different slice. AIBoard is for the person who runs several agents across several clients and needs to <em>see</em> all of it at once.</p>
+    <h2 class="sec">How it compares</h2>
+    <p class="sub">There are good tools in this space. Here is what each one does, from their public pages and repositories as of 2026-09-18. AIBoard's bet is the combination: a canvas grouped by client, OS-level "needs you" alerts, and your last 30 days — in a native app.</p>
     <div class="scroll"><table>
-      <thead><tr><th></th><th>AIBoard</th><th>cmux</th><th>Conductor</th><th>Nimbalyst</th><th>Claude Agent View</th></tr></thead>
+      <thead><tr><th></th><th>AIBoard</th><th>Maestri</th><th>cmux</th><th>termcanvas</th><th>Switchboard</th><th>Conductor</th><th>Claude Agent View</th></tr></thead>
       <tbody>
-        <tr><td>Claude Code + Codex</td><td class="y">both</td><td class="y">both</td><td class="y">both (+Cursor)</td><td class="y">both (+OpenCode)</td><td class="n">Claude only</td></tr>
-        <tr><td>Infinite canvas, grouped by client/project</td><td class="y">yes</td><td class="n">vertical tabs</td><td class="n">workspace list</td><td class="n">kanban</td><td class="n">list in the CLI</td></tr>
-        <tr><td>Real terminal inside</td><td class="y">yes (SwiftTerm)</td><td class="y">yes (libghostty)</td><td class="n">—</td><td class="y">yes</td><td class="n">CLI</td></tr>
-        <tr><td>Past sessions on the same board</td><td class="y">30 days, resumable</td><td class="n">—</td><td class="n">—</td><td class="n">—</td><td class="n">—</td></tr>
-        <tr><td>Native macOS</td><td class="y">Swift/AppKit</td><td class="y">Swift/AppKit</td><td class="y">native</td><td class="n">Electron</td><td class="n">—</td></tr>
-        <tr><td>Open source</td><td class="y">MIT</td><td class="y">yes</td><td class="n">no</td><td class="y">yes</td><td class="n">—</td></tr>
-        <tr><td>Telemetry</td><td class="y">none, ever</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+        <tr><td>Claude Code + Codex</td><td class="y">both</td><td class="y">both (+OpenCode)</td><td class="y">any, via hooks</td><td class="y">both (+Gemini…)</td><td class="y">both</td><td class="y">both (+Cursor)</td><td class="n">Claude only</td></tr>
+        <tr><td>Layout</td><td class="y">infinite canvas</td><td class="y">infinite canvas</td><td class="n">vertical tabs</td><td class="y">infinite canvas</td><td class="n">list / grid</td><td class="n">workspace list</td><td class="n">list</td></tr>
+        <tr><td>Group by client / project</td><td class="y">client & project</td><td class="y">workspaces</td><td class="n">workspaces</td><td class="n">repo → worktree</td><td class="y">project / track</td><td>—</td><td class="n">directory</td></tr>
+        <tr><td>Detects "needs you"</td><td class="y">yes</td><td>—</td><td class="y">yes (blue ring)</td><td class="y">yes (dot)</td><td class="y">yes</td><td>—</td><td class="y">yes</td></tr>
+        <tr><td>macOS notification + Dock badge</td><td class="y">both</td><td class="n">summary window</td><td class="y">notification</td><td>—</td><td class="n">in-app only</td><td>—</td><td class="y">notification</td></tr>
+        <tr><td>Past sessions, resumable</td><td class="y">30 days, indexed</td><td class="n">layout only</td><td class="n">layout only</td><td class="y">replay</td><td class="y">search & fork</td><td>—</td><td class="y">/resume</td></tr>
+        <tr><td>Picks up sessions already running in iTerm</td><td class="y">yes (by tty)</td><td>—</td><td class="n">no</td><td class="n">no</td><td class="n">reads history only</td><td>—</td><td class="n">no</td></tr>
+        <tr><td>Terminal engine</td><td class="y">libghostty</td><td>own (Metal)</td><td class="y">libghostty</td><td>xterm.js</td><td>xterm.js</td><td>—</td><td>—</td></tr>
+        <tr><td>Built with</td><td class="y">Swift / AppKit</td><td class="y">Swift / SwiftUI</td><td class="y">Swift / AppKit</td><td class="n">Electron</td><td class="n">Electron</td><td>native Mac</td><td>—</td></tr>
+        <tr><td>Price</td><td class="y">free, MIT</td><td>free / $18 one-time</td><td>free (GPL-3.0)</td><td>free (MIT)</td><td>free (MIT)</td><td>free / $50 / $60</td><td>in Claude plans</td></tr>
+        <tr><td>Telemetry</td><td class="y">none</td><td class="y">none</td><td>—</td><td class="y">"no data collected"</td><td>—</td><td>SOC 2 cloud</td><td>—</td></tr>
       </tbody>
     </table></div>
-    <p class="how" style="margin-top:8px">Feature claims about other products are from their public pages as of 2026-09-17; “—” means we couldn't confirm. Corrections welcome.</p>
+    <p class="how" style="margin-top:8px">“—” means we couldn't confirm it from public sources. Corrections welcome — open an issue.</p>
   </section>
 
   <section id="install">
