@@ -458,7 +458,7 @@ def bd02(ctx):
     def fn(pg, errs, bl):
         snap = pg.evaluate("board.snap()")
         cards = pg.evaluate("[...document.querySelectorAll('.card.live')].map(c => ({id: c.dataset.id, cls: c.className}))")
-        live = [s for s in snap["sessions"] if s.get("sid")]
+        live = [s for s in snap["sessions"] if s.get("sid") and s.get("ai") and not s["sid"].startswith("tty:")]   # 素のシェルは盤に出さない(AI のセッションだけ)
         exp = {}
         for s in live:
             lim = (s.get("limit") or {}).get("active")
@@ -802,6 +802,21 @@ def ap05(ctx):
     check(r.get("terminalVisible") is True, "右の端末が畳まれている")
     check(r.get("selected") == "0-1" and r.get("firstResponderIsTerminal") is True, f"選択 {r.get('selected')} / 入力先が端末 {r.get('firstResponderIsTerminal')}(直前の入力先 {r.get('value')})")
     return f"端末 {len(r['panes'])} 枚(shell)・表示中・盤の検索欄から端末へ入力先が移った"
+
+
+@case("AP-06", "右の端末が生きていて打てる: 起動した端末に文字を送ると、その中のシェルが実行する")
+def ap06(ctx):
+    mark = os.path.join(ctx["data"], f"pane-mark-{time.time_ns()}.txt")
+    js = """(async () => { const m = %s;
+      window.webkit.messageHandlers.aiboard.postMessage({type: 'send', tab: '0-1', text: 'echo PANE_OK > ' + m, enter: true});
+      await new Promise(r => setTimeout(r, 2500)); return m; })()""" % json.dumps(mark)
+    r = run_app_js(ctx, "return " + js, wait="9")
+    check(r.get("ok"), f"{r}")
+    panes = r.get("panes") or []
+    check(panes and panes[0].get("tty"), f"端末の tty が取れていない {panes}")
+    check(os.path.exists(mark), f"端末の中のシェルが動いていない(印 {os.path.basename(mark)} ができない)。tty={panes[0].get('tty')}")
+    check(open(mark).read().strip() == "PANE_OK", open(mark).read()[:80])
+    return f"端末 {panes[0]['tty']} に送った echo が実行された(印のファイルができた)"
 
 
 # ------------------------------------------------------------------ 実行

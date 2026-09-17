@@ -60,11 +60,22 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
         // (envVars は /usr/bin/login を経由すると子に届かない。2026-09-18 実測)。
         // -i で .zshrc の関数(claude のアカウント切替など)が効く。終わったら素のシェルに戻る。
         let dirp = STATE_DIR + "/launch"; try? FileManager.default.createDirectory(atPath: dirp, withIntermediateDirectories: true)
-        let path = dirp + "/pane-\(id).sh"
+        var path = dirp + "/pane-\(id).sh"
         var body = command ?? ""
         if ProcessInfo.processInfo.environment["AIBOARD_DRY"] != nil, !body.isEmpty { body = "echo WOULD_RUN: " + shellQuote(body) }   // 試験: 実行しない
-        try? ("export AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\n").write(toFile: path, atomically: true, encoding: .utf8)
-        let cmdline = "/bin/zsh -l -i -c source\u{a0}\(path);exec\u{a0}/bin/zsh\u{a0}-l"
+        // 起動スクリプトは自分で走る形にする(#!/bin/zsh -il で .zshrc も読む)。
+        // libghostty に渡す command は空白で分けられるので、渡すのはこのパス 1 つだけにする
+        // (以前は "zsh -l -i -c source<NBSP>path" と書いていたが、NBSP が引数に残って
+        //  zsh が "source path" という名前のコマンドを探し、端末が即終了していた。2026-09-18 実測)
+        let script = "#!/bin/zsh -il\nexport AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\nexec /bin/zsh -il\n"
+        if path.contains(" ") {   // 空白を含む置き場だと command が分割されるので /tmp に逃がす
+            let alt = "/tmp/aiboard-\(getuid())"
+            try? FileManager.default.createDirectory(atPath: alt, withIntermediateDirectories: true)
+            path = alt + "/pane-\(id).sh"
+        }
+        try? script.write(toFile: path, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: path)
+        let cmdline = path
         view.configuration = TerminalSurfaceOptions(
             backend: .exec, workingDirectory: dir,
             envVars: ["LANG": "ja_JP.UTF-8", "LC_CTYPE": "ja_JP.UTF-8", "TERM_PROGRAM": "AIBoard", "AIBOARD_PANE": "\(id)"],
@@ -376,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     switch r {
                     case .success(let v): rep["ok"] = true; rep["value"] = v ?? NSNull()
                     // アプリ側の状態(JS からは見えない): 端末の枚数・選択中・キーボードの入力先
-                    rep["panes"] = self.pm.panes.map { ["tab": "0-\($0.id)", "kind": $0.kind, "cwd": $0.cwd] }
+                    rep["panes"] = self.pm.panes.map { ["tab": "0-\($0.id)", "kind": $0.kind, "cwd": $0.cwd, "tty": $0.tty] }
                     rep["selected"] = self.pm.selected.map { "0-\($0.id)" } ?? NSNull()
                     rep["firstResponderIsTerminal"] = self.pm.selected.map { self.window.firstResponder === $0.view } ?? false
                     rep["terminalVisible"] = !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])
