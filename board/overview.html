@@ -128,6 +128,10 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .acct .ai{font:600 10.5px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line2);border-radius:4px;padding:1px 6px}
 .acct .st{margin-left:auto;font-size:12px;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .acct .dot{width:8px;height:8px;border-radius:50%}.acct .dot.ok{background:var(--green)}.acct .dot.lim{background:#9747FF}
+.acct .opts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.acct .kvrow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.acct .kvrow:last-child{border-bottom:0}
+.acct .kvrow span:last-child{display:flex;gap:6px;align-items:center}
 .acct .sub{font-size:12px;color:var(--muted);margin-top:4px}
 .acct .bar{height:6px;border-radius:3px;background:rgba(255,255,255,.08);margin-top:10px;overflow:hidden}.acct .bar i{display:block;height:100%}
 .convask{border:1px solid var(--red);border-radius:6px;padding:10px 12px;background:rgba(242,72,34,.08)}
@@ -272,6 +276,7 @@ pre.screen{background:#05070C;color:#d5dbe5;font:11px/1.35 var(--mono);padding:1
     <button class="chip" id="btnFit" title="F キー">⛶ 全体</button>
     <button class="chip" id="btnAcct" title="アカウントと上限">◔ アカウント <b id="nLimit"></b></button>
     <button class="chip" id="btnTour" title="使い方の案内">? 使い方</button>
+    <button class="chip" id="btnSettings" title="設定 (⌘,)">⚙ 設定</button>
     <button class="chip" id="btnMore" title="絞り込み・見た目・マシン">⋯ もっと</button>
   </div>
   <div class="row more" id="moreRow" hidden>
@@ -806,6 +811,65 @@ function renderAccounts() {
 }
 $('#btnAcct').onclick = () => { renderAccounts(); loadAccounts(); };
 loadAccounts(); setInterval(loadAccounts, 60000);
+
+// ---------------- 設定 ----------------
+// ログインや設定の変更は、アプリの端末で各 CLI 自身のコマンドを動かす(認証情報を AIBoard は触らない)。ブラウザではコマンドを表示する
+function shq(x) { return "'" + String(x).replace(/'/g, "'\\''") + "'"; }
+function runCmd(title, cmd, cwd) {
+  if (APP) { toApp({type: 'run', title, command: cmd, cwd: cwd || ''}); return; }
+  say('', false); prompt(T('ターミナルで実行してください:'), cmd);
+}
+function openPath(path) { if (APP) toApp({type: 'open', path}); else prompt(T('このファイルを開いてください:'), path); }
+async function renderSettings(refresh) {
+  $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
+  $('#pTitle').textContent = T('設定'); $('#pTitle').dataset.kind = 'settings';
+  if (!refresh) $('#pBody').innerHTML = T('読込中…');
+  let d; try { d = await getJSON('/api/settings' + (refresh ? '?refresh=1' : '')); } catch (e) { $('#pBody').textContent = String(e); return; }
+  const st = d.settings, envFor = l => l.ai === 'Codex' ? '' : (l.profile === 'default' ? 'env -u CLAUDE_CONFIG_DIR ' : `CLAUDE_CONFIG_DIR=${shq(l.config_dir)} `);
+  const acc = d.logins.map((l, i) => {
+    const who = DEMO ? (l.ai === 'Codex' ? 'Codex' : 'account-' + l.profile.slice(0, 1)) : (l.email || (l.profile === 'default' ? T('既定') : l.profile));
+    const ok = l.logged_in === true, unk = l.logged_in === null;
+    const login = l.ai === 'Codex' ? 'command codex login' : envFor(l) + 'command claude auth login';
+    const logout = l.ai === 'Codex' ? 'command codex logout' : envFor(l) + 'command claude auth logout';
+    const cfg = l.ai === 'Codex' ? st.codex_config : (l.config_dir + '/settings.json');
+    return `<div class="acct ${ok ? '' : 'lim'}"><div class="h"><span class="ai">${esc(l.ai)}</span><b>${esc(who)}</b>
+      <span class="st"><span class="dot ${ok ? 'ok' : 'lim'}"></span>${ok ? `${T('ログイン中')}${l.method ? ' · ' + esc(l.method) : ''}` : unk ? T('確認できない') : T('未ログイン')}</span></div>
+      ${!DEMO && l.profile !== 'default' && l.ai === 'Claude' ? `<div class="sub">${T('プロファイル')} ${esc(l.profile)} · ${esc(l.config_dir.replace(/^\/Users\/[^/]+/, '~'))}</div>` : ''}
+      <div class="opts">${ok ? `<button data-run="${i}" data-kind="logout">${T('ログアウト')}</button>` : `<button class="primary" data-run="${i}" data-kind="login">${T('ログイン')}</button>`}<button data-open="${esc(cfg)}">${T('設定ファイル')}</button></div></div>`; }).join('');
+  $('#pBody').innerHTML = `
+    <h3>${T('AI アカウント')}</h3><div class="accts">${acc}</div>
+    <div class="opts" style="margin-top:8px"><button id="addClaude">＋ ${T('Claude アカウントを追加')}</button><button id="refreshLogin">${T('再確認')}</button></div>
+    <h3>Claude Code hook</h3>
+    <div class="acct"><div class="h"><b>${T('状態の通知')}</b><span class="st"><span class="dot ${st.hook_installed ? 'ok' : 'lim'}"></span>${st.hook_installed ? T('入っている') : T('入っていない')}</span></div>
+      <div class="sub">${T('無いと Claude の「作業中 / 判断待ち」が出ません。既存の設定は残し、控えを取ってから足します。')}</div>
+      <div class="opts">${APP ? (st.hook_installed ? `<button id="hookOff">${T('外す')}</button>` : `<button class="primary" id="hookOn">${T('入れる')}</button>`) : `<code>python3 board/install_hook.py --install</code>`}<button data-open="${esc(st.claude_settings)}">settings.json</button></div></div>
+    <h3>${T('盤')}</h3>
+    <div class="acct">
+      <div class="kvrow"><span>${T('言語')}</span><span><button data-lang="ja" class="${LANG === 'ja' ? 'primary' : ''}">日本語</button><button data-lang="en" class="${LANG !== 'ja' ? 'primary' : ''}">English</button></span></div>
+      <div class="kvrow"><span>${T('見た目')}</span><span><button id="lookFigma">Figma</button><button id="lookNight">Night</button></span></div>
+      <div class="kvrow"><span>${T('顧客の色分け')}</span><span>${DEMO ? 4 : st.clients} ${T('社')} <button data-open="${esc(st.clients_file)}">clients.json</button></span></div>
+      <div class="kvrow"><span>${T('遠隔の無人ジョブ')}</span><span>${DEMO ? '—' : (st.remote_hosts.length ? esc(st.remote_hosts.join(', ')) : T('なし'))} <button data-open="${esc(st.config_file)}">config.json</button></span></div>
+      <div class="kvrow"><span>${T('データの置き場')}</span><span><code>${esc(DEMO ? '~/.aiboard' : st.data_dir.replace(/^\/Users\/[^/]+/, '~'))}</code></span></div>
+      <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
+    </div>`;
+  const B = $('#pBody');
+  B.querySelectorAll('button[data-run]').forEach(b => b.onclick = () => { const l = d.logins[+b.dataset.run];
+    const cmd = b.dataset.kind === 'login' ? (l.ai === 'Codex' ? 'command codex login' : envFor(l) + 'command claude auth login') : (l.ai === 'Codex' ? 'command codex logout' : envFor(l) + 'command claude auth logout');
+    if (b.dataset.kind === 'logout' && !confirm(T('ログアウトします。このアカウントで動いているセッションは次の操作から失敗します。'))) return;
+    runCmd(`${l.ai} ${b.dataset.kind}`, cmd); setTimeout(() => renderSettings(true), 15000); });
+  B.querySelectorAll('button[data-open]').forEach(b => b.onclick = () => openPath(b.dataset.open));
+  B.querySelectorAll('button[data-lang]').forEach(b => b.onclick = () => { try { localStorage.setItem('lang', b.dataset.lang); } catch (e) {} location.reload(); });
+  $('#lookFigma').onclick = () => { try { localStorage.setItem('look', 'figma'); } catch (e) {} location.reload(); };
+  $('#lookNight').onclick = () => { try { localStorage.setItem('look', ''); } catch (e) {} location.reload(); };
+  $('#tourAgain').onclick = () => { closePanel(); tourShow(0); };
+  $('#refreshLogin').onclick = () => renderSettings(true);
+  $('#addClaude').onclick = () => { const name = (prompt(T('新しいアカウントの名前（英数字）'), 'work') || '').trim(); if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) return;
+    runCmd('Claude login ' + name, `mkdir -p ~/.claude-profiles/${name} && CLAUDE_CONFIG_DIR=~/.claude-profiles/${name} command claude auth login`); setTimeout(() => renderSettings(true), 20000); };
+  if ($('#hookOn')) $('#hookOn').onclick = () => toApp({type: 'hook', op: 'install'});
+  if ($('#hookOff')) $('#hookOff').onclick = () => toApp({type: 'hook', op: 'uninstall'});
+}
+$('#btnSettings').onclick = () => renderSettings(false);
+window.addEventListener('keydown', ev => { if (ev.metaKey && ev.key === ',') { ev.preventDefault(); renderSettings(false); } });
 
 // ---------------- 初回ガイド ----------------
 // 5 歩。対象の要素を切り抜いて示す。初回だけ自動で出し、以後は「? 使い方」から。

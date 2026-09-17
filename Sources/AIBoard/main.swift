@@ -438,6 +438,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if text.count == 1, !enter, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
                 else { _ = p.view.paste(text: text); if enter { _ = p.view.sendKey(.enter) } }
             }
+        case "run":
+            // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
+            guard let cmd = b["command"] as? String, !cmd.isEmpty, cmd.count < 600,
+                  cmd.hasPrefix("command claude auth") || cmd.hasPrefix("command codex log") || cmd.hasPrefix("env -u CLAUDE_CONFIG_DIR command claude auth")
+                  || cmd.hasPrefix("CLAUDE_CONFIG_DIR=") || cmd.hasPrefix("mkdir -p ~/.claude-profiles/") else { return }   // 決まった形以外は動かさない
+            showTerminal()
+            pm.open(kind: "shell", cwd: HOME, command: cmd)
+        case "open":
+            guard let path = b["path"] as? String, path.hasPrefix(HOME) || path.hasPrefix("/Users/") else { return }
+            if !FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                if path.hasSuffix(".json") { try? "{}\n".write(toFile: path, atomically: true, encoding: .utf8) }
+            }
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        case "hook":
+            let op = (b["op"] as? String) == "uninstall" ? "--uninstall" : "--install"
+            runHook(op) { [weak self] _, out in
+                let a = NSAlert(); a.messageText = "hook: " + out.trimmingCharacters(in: .whitespacesAndNewlines); a.runModal()
+                self?.web.evaluateJavaScript("document.querySelector('#btnSettings') && document.querySelector('#btnSettings').click()") { _, _ in }
+            }
         case "switchAccount":
             // 上限に当たった会話を、別アカウントで続ける: 記録を相手のアカウントの同じプロジェクト置き場へコピーし、そのアカウントで --resume
             guard let sid = b["sid"] as? String, sid.range(of: "^[0-9a-fA-F-]{16,}$", options: .regularExpression) != nil,
@@ -517,6 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             DispatchQueue.main.async { done(p.terminationStatus, out) }
         }
     }
+    @objc func openSettings(_ s: Any?) { if boardHidden { toggleBoard(nil) }; web.evaluateJavaScript("document.querySelector('#btnSettings').click()") { _, _ in } }
     @objc func installHookMenu(_ s: Any?) { offerHookIfNeeded(force: true) }
     @objc func uninstallHookMenu(_ s: Any?) {
         runHook("--uninstall") { _, out in let a = NSAlert(); a.messageText = L("Hook: ", "hook: ") + out.trimmingCharacters(in: .whitespacesAndNewlines); a.runModal() }
@@ -588,7 +609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             }
             mi.submenu = m; main.addItem(mi)
         }
-        menu("AIBoard", [(L("Hide AIBoard", "AIBoard を隠す"), #selector(NSApplication.hide(_:)), "h", .command), ("-", nil, "", []),
+        menu("AIBoard", [(L("Settings…", "設定…"), #selector(openSettings(_:)), ",", .command), ("-", nil, "", []),
+                         (L("Hide AIBoard", "AIBoard を隠す"), #selector(NSApplication.hide(_:)), "h", .command), ("-", nil, "", []),
                          (L("Quit AIBoard", "AIBoard を終了"), #selector(NSApplication.terminate(_:)), "q", .command)])
         menu(L("Terminal", "端末"), [(L("New Claude", "Claude を開く"), #selector(newClaude(_:)), "t", .command),
                      (L("New Codex", "Codex を開く"), #selector(newCodex(_:)), "t", [.command, .option]),

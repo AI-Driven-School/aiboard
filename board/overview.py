@@ -629,6 +629,56 @@ def accounts():
     return out
 
 
+def login_status():
+    """各アカウントのログイン状態を、それぞれの CLI 自身に聞く(推測しない)。数秒かかるので呼ぶ側で使い回す。"""
+    out = []
+    homes = [("default", HOME + "/.claude")] + [(os.path.basename(d), d) for d in sorted(glob.glob(HOME + "/.claude-profiles/*")) if os.path.isdir(d)]
+    for name, base in homes:
+        env = dict(os.environ)
+        if name == "default":
+            env.pop("CLAUDE_CONFIG_DIR", None)
+        else:
+            env["CLAUDE_CONFIG_DIR"] = base
+        st = {"ai": "Claude", "profile": name, "config_dir": base, "logged_in": None, "method": "", "error": ""}
+        try:
+            r = subprocess.run(["/bin/zsh", "-l", "-c", "command claude auth status"], env=env, capture_output=True, text=True, timeout=20)
+            j = json.loads(r.stdout[r.stdout.find("{"):]) if "{" in r.stdout else {}
+            st["logged_in"] = bool(j.get("loggedIn")); st["method"] = j.get("authMethod") or ""
+        except (subprocess.TimeoutExpired, ValueError, OSError) as e:
+            st["error"] = f"{type(e).__name__}"
+        try:
+            with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
+                a = json.load(f).get("oauthAccount") or {}
+            st.update(email=a.get("emailAddress") or "", org=a.get("organizationName") or "", plan=a.get("billingType") or "")
+        except (OSError, ValueError):
+            st.update(email="", org="", plan="")
+        out.append(st)
+    cx = {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "logged_in": None, "method": "", "error": "", "email": "", "org": "", "plan": ""}
+    try:
+        r = subprocess.run(["/bin/zsh", "-l", "-c", "command codex login status"], capture_output=True, text=True, timeout=20)
+        txt = re.sub(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\\\)|\x1b\][^A-Za-z]*[A-Za-z=][^\n]*?(?=Logged|Not)", "", r.stdout + r.stderr)
+        cx["logged_in"] = "Logged in" in txt
+        m = re.search(r"Logged in using ([A-Za-z ]+)", txt); cx["method"] = m.group(1).strip() if m else ""
+    except (subprocess.TimeoutExpired, OSError) as e:
+        cx["error"] = type(e).__name__
+    out.append(cx)
+    return out
+
+
+def settings_info():
+    import aiboard_paths as ap
+    cfg = ap.config()
+    clients_path = ap.data("clients.json")
+    try:
+        n_clients = len(json.load(open(clients_path, encoding="utf-8")).get("clients", []))
+    except (OSError, ValueError):
+        n_clients = 0
+    hook = subprocess.run([sys.executable, os.path.join(HERE, "install_hook.py"), "--check"], capture_output=True, text=True)
+    return {"data_dir": ap.DATA, "clients_file": clients_path, "clients": n_clients, "config_file": ap.data("config.json"),
+            "remote_hosts": cfg.get("remote_hosts", []), "hook_installed": hook.returncode == 0,
+            "claude_settings": os.path.join(HOME, ".claude", "settings.json"), "codex_config": os.path.join(HOME, ".codex", "config.toml")}
+
+
 def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()

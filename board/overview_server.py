@@ -39,6 +39,7 @@ INDEX_REFRESH = 300
 
 _lock = threading.Lock()
 _snap = {"t": 0, "data": None}
+_login = {}  # ログイン状態は CLI に聞くので 120 秒使い回す
 _acct = {}   # アカウント一覧は 60 秒使い回す(記録を舐めるので)
 _index = {"stats": None, "building": False, "error": ""}   # 索引そのものは持たない(index.db から期間で引く)
 
@@ -245,6 +246,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r"\d+-\d+", tab):
                     return self._json(400, {"ok": False, "reason": "tab は <win>-<tab>"})
                 self._json(200, overview.detail(tab, sess=snapshot_cached()["sessions"]))
+            elif path == "/api/settings":
+                now = time.time()
+                if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
+                    _login.update(t=now, data=overview.login_status())
+                self._json(200, {"ok": True, "logins": _login["data"], "settings": overview.settings_info(), "fetched": _login["t"]})
             elif path == "/api/accounts":
                 now = time.time()
                 if not _acct.get("data") or now - _acct.get("t", 0) > 60:
