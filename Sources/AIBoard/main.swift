@@ -355,6 +355,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         split.setPosition(split.bounds.width * 0.5, ofDividerAt: 0)
         NSApp.activate(ignoringOtherApps: true)
         startServerThenLoad()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.offerHookIfNeeded() }
         // 通知と Dock バッジ(判断待ちの数)。通知を押すと、その端末へ
         watcher.center.delegate = self
         watcher.onCount = { n in NSApp.dockTile.badgeLabel = n > 0 ? String(n) : nil }
@@ -448,6 +449,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         done([.banner, .sound])   // アプリが前面でも出す(盤を見ていない別ウィンドウのことがある)
     }
 
+    // MARK: Claude Code の hook(同意を取ってから入れる)
+    /// hook が無いと Claude の「作業中/判断待ち」が盤に出ない。初回に確認し、断られたら二度と聞かない(メニューから入れられる)
+    func offerHookIfNeeded(force: Bool = false) {
+        let declined = STATE_DIR + "/hook-declined"
+        if !force && FileManager.default.fileExists(atPath: declined) { return }
+        if ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] != nil { return }
+        runHook("--check") { rc, _ in
+            guard rc != 0 || force else { return }
+            if rc == 0 { let a = NSAlert(); a.messageText = L("The Claude Code hook is already installed.", "Claude Code の hook は入っています。"); a.runModal(); return }
+            let a = NSAlert()
+            a.messageText = L("Show what Claude Code is doing?", "Claude Code の状態を盤に出しますか？")
+            a.informativeText = L("AIBoard adds a small hook to ~/.claude/settings.json so each session reports \"working / needs you / replied\". Your existing settings and hooks are kept, and a backup is saved next to the file. Nothing is sent anywhere. You can remove it later from the Terminal menu.",
+                                  "~/.claude/settings.json に小さな hook を足し、各セッションが「作業中 / 判断待ち / 返答済み」を知らせるようにします。今の設定や hook はそのまま残し、同じ場所に控えを保存します。外部には何も送りません。あとで「端末」メニューから外せます。")
+            a.addButton(withTitle: L("Install", "入れる")); a.addButton(withTitle: L("Not now", "今はしない"))
+            if a.runModal() == .alertFirstButtonReturn {
+                self.runHook("--install") { rc2, out in
+                    let b = NSAlert(); b.messageText = rc2 == 0 ? L("Installed. New Claude Code sessions will appear with their state.", "入れました。新しく起動した Claude Code から状態が出ます。") : L("Could not install the hook.", "hook を入れられませんでした。")
+                    if rc2 != 0 { b.informativeText = out }
+                    b.runModal()
+                }
+            } else {
+                try? "".write(toFile: declined, atomically: true, encoding: .utf8)
+            }
+        }
+    }
+    func runHook(_ op: String, done: @escaping (Int32, String) -> Void) {
+        DispatchQueue.global().async {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            p.arguments = ["-l", "-c", "python3 " + shellQuote(BOARD_DIR + "/install_hook.py") + " " + op]
+            let pipe = Pipe(); p.standardOutput = pipe; p.standardError = pipe
+            try? p.run()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            p.waitUntilExit()
+            DispatchQueue.main.async { done(p.terminationStatus, out) }
+        }
+    }
+    @objc func installHookMenu(_ s: Any?) { offerHookIfNeeded(force: true) }
+    @objc func uninstallHookMenu(_ s: Any?) {
+        runHook("--uninstall") { _, out in let a = NSAlert(); a.messageText = L("Hook: ", "hook: ") + out.trimmingCharacters(in: .whitespacesAndNewlines); a.runModal() }
+    }
+
     // MARK: 操作
     func showTerminal() { if split.isSubviewCollapsed(split.arrangedSubviews[1]) { split.setPosition(split.bounds.width * 0.5, ofDividerAt: 0) } }
     func currentCwd() -> String { pm.selected?.cwd ?? HOME }
@@ -522,6 +564,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                      (L("New Claude in Git Worktree", "git worktree で Claude を開く"), #selector(newClaudeWorktree(_:)), "w", [.command, .shift]),
                      (L("Claude in Folder…", "フォルダを選んで Claude…"), #selector(newInFolder(_:)), "o", .command), ("-", nil, "", []),
                      (L("Restore Last Terminals", "前回の端末を復元"), #selector(restoreLast(_:)), "r", [.command, .shift]), ("-", nil, "", []),
+                     (L("Install Claude Code Hook…", "Claude Code の hook を入れる…"), #selector(installHookMenu(_:)), "", []),
+                     (L("Remove Claude Code Hook", "Claude Code の hook を外す"), #selector(uninstallHookMenu(_:)), "", []), ("-", nil, "", []),
                      (L("Close Terminal", "この端末を閉じる"), #selector(closePane(_:)), "w", .command)])
         menu(L("Edit", "編集"), [(L("Copy", "コピー"), #selector(NSText.copy(_:)), "c", .command), (L("Paste", "ペースト"), #selector(NSText.paste(_:)), "v", .command),
                      (L("Select All", "すべて選択"), #selector(NSText.selectAll(_:)), "a", .command)])
