@@ -945,6 +945,8 @@ function fitLive() { const ns = (window._vis || []).filter(n => n.live && (n.sta
 loadSnap().then(() => { fitLive(); loadIndex(); });
 setInterval(loadSnap, 3000);
 setInterval(loadIndex, 300000);
+// 自動操作(デモ録画・試験)用の口
+window.board = {fitTo, fitAll, select, closePanel, zoomBy, frames: () => window._frames, vis: () => window._vis};
 })();
 </script>
 </body>

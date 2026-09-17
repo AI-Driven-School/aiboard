@@ -6,6 +6,8 @@ Native macOS · open source (MIT) · local only, no telemetry
 
 ![AIBoard: running sessions grouped by client; yellow cards are waiting for you](site/img/board-overview-crop.png)
 
+30-second demo: [`site/demo.mp4`](site/demo.mp4) (recorded by `scripts/demo/record.py`)
+
 > Working name. Screenshots use demo mode (`?demo=1`): client names, prompts and folders are fake.
 
 ## Install
