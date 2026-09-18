@@ -476,6 +476,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/sound":
+            return self._json(200, {"ok": True, "sound": overview.sound_set(bool(body.get("on")))})
         if path == "/api/remote":
             # 遠隔の入切は自分の機械からだけ(遠隔からこの道は通らない)
             c = overview.remote_set(bool(body.get("enabled")))

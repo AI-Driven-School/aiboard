@@ -978,19 +978,41 @@ def ap05(ctx):
     return f"端末 {len(r['panes'])} 枚(shell)・表示中・盤の検索欄から端末へ入力先が移った"
 
 
+def send_until(tab, cmd, token="PANE_OK", tries=20, every=5000):
+    """端末に同じ指示を繰り返し送り、端末の題名が変わるまで待つ JS を作る。
+
+    対話シェルの起動は機械が混んでいると 1 分を超える(2026-09-18 実測: load 54 で zsh -il が 64 秒)。
+    固定の待ち時間だと「端末が動かない」と誤判定するので、冪等な指示を送り直し、
+    「シェルが実行した」印として端末の題名(印字は shell が行う)を見る。
+    """
+    full = "printf '\\033]0;%s\\007'; %s" % (token, cmd)
+    return """(async () => {
+      for (let i = 0; i < %d; i++) {
+        window.webkit.messageHandlers.aiboard.postMessage({type: 'send', tab: %s, text: %s, enter: true});
+        await new Promise(r => setTimeout(r, %d));
+        try {
+          const d = await fetch('/api/snapshot', {headers: {'X-Overview': '1'}}).then(x => x.json());
+          const s = (d.sessions || []).find(x => x.tab === %s);
+          if (s && ((s.topic || '') + (s.title_topic || '') + (s.doing || '')).indexOf(%s) >= 0) return {tries: i + 1};
+        } catch (e) {}
+      }
+      return {tries: %d, timeout: true}; })()""" % (
+        tries, json.dumps(tab), json.dumps(full), every, json.dumps(tab), json.dumps(token), tries)
+
+
 @case("AP-06", "右の端末が生きていて打てる: 起動した端末に文字を送ると、その中のシェルが実行する")
 def ap06(ctx):
     mark = os.path.join(ctx["data"], f"pane-mark-{time.time_ns()}.txt")
-    js = """(async () => { const m = %s;
-      window.webkit.messageHandlers.aiboard.postMessage({type: 'send', tab: '0-1', text: 'echo PANE_OK > ' + m, enter: true});
-      await new Promise(r => setTimeout(r, 6000)); return m; })()""" % json.dumps(mark)
-    r = run_app_js(ctx, "return " + js, wait="12")
+    js = send_until("0-1", "echo PANE_OK > " + mark)
+    r = run_app_js(ctx, "return await " + js, wait="8")
     check(r.get("ok"), f"{r}")
     panes = r.get("panes") or []
     check(panes and panes[0].get("tty"), f"端末の tty が取れていない {panes}")
-    check(os.path.exists(mark), f"端末の中のシェルが動いていない(印 {os.path.basename(mark)} ができない)。tty={panes[0].get('tty')}")
+    v = r["value"]
+    check(os.path.exists(mark),
+          f"端末の中のシェルが動いていない(印 {os.path.basename(mark)} ができない)。tty={panes[0].get('tty')} 送信 {v.get('tries')} 回")
     check(open(mark).read().strip() == "PANE_OK", open(mark).read()[:80])
-    return f"端末 {panes[0]['tty']} に送った echo が実行された(印のファイルができた)"
+    return f"端末 {panes[0]['tty']} に送った echo が実行された(送信 {v.get('tries')} 回目で印ができた)"
 
 
 @case("RD-01", "秘密の伏せ字: 主な鍵の形をすべて隠し、普通の文は壊さず、二度通しても変わらない")
@@ -2468,6 +2490,116 @@ def rm04(ctx):
         o.remote_set(False)
         restart()
     return f"{ip}:{PORT} で 合言葉なし/違い=403・一覧と小さな画面だけ 200・盤は 403(試験後に切り戻した)"
+
+
+@case("CH-01", "会話はチャットの形: あなたは右・AI は左の吹き出し、道具の実行は中央の細い行、名前と時刻は続く時に省く")
+def ch01(ctx):
+    def fn(pg, errs, bl):
+        sid = pg.evaluate("(() => { const s = (board.snap().sessions || []).find(x => x.sid && !String(x.sid).startsWith('tty:') && x.ai); return s && s.sid; })()")
+        if not sid:
+            return None, errs
+        pg.evaluate("(id) => board.select(id)", sid)
+        wait_js(pg, "document.querySelectorAll('#cvLog .cv').length > 1", 40)
+        pg.wait_for_timeout(400)
+        return pg.evaluate("""() => {
+          const rows = [...document.querySelectorAll('#cvLog .cv')];
+          const box = document.querySelector('#cvLog').getBoundingClientRect();
+          const side = k => rows.filter(r => r.classList.contains(k)).map(r => {
+            const b = r.querySelector('.bub'); if (!b) return null;
+            const q = b.getBoundingClientRect();
+            return (q.left - box.left) > (box.right - q.right) ? 'right' : 'left'; }).filter(Boolean);
+          return {n: rows.length,
+                  you: side('you'), ai: side('ai'),
+                  ops: rows.filter(r => r.classList.contains('op')).length,
+                  metas: rows.filter(r => r.querySelector('.meta')).length,
+                  bubbles: rows.filter(r => r.querySelector('.bub')).length,
+                  pre: document.querySelectorAll('#cvLog .bub pre.cb').length}; }"""), errs
+    r = with_page(ctx, fn, "?lang=ja")
+    if r[0] is None:
+        return "SKIP: 会話のあるセッションが無い"
+    v, errs = r
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(v["bubbles"] >= 1, f"吹き出しが無い {v}")
+    check(all(x == "right" for x in v["you"]), f"あなたの発言が右に寄っていない {v['you'][:5]}")
+    check(all(x == "left" for x in v["ai"]), f"AI の発言が左に寄っていない {v['ai'][:5]}")
+    check(v["metas"] <= v["bubbles"], f"名前と時刻が毎回出ている {v['metas']}/{v['bubbles']}")
+    return f"{v['n']} 行(吹き出し {v['bubbles']}・操作 {v['ops']} は中央行)・あなた=右 {len(v['you'])} 件 / AI=左 {len(v['ai'])} 件・名前は {v['metas']} 回だけ"
+
+
+@case("BG-01", "あなた待ちのバッジ: 判断待ち=赤「!」・あなたの番=黄「●」・上限=紫、進んでいるものには付けない")
+def bg01(ctx):
+    def route(pg):
+        rows = [
+            {"sid": "b1", "state": "確認待ち", "mark": "🔴"},
+            {"sid": "b2", "state": "返答待ち", "mark": "🟡"},
+            {"sid": "b3", "state": "作業中", "mark": "🟢"},
+            {"sid": "b4", "state": "返答待ち", "mark": "🟡", "loop": {"wake": {"next_at": time.time() + 600, "reason": "loop"}}},
+            {"sid": "b5", "state": "作業中", "mark": "🟢", "limit": {"active": True, "kind": "5h", "resets": "4:10am", "resets_at": time.time() + 3600}},
+        ]
+
+        def handler(route_, req):
+            import urllib.request
+            r = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            d = json.loads(r.read())
+            base = (d.get("sessions") or [{}])[0]
+            sess = []
+            for x in rows:
+                s0 = dict(base, tab="9-9", ai="Claude", model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"},
+                          project="uat", cwd="/tmp/uat", doing="", task="uat", mem_mb=1, subagents={}, tools=None,
+                          loop=None, limit=None, client=None, state_for=1, ago=1, group_label="", group_rgb=None)
+                s0.update(x)
+                sess.append(s0)
+            d["sessions"] = sess
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
+        pg.route("**/api/snapshot", handler)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card.live').length >= 5", 40)
+        pg.wait_for_timeout(500)
+        return pg.evaluate("""() => {
+          const out = {};
+          document.querySelectorAll('.card.live').forEach(c => {
+            const b = c.querySelector('.c-badge');
+            out[c.dataset.id] = b ? (b.className.replace('c-badge', '').trim() + ':' + b.textContent.trim()) : '';
+          });
+          const f = document.querySelector('.f-badge');
+          return {cards: out, frame: f ? f.textContent.trim() : ''}; }"""), errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    got = v["cards"]
+    want = {"b1": "need:!", "b2": "turn:●", "b3": "", "b4": "", "b5": "lim:⏸"}
+    bad = {k: (got.get(k), w) for k, w in want.items() if got.get(k) != w}
+    check(not bad, f"バッジが違う(実際, 期待) {bad}")
+    check(v["frame"] == "2", f"枠の件数バッジ {v['frame']!r}(判断待ち 1 + あなたの番 1 = 2 のはず)")
+    return "判断待ち=赤! / あなたの番=黄● / 上限=紫⏸ / 作業中とループ待機は付けない・枠の見出しは 2 件"
+
+
+@case("SD-01", "判断待ちの音: 設定で入切でき、鳴らすのは 8 秒に 1 回まで")
+def sd01(ctx):
+    import overview as o
+    st, d, _ = http("/api/snapshot")
+    check("sound" in d, "snapshot に音の設定が無い")
+    was = o.sound_on()
+    try:
+        st, r, _ = http("/api/sound", "POST", {"on": False}, headers={"Origin": BASE.rstrip("/")})
+        check(st == 200 and r["sound"] is False, f"切れない {r}")
+        off = False
+        for _ in range(20):      # snapshot は数秒ぶん作り置きするので、入れ替わるまで待つ
+            time.sleep(0.5)
+            st, d2, _ = http("/api/snapshot")
+            if d2.get("sound") is False:
+                off = True
+                break
+        check(off, "切ったのに snapshot が鳴らす設定のまま")
+        st, r, _ = http("/api/sound", "POST", {"on": True}, headers={"Origin": BASE.rstrip("/")})
+        check(r["sound"] is True, f"入れられない {r}")
+    finally:
+        o.sound_set(was)
+    # 鳴らす間隔: アプリの中で 3 回続けて呼んでも 1 回だけ(自己試験では音は出さず記録だけ)
+    r = run_app_js(ctx, "return 1", {"AIBOARD_CHIME_TEST": "3"}, wait="7")
+    check(r.get("ok"), f"{r}")
+    check(r.get("chimes") == ["Glass"], f"8 秒に 1 回のはずが {r.get('chimes')}")
+    return "設定の入切が snapshot に出る / 3 回続けて呼んでも 1 回だけ鳴る"
 
 
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")

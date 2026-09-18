@@ -102,25 +102,44 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 #tour .bub .kbd{font-family:var(--mono);font-size:12px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:4px;padding:0 6px;background:rgba(255,255,255,.04)}
 /* 会話ビュー: ターミナルの字面で、読みやすさは会話 */
 .convwrap{display:flex;flex-direction:column;height:calc(100vh - 70px);gap:8px}
+/* こっちが持っている(あなた待ち)の印。カードの右上と枠の見出しに出す */
+.c-badge{position:absolute;top:6px;right:6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;
+  display:flex;align-items:center;justify-content:center;font:700 11px/1 -apple-system,sans-serif;
+  color:#0B0B0B;background:var(--yellow);box-shadow:0 1px 4px rgba(0,0,0,.45);z-index:2}
+.c-badge.need{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
+.c-badge.lim{background:#9747FF;color:#fff}
+@keyframes badgepulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
+@media (prefers-reduced-motion:reduce){.c-badge.need{animation:none}}
+.f-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:6px;
+  padding:0 5px;border-radius:9px;font:700 11px/1 -apple-system,sans-serif;color:#0B0B0B;background:var(--yellow)}
+.f-badge.need{background:var(--red);color:#fff}
 .convhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .convhead button{margin-left:auto}
 .cvstate{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .cvstate .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)} .cvstate .dot.work{background:var(--green)} .cvstate .dot.turn{background:var(--red)} .cvstate .dot.wait{background:var(--yellow)}
-.convlog{flex:1;overflow:auto;background:#141414;border:1px solid var(--line2);border-radius:6px;padding:10px 12px;font:12.5px/1.6 var(--mono);color:#D6D6D6}
+.convlog{flex:1;overflow:auto;background:#141414;border:1px solid var(--line2);border-radius:6px;padding:12px;color:#D6D6D6;display:flex;flex-direction:column}
 .convlog.past{flex:none;max-height:60vh}
-.cv{margin:0 0 10px}
-.cv.you{display:grid;grid-template-columns:14px 1fr auto;gap:6px;color:#FFFFFF}
-.cv.you .pr{color:var(--accent);font-weight:700}
-.cv.you .tx{white-space:pre-wrap;word-break:break-word;font-weight:600}
-.cv.you .ts{color:#777;font-size:10.5px}
-.cv.ai .tx{white-space:pre-wrap;word-break:break-word;padding-left:20px}
-.cv.ai code{background:#262626;border-radius:3px;padding:0 4px}
-.cv.ai pre.cb{background:#0B0B0B;border:1px solid #2A2A2A;border-radius:4px;padding:6px 8px;margin:6px 0;white-space:pre-wrap;overflow-x:auto}
-.cv.op{padding-left:20px;color:#8A8A8A;font-size:11.5px}
+/* 会話は「話しかけ合い」に見せる: AI は左の吹き出し・あなたは右の吹き出し・道具の実行は中央の細い行 */
+.cv{margin:0 0 10px;display:flex;flex-direction:column;max-width:100%}
+.cv .bub{max-width:min(78%,560px);padding:8px 11px;border-radius:14px;white-space:pre-wrap;word-break:break-word;
+  font:13px/1.65 -apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif}
+.cv .meta{font-size:10.5px;color:#7C7C7C;margin:0 4px 3px;display:flex;gap:6px;align-items:baseline}
+.cv.ai{align-items:flex-start}
+.cv.ai .bub{background:#20242B;color:#E6E8EC;border:1px solid #2A2F38;border-top-left-radius:5px}
+.cv.you{align-items:flex-end}
+.cv.you .meta{justify-content:flex-end}
+.cv.you .bub{background:var(--accent);color:#0B0B0B;border-top-right-radius:5px;font-weight:600}
+.cv .bub code{background:rgba(0,0,0,.28);border-radius:3px;padding:0 4px;font:11.5px/1.5 var(--mono)}
+.cv.you .bub code{background:rgba(255,255,255,.28)}
+.cv .bub pre.cb{background:#0B0B0B;border:1px solid #2A2A2A;border-radius:6px;padding:6px 8px;margin:6px 0;
+  white-space:pre;overflow-x:auto;font:11.5px/1.5 var(--mono);color:#D6D6D6;max-width:100%}
+.cv.op{align-items:center;color:#8A8A8A;font-size:11px;margin:2px 0 8px}
+.cv.op .line{display:flex;align-items:center;gap:8px;max-width:100%;width:100%}
+.cv.op .line::before,.cv.op .line::after{content:"";flex:1;height:1px;background:var(--line2)}
 .cv.op .opn{color:#6A6A6A}
-.cv.op summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cv.op .opl{padding-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.cv.empty{color:#777}
+.cv.op summary{cursor:pointer;list-style:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%}
+.cv.op .opl{padding-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.cv.empty{color:#777;align-items:center}
 .convlimit{border:1px solid #9747FF;border-radius:6px;padding:10px 12px;background:rgba(151,71,255,.1);font-size:13px}
 .convlimit .opts{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .accts{display:flex;flex-direction:column;gap:10px}
@@ -549,7 +568,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
   '遠隔（同じ Wi-Fi の中だけ）': 'Remote (same Wi-Fi only)', 'スマホから判断待ちに答える': 'Answer from your phone',
   '入れています': 'on', '切ってあります': 'off', '切る': 'Turn off', '開く場所': 'Open at',
   'LAN の住所が取れません': 'no LAN address', '切りました': 'Turned off',
@@ -905,7 +924,8 @@ function layout(nodes) {
     const rows = Math.floor(maxI / COLS) + 1;
     const cols = Math.min(COLS, maxI + 1);
     const fullW = cols * (CARD_W + GAP) - GAP + FRAME_PAD * 2, fullH = rows * (CARD_H + GAP) - GAP + FRAME_PAD * 2;
-    frames.push({key: k, fullW, fullH, nodes: g, sample: g[0], hidden, cols: COLS});
+    // 見出しに使う代表は「顧客の分かっているカード」から選ぶ(束は顧客を持たないので、代表にすると見出しが作れない)
+    frames.push({key: k, fullW, fullH, nodes: g, sample: g.find(n => n.client) || g[0], hidden, cols: COLS});
   });
   placeFrames(frames);
   // macmini フレーム
@@ -952,7 +972,8 @@ function render() {
   frames.forEach(f => {
     let label, color = null, sum = '';
     if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
-    else if (f.key.startsWith('c:')) { const c = f.sample.client; label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
+    else if (f.key.startsWith('c:')) { const c = (f.nodes.map(n => n.client).find(Boolean)) || {emoji: '•', label: f.key.slice(2), rgb: [120, 120, 120]};
+      label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
     else if (f.key.startsWith('p:') && f.nodes.find(n => (n.s || n.r || {}).group_label)) {
       const g = f.nodes.map(n => (n.s || n.r || {})).find(x => x.group_label) || {};
       label = '● ' + g.group_label; color = g.group_rgb ? rgb(g.group_rgb) : color; sum = frameSummary(f);
@@ -990,8 +1011,11 @@ function render() {
     const stWhen = !n.live ? fmtT(n.t) : stKey === 'limited' ? limitWhen(n.s.limit) : stKey === 'loop' ? `${T('次')} ${hhmm(lp.wake.next_at)}` : (n.s.state_for != null ? fmtDur(n.s.state_for) : '');
     const title = n.live ? (n.task || n.s.topic || n.project || '') : (n.title || n.r.first_prompt || '');
     const doing = n.live ? (stKey === 'limited' ? '' : TD(n.doing)) : (n.r.last_prompt || '');
+    // こっちが持っている(あなたが動かないと進まない)ものにバッジ
+    const mine = n.live ? (n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '') : '';
+    const badge = mine ? `<span class="c-badge ${mine}" title="${esc(mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
     items.push(['n:' + n.id, `<div class="card ${cls} k-${stKey}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:${mc}" title="${esc(title)}">
-      <div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
+      ${badge}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
       ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
       <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
@@ -1023,7 +1047,8 @@ function bigLabel(f, label, color) {
   const models = {}; f.nodes.forEach(n => { if (n.model && !isChild(n)) { models[n.model.label] = models[n.model.label] || {rgb: n.model.rgb, n: 0}; models[n.model.label].n++; } });
   const dots = Object.entries(models).sort((a, b) => b[1].n - a[1].n).map(([k, v]) => `<i style="background:${rgb(v.rgb)}" title="${esc(k)}"></i>`).join('');
   const latest = live[0] || f.nodes[0];
-  return `<div class="fbig"><b style="${color ? 'color:' + color : ''}">${esc(label)}</b> &nbsp;${turn ? `<span class="warn">${T('🔴 あなたの番')} ${turn}</span>` : ''} ${work ? `<span class="ok">${T('🟢 作業中')} ${work}</span>` : ''} <span style="color:var(--muted)">${T('過去')} ${f.nodes.filter(n => !n.live && !isChild(n) && !n.bundle).length}</span><div class="dots">${dots}</div><div class="task">${esc(latest ? (latest.live ? latest.task : latest.title || latest.task) : '')}</div></div>`;
+  const mineN = live.filter(n => n.state === '確認待ち' || ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake))).length;
+  return `<div class="fbig"><b style="${color ? 'color:' + color : ''}">${esc(label)}</b>${mineN ? `<span class="f-badge ${turn ? 'need' : 'turn'}" title="${esc(T('あなたが動かないと進まないもの'))}">${mineN}</span>` : ''} &nbsp;${turn ? `<span class="warn">${T('🔴 あなたの番')} ${turn}</span>` : ''} ${work ? `<span class="ok">${T('🟢 作業中')} ${work}</span>` : ''} <span style="color:var(--muted)">${T('過去')} ${f.nodes.filter(n => !n.live && !isChild(n) && !n.bundle).length}</span><div class="dots">${dots}</div><div class="task">${esc(latest ? (latest.live ? latest.task : latest.title || latest.task) : '')}</div></div>`;
 }
 function hhmm(ep) { const d = new Date(ep * 1000), now = new Date(); const t = d.toLocaleTimeString(LANG === 'ja' ? 'ja-JP' : 'en-US', {hour: '2-digit', minute: '2-digit'}); return d.toDateString() === now.toDateString() ? t : `${d.getMonth() + 1}/${d.getDate()} ${t}`; }
 function toolChips(n) {   // カード下段: 予約・skill・MCP は数だけ。名前はホバーと会話ビューで
@@ -1498,6 +1523,7 @@ async function renderSettings(refresh) {
       <div class="kvrow"><span>${T('顧客の色分け')}</span><span>${DEMO ? 4 : st.clients} ${T('社')} <button data-open="${esc(st.clients_file)}">clients.json</button></span></div>
       <div class="kvrow"><span>${T('遠隔の無人ジョブ')}</span><span>${DEMO ? '—' : (st.remote_hosts.length ? esc(st.remote_hosts.join(', ')) : T('なし'))} <button data-open="${esc(st.config_file)}">config.json</button></span></div>
       <div class="kvrow"><span>${T('データの置き場')}</span><span><code>${esc(DEMO ? '~/.aiboard' : st.data_dir.replace(/^\/Users\/[^/]+/, '~'))}</code></span></div>
+      <div class="kvrow"><span>${T('判断待ちの音')}</span><span><button id="sndOn" class="${(snap.sound !== false) ? 'primary' : ''}">${T('鳴らす')}</button><button id="sndOff" class="${(snap.sound === false) ? 'primary' : ''}">${T('鳴らさない')}</button> <span class="sub">${T('通知を切っていても鳴ります（8 秒に 1 回まで）')}</span></span></div>
       <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
     </div>
     <h3>${T('遠隔（同じ Wi-Fi の中だけ）')}</h3>
@@ -1518,7 +1544,11 @@ async function renderSettings(refresh) {
       say(r.ok ? (enabled ? T('入れました（盤サーバを開き直すと有効になります）') : T('切りました')) : String(r.reason), !r.ok);
       renderSettings(true);
     };
-    if ($('#rmOn')) $('#rmOn').onclick = () => setRemote(true);
+    ['sndOn', 'sndOff'].forEach(id => { const b = $('#' + id); if (!b) return;
+    b.onclick = async () => { const on = id === 'sndOn';
+      try { await getJSON('/api/sound', {method: 'POST', body: JSON.stringify({on})}); snap.sound = on; } catch (e) { say(String(e), true); }
+      renderSettings(true); }; });
+  if ($('#rmOn')) $('#rmOn').onclick = () => setRemote(true);
     if ($('#rmOff')) $('#rmOff').onclick = () => setRemote(false);
   })();
   B.querySelectorAll('button[data-run]').forEach(b => b.onclick = () => { const l = d.logins[+b.dataset.run];
@@ -1643,16 +1673,23 @@ function tlHtml(tl) {
 // ---------------- 会話ビュー(カードを押した時の既定) ----------------
 // 端末の生の画面ではなく、記録から「依頼 / 返答 / 操作」を時系列で並べ、下に 1 行の入力欄。
 // 判断待ちの時だけ選択肢のボタンを出す(Claude Code の許可確認は数字キーで選ぶ)。本物の端末は「端末」ボタンかダブルクリック。
+let convWho = '';   // 吹き出しの名前に使う「いま見ている AI」
 function convHtml(tl) {
   // 連続する「操作」は 1 行に畳む(最後の 1 件を見せ、件数を添える)
   const out = []; let ops = [];
   const flush = () => { if (!ops.length) return; const last = ops[ops.length - 1];
-    out.push(`<div class="cv op">${ops.length > 1 ? `<details><summary><span class="opn">⎿ ${ops.length} ${esc(T('操作'))}</span> ${esc(last.text)}</summary>${ops.slice(0, -1).map(o => `<div class="opl">${esc(o.text)}</div>`).join('')}</details>` : `<span class="opn">⎿</span> ${esc(last.text)}`}</div>`); ops = []; };
+    out.push(`<div class="cv op"><div class="line">${ops.length > 1 ? `<details><summary><span class="opn">🔧 ${ops.length} ${esc(T('操作'))}</span> ${esc(last.text)}</summary>${ops.slice(0, -1).map(o => `<div class="opl">${esc(o.text)}</div>`).join('')}</details>` : `<span class="opn">🔧</span> ${esc(last.text)}`}</div></div>`); ops = []; };
+  let lastWho = '', lastT = 0;
   for (const e of tl) {
     if (e.kind === '操作') { ops.push(e); continue; }
     flush();
-    if (e.kind === '依頼') out.push(`<div class="cv you"><span class="pr">›</span><div class="tx">${esc(e.text)}</div><span class="ts">${esc(fmtIso(e.t))}</span></div>`);
-    else out.push(`<div class="cv ai"><div class="tx">${mdLite(e.text)}</div></div>`);
+    const you = e.kind === '依頼';
+    const who = you ? 'you' : 'ai';
+    // 同じ相手が続けて話した時は、名前と時刻を繰り返さない(5 分以内)
+    const head = (who !== lastWho || (e.t && lastT && e.t - lastT > 300))
+      ? `<div class="meta"><b>${esc(you ? T('あなた') : (convWho || 'AI'))}</b><span>${esc(fmtIso(e.t))}</span></div>` : '';
+    out.push(`<div class="cv ${who}">${head}<div class="bub">${you ? esc(e.text) : mdLite(e.text)}</div></div>`);
+    lastWho = who; lastT = e.t || lastT;
   }
   flush();
   return out.join('') || `<div class="cv empty">${esc(T('まだ会話がありません'))}</div>`;
@@ -1675,6 +1712,7 @@ function loopLine(s0) {
 }
 async function renderLive(n) {
   const s0 = n.s, m = s0.model_style || {};
+  convWho = m.label || s0.ai || 'AI';   // 吹き出しの名前
   $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`; $('#pTitle').dataset.kind = 'live';
   $('#pBody').innerHTML = `
     <div class="convwrap">

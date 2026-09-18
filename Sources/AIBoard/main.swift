@@ -271,6 +271,22 @@ final class PaneManager {
 /// 返答済みは、このアプリの中で動いている端末だけ通知する(iTerm 側のまで鳴ると多すぎる)。
 /// 通知の本文はサーバ側で秘密を伏せたもの(redact 済み)。外部には何も送らない。
 @MainActor
+/// 判断待ちになった時に鳴らす音。通知を切られていても鳴る(通知の音とは別)。
+/// 鳴りすぎないように 8 秒に 1 回まで。設定で切れる。
+enum Chime {
+    nonisolated(unsafe) static var enabled = true
+    nonisolated(unsafe) static var last = 0.0
+    nonisolated(unsafe) static var log: [String] = []      // 自己試験用
+    nonisolated static func play(_ name: String) {
+        let now = Date().timeIntervalSince1970
+        guard enabled, now - last > 8 else { return }
+        last = now
+        log.append(name)
+        if ProcessInfo.processInfo.environment["AIBOARD_NO_SOUND"] != nil || SELF_TEST { return }
+        NSSound(named: NSSound.Name(name))?.play()
+    }
+}
+
 /// 通知の許可の状態。止められていると「あなたを待っている」を知らせる術が無くなるので、盤に出して気づけるようにする
 enum NotifyAuth {
     nonisolated(unsafe) static var status = "unknown"
@@ -305,6 +321,7 @@ final class Watcher {
         URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
             guard let self, let d = data, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   let sessions = o["sessions"] as? [[String: Any]] else { return }
+            if let snd = o["sound"] as? Bool { Chime.enabled = snd }
             DispatchQueue.main.async { self.update(sessions) }
         }.resume()
     }
@@ -329,8 +346,10 @@ final class Watcher {
             guard primed, known[sid] != state else { continue }
             if state == "確認待ち" {
                 notify(id: sid, title: L("\(model) needs you · \(where_)", "\(model) があなたの判断待ち · \(where_)"), body: doing, tab: tab, sid: sid)
+                Chime.play("Glass")       // 通知が切られていても気づけるように
             } else if state == "codex 停止" || doing.hasPrefix("⛔") {
                 notify(id: sid, title: L("\(model) stopped · \(where_)", "\(model) が停止 · \(where_)"), body: doing, tab: tab, sid: sid)
+                Chime.play("Basso")
             } else if inApp, state == "返答待ち" || state == "codex 返答待ち" {
                 notify(id: sid, title: L("\(model) replied · \(where_)", "\(model) が返答 · \(where_)"), body: L("Your turn.", "あなたの番です。"), tab: tab, sid: sid)
             }
@@ -589,6 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     rep["selected"] = self.pm.selected.map { "0-\($0.id)" } ?? NSNull()
                     rep["firstResponderIsTerminal"] = self.pm.selected.map { self.window.firstResponder === $0.view } ?? false
                     rep["terminalVisible"] = !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])
+                    rep["chimes"] = Chime.log
                     case .failure(let e): rep["ok"] = false; rep["error"] = String(describing: e)
                     }
                     if !JSONSerialization.isValidJSONObject(rep) { rep["value"] = String(describing: rep["value"] ?? "") }
@@ -596,6 +616,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     NSApp.terminate(nil)
                 }
             }
+        }
+        if let n = ProcessInfo.processInfo.environment["AIBOARD_CHIME_TEST"], let times = Int(n) {
+            for _ in 0..<times { Chime.play("Glass") }   // 自己試験: 間隔の規則を確かめる(音は出さない)
         }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_ASK_TEST"] {
             // UAT 用: 判断待ちの一覧を流し込み、小窓の出方と答えの届き先を書き出す(画面は奪わない)

@@ -435,6 +435,30 @@ REMOTE_PATHS_READ = ("/m", "/m.js", "/api/snapshot", "/api/conv", "/api/schedule
 REMOTE_PATHS_WRITE = ("/api/send",)
 
 
+def sound_on():
+    """判断待ちの音を鳴らすか(config.json の sound。既定は鳴らす)。"""
+    import aiboard_paths as ap
+    c = ap.config() or {}
+    return bool(c.get("sound", True))
+
+
+def sound_set(on):
+    import aiboard_paths as ap
+    p = ap.data("config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    cfg["sound"] = bool(on)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+    ap._cfg = None
+    return bool(on)
+
+
 def remote_config():
     import aiboard_paths as ap
     c = (ap.config() or {}).get("remote") or {}
@@ -1626,6 +1650,7 @@ def snapshot(with_macmini=True):
         "machine": machine(procs),
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
         "notify": {"auth": cs.app_notify_auth()},
+        "sound": sound_on(),
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
         "counts": {
