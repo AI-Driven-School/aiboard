@@ -24,7 +24,7 @@ let BOARD_DIR: String = {
 }()
 /// 自己試験(UAT)で動かしているか。試験中はダイアログを出さない(出すとアプリが終わらず、試験が時間切れになる)
 let SELF_TEST: Bool = ["AIBOARD_SELFTEST", "AIBOARD_RESTORE_TEST", "AIBOARD_SWITCH_TEST", "AIBOARD_JS_TEST", "AIBOARD_SHOT",
-     "AIBOARD_NOTIFY_TEST"]
+     "AIBOARD_NOTIFY_TEST", "AIBOARD_ASK_TEST"]
     .contains { ProcessInfo.processInfo.environment[$0] != nil }
 
 let BOARD_URL = URL(string: "http://127.0.0.1:\(ProcessInfo.processInfo.environment["OVERVIEW_PORT"] ?? "8791")/")!   // 試験では別ポート
@@ -287,6 +287,7 @@ final class Watcher {
     private var known: [String: String] = [:]     // sid → state
     private var primed = false                     // 最初の 1 回は「今の状態」を覚えるだけ(起動時に通知の嵐を出さない)
     var onCount: ((Int) -> Void)?
+    var onWaiting: (([[String: Any]]) -> Void)?    // いま判断待ちのセッション(小窓が使う)
     var onOpen: ((String, String) -> Void)?        // (tab, sid)
     let center = UNUserNotificationCenter.current()
     var dryRun = false                             // 自己試験: 実際には出さず dryLog に積む
@@ -311,6 +312,7 @@ final class Watcher {
     private func update(_ sessions: [[String: Any]]) {
         var now: [String: String] = [:]
         var needs = 0
+        var waiting: [[String: Any]] = []
         for s in sessions {
             guard let sid = s["sid"] as? String, !sid.isEmpty, let state = s["state"] as? String else { continue }
             now[sid] = state
@@ -319,7 +321,11 @@ final class Watcher {
             let model = (s["model_style"] as? [String: Any])?["label"] as? String ?? (s["ai"] as? String ?? "AI")
             let where_ = (s["project"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? tab
             let doing = (s["doing"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            if state == "確認待ち" { needs += 1 }
+            if state == "確認待ち" {
+                needs += 1
+                waiting.append(["sid": sid, "tab": tab, "model": model, "where": where_, "doing": doing,
+                                "task": (s["task"] as? String ?? ""), "inApp": inApp])
+            }
             guard primed, known[sid] != state else { continue }
             if state == "確認待ち" {
                 notify(id: sid, title: L("\(model) needs you · \(where_)", "\(model) があなたの判断待ち · \(where_)"), body: doing, tab: tab, sid: sid)
@@ -332,6 +338,7 @@ final class Watcher {
         known = now
         primed = true
         onCount?(needs)
+        onWaiting?(waiting)
     }
 
     private func notify(id: String, title: String, body: String, tab: String, sid: String) {
@@ -345,7 +352,119 @@ final class Watcher {
 
 // MARK: - アプリ
 
+/// 判断待ちに答えるための、最前面に浮かぶ小窓。
+///
+/// なぜ要るか(2026-09-18): 知らせる手段が OS 通知と Dock の数字しか無かったが、
+/// この Mac では通知が denied で 1 通も出ていなかった(誰も気づけない)。通知は利用者が切れるが、
+/// 自前の小窓は切られない。出すのは「確認待ち」だけ。答えると消える。
 @MainActor
+final class AskPanel: NSObject, NSWindowDelegate {
+    let panel: NSPanel
+    private let title = NSTextField(labelWithString: "")
+    private let body = NSTextField(wrappingLabelWithString: "")
+    private let row = NSStackView()
+    private let input = NSTextField()
+    private var current: [String: Any] = [:]
+    /// 答えを届ける先: (tab, sid, key, text)。アプリの端末と iTerm のタブで道が違うので、外から渡す
+    var send: ((String, String, String, String) -> Void)?
+    var onOpen: ((String) -> Void)?          // 「端末を見る」
+    var log: [String] = []                   // 自己試験用(何を出して、何を送ったか)
+    private(set) var shownSid = ""
+    var state: [String: Any] { ["shown": shownSid, "visible": panel.isVisible,
+                                "title": title.stringValue, "body": body.stringValue,
+                                "buttons": row.arrangedSubviews.compactMap { ($0 as? NSButton)?.identifier?.rawValue }] }
+
+    override init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 380, height: 150),
+                        styleMask: [.titled, .closable, .nonactivatingPanel, .utilityWindow],
+                        backing: .buffered, defer: false)
+        super.init()
+        panel.title = L("Waiting for you", "あなたの判断待ち")
+        panel.level = .floating                      // 他のアプリの上に出す(前面を奪わない)
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]   // 同時指定は不可(moveToActiveSpace と排他)
+        panel.hidesOnDeactivate = false
+        panel.isFloatingPanel = true
+        panel.becomesKeyOnlyIfNeeded = true          // 文字を打つときだけキー入力を受ける
+        panel.delegate = self
+        let v = NSStackView(views: [title, body, row, input])
+        v.orientation = .vertical; v.alignment = .leading; v.spacing = 8
+        v.edgeInsets = NSEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        title.font = .systemFont(ofSize: 13, weight: .semibold)
+        body.font = .systemFont(ofSize: 12)
+        body.textColor = .secondaryLabelColor
+        body.preferredMaxLayoutWidth = 350
+        row.orientation = .horizontal; row.spacing = 6
+        input.placeholderString = L("or type an answer…", "自由に答える…")
+        input.target = self; input.action = #selector(sendTyped)
+        input.widthAnchor.constraint(equalToConstant: 350).isActive = true
+        for (label, key) in [("1", "1"), ("2", "2"), (L("No (Esc)", "いいえ (Esc)"), "esc"), (L("Terminal", "端末を見る"), "open")] {
+            let b = NSButton(title: label, target: self, action: #selector(tap(_:)))
+            b.identifier = NSUserInterfaceItemIdentifier(key)
+            if key == "1" { b.keyEquivalent = "\r" }
+            row.addArrangedSubview(b)
+        }
+        panel.contentView = v
+    }
+
+    /// 判断待ちの一覧を受け取り、先頭 1 件を出す。0 件になったら閉じる。
+    func update(_ waiting: [[String: Any]], offscreen: Bool) {
+        guard let w = waiting.first, let sid = w["sid"] as? String else {
+            if panel.isVisible || !shownSid.isEmpty { log.append("hide"); shownSid = "" }
+            panel.orderOut(nil)
+            return
+        }
+        if sid != shownSid {
+            log.append("show \(sid) tab=\(w["tab"] as? String ?? "")")
+            shownSid = sid
+        }
+        current = w
+        let more = waiting.count > 1 ? " ＋\(waiting.count - 1)" : ""
+        title.stringValue = "\(w["model"] as? String ?? "AI") · \(w["where"] as? String ?? "")\(more)"
+        let doing = (w["doing"] as? String ?? "").isEmpty ? (w["task"] as? String ?? "") : (w["doing"] as? String ?? "")
+        body.stringValue = String(doing.prefix(200))
+        panel.setContentSize(NSSize(width: 380, height: 150))
+        if offscreen {      // 自己試験: 画面を奪わない
+            panel.setFrameOrigin(NSPoint(x: -5000, y: -5000))
+            panel.orderFront(nil)
+            return
+        }
+        if !panel.isVisible, let vis = NSScreen.main?.visibleFrame {
+            panel.setFrameTopLeftPoint(NSPoint(x: vis.maxX - 400, y: vis.maxY - 20))   // 右上
+        }
+        panel.orderFrontRegardless()
+    }
+
+    /// 試験用: ボタンと同じ道で押す(1 / 2 / esc / open)
+    func tapKey(_ key: String) {
+        for v in row.arrangedSubviews {
+            if let b = v as? NSButton, b.identifier?.rawValue == key { tap(b); return }
+        }
+    }
+
+    /// 試験用: 自由入力の欄から送る
+    func typeAnswer(_ text: String) { input.stringValue = text; sendTyped() }
+
+    @objc private func tap(_ b: NSButton) {
+        let key = b.identifier?.rawValue ?? ""
+        let tab = current["tab"] as? String ?? "", sid = current["sid"] as? String ?? ""
+        if key == "open" { log.append("open \(tab)"); onOpen?(tab); return }
+        log.append("answer \(key) tab=\(tab)")
+        send?(tab, sid, key == "esc" ? "esc" : "", key == "esc" ? "" : key)
+        panel.orderOut(nil); shownSid = ""
+    }
+
+    @objc private func sendTyped() {
+        let text = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        let tab = current["tab"] as? String ?? "", sid = current["sid"] as? String ?? ""
+        log.append("answer text tab=\(tab)")
+        send?(tab, sid, "", text)
+        input.stringValue = ""
+        panel.orderOut(nil); shownSid = ""
+    }
+}
+
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSSplitViewDelegate, UNUserNotificationCenterDelegate {
     var window: NSWindow!
     let watcher = Watcher()
@@ -354,6 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     let pm = PaneManager()
     var boardHidden = false
     var lastState: [[String: Any]] = []
+    let ask = AskPanel()
 
     func applicationDidFinishLaunching(_ n: Notification) {
         if let d = FileManager.default.contents(atPath: STATE_FILE),
@@ -441,6 +561,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         watcher.center.delegate = self
         watcher.onCount = { n in NSApp.dockTile.badgeLabel = n > 0 ? String(n) : nil }
         watcher.onOpen = { [weak self] tab, _ in self?.open(tab: tab) }
+        // 判断待ちは、最前面の小窓でも知らせる(通知を切られていても届く)
+        ask.onOpen = { [weak self] tab in self?.open(tab: tab) }
+        ask.send = { [weak self] tab, sid, key, text in self?.answer(tab: tab, sid: sid, key: key, text: text) }
+        watcher.onWaiting = { [weak self] rows in
+            guard let self else { return }
+            if ProcessInfo.processInfo.environment["AIBOARD_NO_ASK"] != nil { return }
+            self.ask.update(rows, offscreen: SELF_TEST)
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.watcher.start() }
         if let cmd = ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] { selfTest(cmd) }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"], let js = ProcessInfo.processInfo.environment["AIBOARD_JS"] {
@@ -460,6 +588,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     }
                     if !JSONSerialization.isValidJSONObject(rep) { rep["value"] = String(describing: rep["value"] ?? "") }
                     if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) { try? d.write(to: URL(fileURLWithPath: out)) }
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+        if let out = ProcessInfo.processInfo.environment["AIBOARD_ASK_TEST"] {
+            // UAT 用: 判断待ちの一覧を流し込み、小窓の出方と答えの届き先を書き出す(画面は奪わない)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) {   // 端末のシェルが立ち上がるのを待つ
+                var rep: [String: Any] = [:]
+                let tab = ProcessInfo.processInfo.environment["AIBOARD_ASK_TAB"] ?? "9-9"
+                let row: [String: Any] = ["sid": "ask-uat", "tab": tab, "model": "Opus 5", "where": "uat",
+                                          "doing": "⚠ Bash(npm test) を許可しますか", "task": "試験を流して", "inApp": tab.hasPrefix("0-")]
+                let row2: [String: Any] = ["sid": "ask-uat-2", "tab": "9-8", "model": "Sonnet 5", "where": "uat2",
+                                           "doing": "⚠ 2 件目", "task": "", "inApp": false]
+                self.ask.update([], offscreen: true)
+                rep["empty"] = self.ask.state
+                self.ask.update([row, row2], offscreen: true)
+                rep["one"] = self.ask.state
+                if let k = ProcessInfo.processInfo.environment["AIBOARD_ASK_TAP"] { self.ask.tapKey(k) }
+                if let t = ProcessInfo.processInfo.environment["AIBOARD_ASK_TYPE"] { self.ask.typeAnswer(t) }
+                rep["after"] = self.ask.state
+                self.ask.update([], offscreen: true)
+                rep["closed"] = self.ask.state
+                rep["log"] = self.ask.log
+                DispatchQueue.main.asyncAfter(deadline: .now() + 8) {   // 端末へ渡すのは貼り付け→Enter の順で少し待つ
+                    rep["log"] = self.ask.log
+                    if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) {
+                        try? d.write(to: URL(fileURLWithPath: out))
+                    }
                     NSApp.terminate(nil)
                 }
             }
@@ -675,6 +831,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     /// タブを前面に。アプリの端末ならその端末、iTerm のタブなら盤サーバ経由で iTerm を前に出す
+    /// 判断待ちへの答えを、その端末へ。アプリの端末は直接、iTerm のタブは盤サーバの /api/send に頼む。
+    func answer(tab: String, sid: String, key: String, text: String) {
+        if let p = pm.pane(tab: tab) {
+            if key == "esc" { _ = p.view.sendKey(.escape) }
+            else if text.count == 1, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
+            else if !text.isEmpty { p.enqueue(text: text, enter: true) }
+            return
+        }
+        var body: [String: Any] = ["tab": tab, "sid": sid]
+        if key == "esc" { body["key"] = "esc" } else { body["text"] = text; body["enter"] = text.count > 1 }
+        if ProcessInfo.processInfo.environment["AIBOARD_DRY"] != nil {   // 試験: 実際には送らず、送る中身を残す
+            let j = (try? JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            ask.log.append("post " + j)
+            return
+        }
+        var req = URLRequest(url: BOARD_URL.appendingPathComponent("api/send")); req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.setValue("1", forHTTPHeaderField: "X-Overview")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     func open(tab: String) {
         if let p = pm.pane(tab: tab) { NSApp.activate(ignoringOtherApps: true); showTerminal(); pm.select(p); return }
         var req = URLRequest(url: BOARD_URL.appendingPathComponent("api/go")); req.httpMethod = "POST"

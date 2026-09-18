@@ -2168,6 +2168,78 @@ def dg03(ctx):
             + (f" / 案件 {fk} の画面に見出しと依頼文と結果 {shown}" if fk else " / 枠が無いので画面の確認は省略"))
 
 
+def _ask_run(ctx, env_extra):
+    out = os.path.join(tempfile.mkdtemp(dir=ctx["data"]), "ask.json")
+    # AIBOARD_NO_ASK: 実セッションの判断待ちが割り込まないように、小窓は試験の入力だけで動かす
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=ctx["data"], OVERVIEW_NO_INDEX="1",
+               AIBOARD_BOARD=BOARD, AIBOARD_ASK_TEST=out, AIBOARD_DRY="1", AIBOARD_NO_ASK="1", **env_extra)
+    subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                   env=env, capture_output=True, text=True, timeout=120)
+    check(os.path.exists(out), "アプリが結果を書かなかった(小窓の口に入っていない)")
+    return json.load(open(out))
+
+
+@case("AS-01", "判断待ちの小窓: 待っている時だけ出て、件数と用件を見せ、0 件になったら閉じる")
+def as01(ctx):
+    r = _ask_run(ctx, {})
+    check(not r["empty"]["visible"] and not r["empty"]["shown"], f"待っていないのに出た {r['empty']}")
+    one = r["one"]
+    check(one["visible"] and one["shown"] == "ask-uat", f"待っているのに出ない {one}")
+    check("Opus 5" in one["title"] and "uat" in one["title"], f"題に AI と場所が無い {one['title']!r}")
+    check("＋1" in one["title"], f"2 件目の件数が出ない {one['title']!r}")
+    check("npm test" in one["body"], f"用件が出ない {one['body']!r}")
+    check(one["buttons"] == ["1", "2", "esc", "open"], f"ボタン {one['buttons']}")
+    check(not r["closed"]["visible"] and not r["closed"]["shown"], f"0 件になっても閉じない {r['closed']}")
+    check(r["log"][:2] == ["show ask-uat tab=9-9", "hide"] or "show ask-uat tab=9-9" in r["log"], f"記録 {r['log']}")
+    return f"0 件=出さない / 1 件目を表示(題「{one['title']}」・用件あり・ボタン 4 つ)/ 0 件で閉じる"
+
+
+@case("AS-02", "小窓の答えの届き先: 1 / 2 / Esc / 自由入力が、そのセッションの端末だけに行く(実送信はしない)")
+def as02(ctx):
+    got = {}
+    for k in ("1", "2", "esc"):
+        r = _ask_run(ctx, {"AIBOARD_ASK_TAP": k})
+        got[k] = [l for l in r["log"] if l.startswith(("answer", "post"))]
+        check(not r["after"]["visible"], f"{k}: 答えた後も出たまま {r['after']}")
+    r = _ask_run(ctx, {"AIBOARD_ASK_TYPE": "続けて。テストは飛ばさないで"})
+    got["text"] = [l for l in r["log"] if l.startswith(("answer", "post"))]
+    ro = _ask_run(ctx, {"AIBOARD_ASK_TAP": "open"})
+    got["open"] = [l for l in ro["log"] if l.startswith("open")]
+    check(ro["after"]["visible"], "「端末を見る」で小窓が消えた(まだ答えていない)")
+
+    def body_of(rows):
+        for l in rows:
+            if l.startswith("post "):
+                return l
+        return ""
+    for k, want in (("1", {"text": "1", "enter": False}), ("2", {"text": "2", "enter": False}), ("esc", {"key": "esc"})):
+        b = body_of(got[k])
+        check(b.startswith("post "), f"{k}: 送る中身が残っていない {got[k]}")
+        d = json.loads(b[5:])
+        check(d.get("tab") == "9-9" and d.get("sid") == "ask-uat", f"{k}: 宛先が違う {d}")
+        check(all(d.get(x) == y for x, y in want.items()), f"{k}: 送る中身が違う {d}")
+    bt = body_of(got["text"])
+    dt = json.loads(bt[5:]) if bt.startswith("post ") else {}
+    check("続けて" in str(dt.get("text")) and dt.get("enter") is True, f"自由入力 {dt}")
+    check(got["open"] == ["open 9-9"], f"端末を見る {got['open']}")
+    return "1 / 2 / Esc / 自由入力の 4 通りが、そのタブと sid にだけ届く(dry で実送信なし)・「端末を見る」では閉じない"
+
+
+@case("AS-03", "小窓からアプリの端末へ: 自由入力がその端末のシェルに届く(印のファイルができる)")
+def as03(ctx):
+    mark = os.path.join(tempfile.mkdtemp(dir=ctx["data"]), "ask-pane.txt")
+    r = _ask_run(ctx, {"AIBOARD_ASK_TAB": "0-1", "AIBOARD_ASK_TYPE": f"echo ASK_OK > {mark}"})
+    check(r["one"]["shown"] == "ask-uat", f"小窓が出ていない {r['one']}")
+    check(not any(l.startswith("post ") for l in r["log"]), f"アプリの端末なのにサーバ経由で送った {r['log']}")
+    for _ in range(40):
+        if os.path.exists(mark):
+            break
+        time.sleep(0.25)
+    check(os.path.exists(mark), f"端末に届いていない(印 {os.path.basename(mark)} ができない) log={r['log']}")
+    check(open(mark).read().strip() == "ASK_OK", open(mark).read()[:60])
+    return "アプリの端末(0-1)へは直接送り、シェルが実行した(サーバは経由しない)"
+
+
 @case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
 def tu01(ctx):
     import cs
