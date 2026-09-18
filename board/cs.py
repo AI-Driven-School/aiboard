@@ -163,11 +163,11 @@ def iterm_sessions():
     rows = []
     # 失敗した直後は間を空ける(固まった iTerm に 2.5 秒ごとに 8 秒待たされると、盤の更新が止まる)
     if _LAST_ITERM["fail_t"] and time.time() - _LAST_ITERM["fail_t"] < 30:
-        return list(_LAST_ITERM["rows"])
+        return list(_LAST_ITERM["rows"]) + app_panes()   # アプリ自身の端末は iTerm と関係ない。落とさない
     out = osa(script)
     if not out and OSA_ERROR:
         _LAST_ITERM["fail_t"] = time.time()
-        return list(_LAST_ITERM["rows"])   # 問い合わせに失敗: 前回の一覧を使う(盤は止めない)
+        return list(_LAST_ITERM["rows"]) + app_panes()   # 問い合わせに失敗: iTerm は前回の一覧・アプリの端末は今の一覧
     _LAST_ITERM["fail_t"] = 0
     for line in out.splitlines():
         parts = line.split("\t")
@@ -513,6 +513,42 @@ def screen_text(win, tab, tty=None):
     return out if ok else ""
 
 
+_TRUST = {"t": 0, "paths": set()}
+
+
+def trust_files():
+    """claude が「このフォルダを信頼しますか」の答えを書く設定ファイル(既定と各プロファイル)。"""
+    out = [os.path.join(HOME, ".claude.json")]
+    prof = os.path.join(HOME, ".claude-profiles")
+    if os.path.isdir(prof):
+        out += [os.path.join(prof, d, ".claude.json") for d in sorted(os.listdir(prof))]
+    return [p for p in out if os.path.exists(p)]
+
+
+def trusted_cwd(cwd, ttl=20):
+    """そのフォルダは、どれかのアカウントで「信頼する」と答え済みか。
+
+    答える前の claude は最初の画面で止まり、会話を始めないので、盤では「起動中?」に見えていた
+    (アプリ自身の端末は AppleScript で画面を読めないので、画面文字では判定できない。2026-09-18)。
+    """
+    if not cwd:
+        return True
+    now = time.time()
+    if now - _TRUST["t"] > ttl:
+        paths = set()
+        for f in trust_files():
+            try:
+                with open(f, encoding="utf-8") as h:
+                    d = json.load(h)
+            except (OSError, ValueError):
+                continue
+            for p, v in (d.get("projects") or {}).items():
+                if isinstance(v, dict) and v.get("hasTrustDialogAccepted"):
+                    paths.add(p.rstrip("/") or "/")
+        _TRUST.update(t=now, paths=paths)
+    return cwd.rstrip("/") in _TRUST["paths"]
+
+
 # ---------------------------------------------------------------- 判定 ----
 def classify(tabs, procs):
     by_tty = {}
@@ -525,7 +561,8 @@ def classify(tabs, procs):
         codex = [p for p in pids if is_codex(procs[p]["cmd"])]
         t.update(state="終了(古い題名)", mark="⚪", mem=0, ago=None, cwd="", topic="", pid=None,
                  ai="", doing="", sid="", task="", model="", model_id="", model_style=None,
-                 account="", transcript="", state_since=None, started=None, client=None, subagents={})
+                 account="", transcript="", state_since=None, started=None, client=None, subagents={},
+                 trust_ask="")
         topic = re.sub(r"^[✳◐◑◒◓⠂⠐·\s]+", "", t["title"])
         topic = re.sub(r"\s*\([^)]*\)\s*$", "", topic)
         topic = re.sub(r"^\[ [.!] \] Action Required \| ", "", topic)
@@ -582,14 +619,17 @@ def classify(tabs, procs):
                     cwd=t["cwd"], account=acct,
                     texts=(prompt, topic, first_user_prompt(tr) if tr else "")))
             else:
-                screen = screen_text(t["win"], t["tab"])
-                if "trust this folder" in screen:
+                t["cwd"] = proc_cwd(pid)
+                # 信頼の確認で止まっているか。設定に答えが無ければ確認中(アプリの端末は画面を読めないのでこれが正)
+                untrusted = not trusted_cwd(t["cwd"])
+                screen = "" if untrusted or t["win"] == 0 else screen_text(t["win"], t["tab"])
+                if untrusted or "trust this folder" in screen:
                     t["state"], t["mark"] = "確認画面で停止", "🔴"
                     m = re.search(r"--resume\s+(\S+)", procs[pid]["cmd"])
                     t["topic"] = "フォルダ信頼の確認で止まって未起動" + (f"（resume {m.group(1)[:8]}）" if m else "")
+                    t["trust_ask"] = t["cwd"]
                 else:
                     t["state"], t["mark"] = "起動中?", "🔴"
-                t["cwd"] = proc_cwd(pid)
         elif codex:
             root = outermost_ai(procs, codex)   # 親が codex でなくても、間に bash を挟んだ入れ子がある
             t["state"], t["mark"] = "codex", "🟩"

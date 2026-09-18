@@ -492,6 +492,12 @@ def alive():
     """このポートで盤サーバが待ち受けていて、HTTP が返るか。"""
     if listener_pid() is None:
         return False
+    try:   # 版だけ返す軽い口で見る(snapshot は iTerm が遅いと数十秒かかり、起動失敗と誤判定していた)
+        with urllib.request.urlopen(f"http://{HOST}:{PORT}/api/version", timeout=3) as r:
+            if r.status == 200:
+                return True
+    except Exception:
+        pass
     try:
         with urllib.request.urlopen(f"http://{HOST}:{PORT}/api/snapshot", timeout=3) as r:
             return r.status == 200
@@ -541,8 +547,8 @@ def open_in_browser(args=()):
         log = open(LOGFILE, "a")
         subprocess.Popen([sys.executable, os.path.abspath(__file__), "--serve"],
                          stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True)
-        for _ in range(30):
-            time.sleep(0.3)
+        for _ in range(60):   # 初回の調べ物が重い時があるので長めに待つ
+            time.sleep(0.5)
             if alive():
                 break
         else:

@@ -140,12 +140,18 @@ def start_server(data_dir):
         r = run(["--no-open"])
         return r.stdout + r.stderr
     except subprocess.TimeoutExpired:
-        # 前の試験の残骸が待ち受けていると起動に入れない。片付けてからもう一度(ポートで引いた試験サーバだけ止める)
+        # 前の試験の残骸が待ち受けていると起動に入れない。片付け、ポートが空くのを待ってからもう一度
         try:
             run(["stop"], timeout=30)
         except subprocess.TimeoutExpired:
             pass
-        r = run(["--no-open"])
+        for _ in range(30):
+            free = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP@127.0.0.1:{PORT}", "-sTCP:LISTEN", "-t"],
+                                  capture_output=True, text=True).stdout.strip()
+            if not free:
+                break
+            time.sleep(1)
+        r = run(["--no-open"], timeout=120)
         return "(前の試験サーバを片付けて起動し直した) " + r.stdout + r.stderr
 
 
@@ -1815,13 +1821,13 @@ def cs05(ctx):
     return " / ".join(notes) + "(入れ子 pid 300 を選ばない)"
 
 
-@case("CS-06", "状態の真理値表: 作業中・返答待ち・確認待ち・起動中?・確認画面で停止・codex 4 種・他のジョブ・終了")
+@case("CS-06", "状態の真理値表: 作業中・返答待ち・確認待ち・起動中?・確認画面で停止(画面/設定の両方)・codex 4 種・他のジョブ・終了")
 def cs06(ctx):
     import cs
     def stub(**kw):   # classify が外へ出る関数を全部差し替える(実プロセス・実ログを見に行かせない)
         keep = {n: getattr(cs, n) for n in ("session_record", "tab_state", "find_transcript", "screen_text",
                                             "proc_cwd", "proc_start", "codex_session", "model_from_transcript",
-                                            "last_user_prompt", "first_user_prompt", "_clients")}
+                                            "last_user_prompt", "first_user_prompt", "trusted_cwd", "_clients")}
         for n in keep:
             setattr(cs, n, lambda *a, **k: (_ for _ in ()).throw(AssertionError("外部を見に行った")))
         cs._clients = None
@@ -1833,19 +1839,22 @@ def cs06(ctx):
     procs, tabs, exp = {}, [], {}
     recs, states, screens, cxs = {}, {}, {}, {}
 
-    def tab(n, cmds, state, mark, rec=None, st=None, screen="", cx=None):
+    cwds = {}
+
+    def tab(n, cmds, state, mark, rec=None, st=None, screen="", cx=None, win=9, cwd="/tmp/uat"):
         tty = f"ttys9{n:02d}"
         base = 1000 + n * 10
         procs[base] = P(1, 500, tty, "/usr/bin/login -fp " + os.path.basename(HOME))
         procs[base + 1] = P(base, 900, tty, "-zsh")
         for i, c in enumerate(cmds):
             procs[base + 2 + i] = P(base + 1, 10000, tty, c)
-        tabs.append({"win": 9, "tab": n, "tty": tty, "title": "claude"})
+            cwds[base + 2 + i] = cwd
+        tabs.append({"win": win, "tab": n, "tty": tty, "title": "claude"})
         exp[n] = (state, mark)
         if rec is not None:
             recs[base + 2] = dict(rec, sessionId=f"sid{n}")
         states[f"sid{n}"] = st or {}
-        screens[(9, n)] = screen
+        screens[(win, n)] = screen
         cxs[tty] = cx or {}
         return n
     busy = {"cwd": "/tmp/uat", "status": "working", "updatedAt": 1_700_000_000_000, "statusUpdatedAt": 1_700_000_000_000}
@@ -1864,12 +1873,16 @@ def cs06(ctx):
     tab(12, [CX], "codex 停止", "🔴", None, None, "", {"doing": "⏹ 中断された", "sid": "cx12"})
     tab(13, ["npm run dev"], "他のジョブ", "🔵")
     tab(14, [], "終了(古い題名)", "⚪")
+    # アプリ自身の端末(win=0)は画面を読めない。設定に「信頼する」の答えが無ければ、確認で止まっていると見なす
+    tab(15, [CL], "確認画面で停止", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")
+    tab(16, [CL], "起動中?", "🔴", None, None, "", None, win=0)   # 信頼済みなら、画面を読めなくても「起動中?」
     keep = stub(session_record=lambda pid: recs.get(pid),
                 tab_state=lambda sid: states.get(sid, {}),
                 find_transcript=lambda sid: "",
                 screen_text=lambda w, t, tty=None: screens.get((w, t), ""),
-                proc_cwd=lambda pid: "/tmp/uat",
+                proc_cwd=lambda pid: cwds.get(pid, "/tmp/uat"),
                 proc_start=lambda pid: 1_700_000_000,
+                trusted_cwd=lambda cwd, ttl=20: cwd != "/tmp/untrusted",
                 codex_session=lambda cwd, started, pids=(): cxs.get(procs[min(pids)]["tty"], {}))
     try:
         got = {t["tab"]: (t["state"], t["mark"]) for t in cs.classify(tabs, procs)}
@@ -1884,7 +1897,83 @@ def cs06(ctx):
     check(d[13]["mem"] == 500 + 900 + 10000, f"他のジョブのメモリ {d[13]['mem']}")
     check(d[14]["mem"] == 0 and d[14]["sid"] == "tty:ttys914", f"終了タブ {d[14]['mem']} {d[14]['sid']}")
     check("信頼" in d[7]["topic"] and "abc123de" in d[7]["topic"], f"確認画面の説明に resume 先が無い {d[7]['topic']!r}")
+    check(d[15]["trust_ask"] == "/tmp/untrusted" and not d[16]["trust_ask"], f"信頼の確認の印 {d[15]['trust_ask']!r} / {d[16]['trust_ask']!r}")
     return f"{len(exp)} 行すべて期待どおり(状態 {len(set(exp.values()))} 種)"
+
+
+@case("TU-02", "信頼の確認で止まったセッションを、盤から答えられる(はい=↓+Enter・いいえ=Enter)")
+def tu02(ctx):
+    js = """
+      const sent = [];
+      const realFetch = window.fetch;
+      const fake = {tab: '0-9', sid: 'trust-uat', state: '確認画面で停止', mark: '🔴', ai: 'Claude',
+                    cwd: '/tmp/uat-trust', doing: '', timeline: [], etag: '', ok: true};
+      window.fetch = async (u, o) => {
+        const url = String(u);
+        if (url.includes('/api/conv')) return new Response(JSON.stringify(fake), {headers: {'Content-Type': 'application/json'}});
+        if (url.includes('/api/snapshot')) {   // 盤に「信頼の確認で止まっている」セッションを 1 枚足す
+          const r = await realFetch(u, o); const d = await r.json();
+          d.sessions = [Object.assign({}, (d.sessions || [])[0] || {}, fake, {topic: 'フォルダ信頼の確認で止まって未起動',
+            trust_ask: '/tmp/uat-trust', model_style: {label: 'x', short: 'x', emoji: '🟠', rgb: [0, 0, 0], vendor: '', id: ''}})]
+            .concat(d.sessions || []);
+          return new Response(JSON.stringify(d), {headers: {'Content-Type': 'application/json'}});
+        }
+        return realFetch(u, o); };
+      board.setToApp(m => sent.push(m));
+      await new Promise(r => setTimeout(r, 2500));
+      board.select('trust-uat');
+      for (let i = 0; i < 40 && !document.querySelector('#cvAsk button'); i++) await new Promise(r => setTimeout(r, 250));
+      const labels = [...document.querySelectorAll('#cvAsk button')].map(b => b.textContent.trim());
+      const q = (document.querySelector('#cvAsk .q') || {}).textContent || '';
+      document.querySelector('#cvAsk button.primary').click();
+      await new Promise(r => setTimeout(r, 900));
+      const yes = sent.splice(0);
+      const btns = [...document.querySelectorAll('#cvAsk button')];
+      (btns[1] || btns[0]).click();
+      await new Promise(r => setTimeout(r, 400));
+      return {labels: labels, q: q, yes: yes, no: sent.splice(0)};"""
+    r = run_app_js(ctx, js, wait="8")
+    check(r.get("ok"), f"{r}")
+    v = r["value"]
+    check(len(v["labels"]) == 2, f"ボタン {v['labels']}")
+    check("信頼" in v["q"], f"問いの文 {v['q']!r}")
+    # 盤はアプリへ一覧なども送るので、端末への打鍵(send)だけ見る
+    keys = lambda ms: [(m.get("type"), m.get("tab"), m.get("key")) for m in ms if m.get("type") == "send"]
+    check(keys(v["yes"]) == [("send", "0-9", "down"), ("send", "0-9", "enter")], f"はい: {keys(v['yes'])}")
+    check(keys(v["no"]) == [("send", "0-9", "enter")], f"いいえ: {keys(v['no'])}")
+    return f"ボタン {v['labels']} / はい=↓+Enter・いいえ=Enter を端末へ(実セッションには送っていない)"
+
+
+@case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
+def tu01(ctx):
+    import cs
+    d = tempfile.mkdtemp(dir=ctx["data"])
+    a = os.path.join(d, "a.json"); b = os.path.join(d, "b.json"); broken = os.path.join(d, "c.json")
+    json.dump({"projects": {"/tmp/yes-a": {"hasTrustDialogAccepted": True},
+                            "/tmp/no": {"hasTrustDialogAccepted": False},
+                            "/tmp/other": {}}}, open(a, "w"))
+    json.dump({"projects": {"/tmp/yes-b/": {"hasTrustDialogAccepted": True}}}, open(b, "w"))
+    open(broken, "w").write("{壊れた")
+    keep = cs.trust_files
+    try:
+        cs.trust_files = lambda: [a, b, broken, os.path.join(d, "無い.json")]
+        cs._TRUST.update(t=0, paths=set())
+        got = {p: cs.trusted_cwd(p) for p in ("/tmp/yes-a", "/tmp/yes-a/", "/tmp/yes-b", "/tmp/no", "/tmp/other", "/tmp/未登録")}
+        exp = {"/tmp/yes-a": True, "/tmp/yes-a/": True, "/tmp/yes-b": True,
+               "/tmp/no": False, "/tmp/other": False, "/tmp/未登録": False}
+        check(got == exp, f"判定 {got}")
+        check(cs.trusted_cwd("") is True, "フォルダ不明なら確認中とは言わない(偽の赤を出さない)")
+        # 実際の設定でも読めること(どれかのアカウントで信頼済みのフォルダが 1 つ以上ある)
+        cs.trust_files = keep
+        cs._TRUST.update(t=0, paths=set())
+        real = [f for f in cs.trust_files() if os.path.exists(f)]
+        cs.trusted_cwd(HOME)
+        check(cs._TRUST["paths"], f"実設定 {len(real)} 個から信頼済みフォルダが 0 件")
+        n = len(cs._TRUST["paths"])
+    finally:
+        cs.trust_files = keep
+        cs._TRUST.update(t=0, paths=set())
+    return f"合成 6 通りすべて一致 / 壊れた設定と欠損は無視 / 実設定 {len(real)} 個から {n} フォルダ"
 
 
 @case("CS-03", "メモリ合計: 実プロセス表で別実装と一致し、親子が循環した表でも止まる")
@@ -5046,6 +5135,10 @@ def it01(ctx):
             check(took < 12, f"あきらめるまで {took:.0f} 秒(8 秒で切るはず)")
             check(cs.OSA_ERROR.startswith("timeout:"), f"理由が残らない {cs.OSA_ERROR!r}")
             check(any(r.get("tty") == "ttys900" for r in rows), f"前の一覧を使っていない {rows}")
+            # アプリ自身の端末は iTerm と無関係なので、iTerm が死んでいても一覧から落とさない
+            with patched(cs, "app_panes", lambda: [{"win": 0, "tab": 7, "tty": "ttys777", "title": "app", "app": True}]):
+                rows2 = cs.iterm_sessions()
+            check(any(r.get("tty") == "ttys777" for r in rows2), f"アプリの端末が落ちている {rows2}")
             t0 = time.time(); cs.iterm_sessions(); again = time.time() - t0
             check(again < 1, f"失敗直後にまた 8 秒待った({again:.0f} 秒)")
             snap = o.snapshot(with_macmini=False)
@@ -5208,6 +5301,138 @@ def rl03(ctx):
     doc = open(os.path.join(ROOT, "docs", "release.md"), encoding="utf-8").read()
     check("Manage Certificates" in doc and "K7CD7UAWWC" in doc, "証明書の作り方が手順書に無い")
     return "署名・公証・staple・証明書が無いときの停止・未署名を brew に流さない・sandbox 無し・手順書あり"
+
+
+def _real_account():
+    """使い捨ての本物セッションに使うアカウントを選ぶ。上限に当たっている物は使えないので、
+    1 語だけ聞いて返事が返る物を探す(返事は捨てる)。仕事用(som)は他社の枠なので触らない。"""
+    # 既定のアカウントは使わない: 信頼の印を足す先が ~/.claude.json(このセッション自身の設定)になる
+    cands = [c for c in [os.environ.get("UAT_REAL_PROFILE"), "lifehack"] if c]
+    why = ["default: 自分の設定を書き換えることになるので使わない"]
+    for prof in dict.fromkeys(cands):
+        cfg = os.path.join(HOME, ".claude-profiles", prof)
+        if not os.path.isdir(cfg):
+            why.append(f"{prof}: 置き場が無い")
+            continue
+        env = dict(os.environ, CLAUDE_CONFIG_DIR=cfg)
+        r = subprocess.run(["/bin/zsh", "-lc", "command claude --model claude-haiku-4-5-20251001 -p ok"],
+                           env=env, capture_output=True, text=True,
+                           timeout=120, stdin=subprocess.DEVNULL)   # stdin を閉じないと 3 秒待って警告を出す
+        out = (r.stdout.strip() or r.stderr.strip())
+        if r.returncode == 0 and out and "limit" not in out.lower():
+            return prof, cfg, ""
+        why.append(f"{prof}: {out.splitlines()[-1][:60] if out else 'exit ' + str(r.returncode)}")
+    return "", "", " / ".join(why)
+
+
+def _trust(cfg, path, on):
+    """設定の projects に「このフォルダは信頼済み」の印を足す/外す。他の項目は触らない(読んで足して置き換え)。"""
+    f = os.path.join(cfg, ".claude.json")
+    d = json.load(open(f, encoding="utf-8"))
+    pj = d.setdefault("projects", {})
+    if on:
+        pj.setdefault(path, {})["hasTrustDialogAccepted"] = True
+    else:
+        pj.pop(path, None)
+    tmp = f + ".uat"
+    with open(tmp, "w", encoding="utf-8") as h:
+        json.dump(d, h, ensure_ascii=False)
+    os.replace(tmp, f)
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except Exception:
+        return False
+
+
+@case("RE-01", "本物のセッションに、盤から送って返事が返り、盤から止められる(使い捨てのセッションを自分で作る)")
+def re01(ctx):
+    if not os.environ.get("UAT_REAL"):
+        return "SKIP: 本物の AI を動かす試験(UAT_REAL=1 のときだけ。わずかに利用枠を使う)"
+    prof, cfg, why = _real_account()
+    if not prof:
+        return "SKIP: 使えるアカウントが無い(" + why + ")"
+    data = ctx["data"]   # 盤サーバと同じ置き場にする(別だと、盤が見ているのは利用者の実セッションになる)
+    open(os.path.join(data, "hook-declined"), "w").close()
+    work = os.path.realpath(os.path.join(tempfile.mkdtemp(dir=data), "work"))   # /var と /private/var の揺れを消す
+    os.makedirs(work, exist_ok=True)
+    open(os.path.join(work, "uat.txt"), "w").write("UAT\n")
+    # この一時フォルダを「信頼済み」にしておく(そうしないと claude は最初に
+    # 「このフォルダを信頼しますか」を出して止まり、会話に入らない)。
+    # 資格情報は鍵束にあり設定置き場ごとに別なので、使い捨てに写せない → 本物の設定に印だけ足し、最後に外す。
+    _trust(cfg, work, True)
+    try:
+        return _re01_run(ctx, data, work, cfg, prof)
+    finally:
+        _trust(cfg, work, False)   # 足した印は必ず外す(合否に関わらず)
+
+
+def _re01_run(ctx, data, work, cfg, prof):
+    mark = os.path.join(data, "js.json")
+    # 使い捨ての本物セッションをアプリの端末で起こす(安いモデル・一時フォルダ・別アカウント)
+    # run の口は決まった形しか通さない(CLAUDE_CONFIG_DIR= 始まり)。持ち場は cd で移る
+    cmd = ("CLAUDE_CONFIG_DIR=" + cfg + "; export CLAUDE_CONFIG_DIR; cd " + work
+           + "; command claude --model claude-haiku-4-5-20251001")
+    js = """(async () => {
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      window.webkit.messageHandlers.aiboard.postMessage({type: 'run', title: 'uat', command: %s, cwd: %s});
+      const want = %s;
+      const mine = () => (board.snap().sessions || []).find(x => x.tab && x.tab.startsWith('0-') && (x.cwd || '') === want);
+      let s = null;
+      for (let i = 0; i < 40 && !(s = mine()); i++) await nap(1500);                  // 端末が出るまで
+      if (!s) return {ok: false, why: 'セッションが盤に出ない', tabs: (board.snap().sessions || []).map(x => [x.tab, x.cwd])};
+      for (let i = 0; i < 40; i++) {                                                  // claude が起きて記録を作るまで
+        s = mine() || s;
+        if ((s.ai || '').startsWith('Claude') && s.sid) break;
+        await nap(1500);
+      }
+      if (!(s.ai || '').startsWith('Claude') || !s.sid) {
+        let scr = '';
+        try { scr = (await fetch('/api/screen?tab=' + encodeURIComponent(s.tab), {headers: {'X-Overview': '1'}}).then(x => x.json())).text || ''; } catch (e) { scr = String(e); }
+        return {ok: false, why: 'claude が起きない', tabs: [[s.tab, s.ai, s.sid]], screen: scr.slice(-600)};
+      }
+      await nap(4000);                                                                // 入力を受け付けるまでの間
+      window.webkit.messageHandlers.aiboard.postMessage({type: 'send', tab: s.tab, text: '1+1 は? 数字だけで答えて', enter: true});
+      let rows = [], last = null, loops = 0;
+      for (let i = 0; i < 40; i++) {                                                  // 返事が会話に出るまで(最大 2 分)
+        loops = i + 1;
+        await nap(3000);
+        try {
+          last = await fetch('/api/conv?tab=' + encodeURIComponent(s.tab), {headers: {'X-Overview': '1'}}).then(x => x.json());
+        } catch (e) { last = {err: String(e)}; continue; }
+        rows = ((last || {}).timeline || []).map(e => [e.kind, (e.text || '').slice(0, 40)]);
+        if (rows.some(r => r[0] === '返答' && r[1].includes('2'))) break;
+      }
+      return {ok: true, tab: s.tab, sid: s.sid, sent: {ok: true, via: 'app'}, rows: rows,
+              diag: {loops: loops, conv: Object.keys(last || {}), reason: (last || {}).reason}}; })()""" % (
+        json.dumps(cmd), json.dumps(work), json.dumps(work))
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
+               AIBOARD_JS_TEST=mark, AIBOARD_JS="return await " + js.strip(), AIBOARD_JS_WAIT="6")
+    subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                   env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
+    check(os.path.exists(mark), "アプリが結果を書かなかった")
+    r = json.load(open(mark))
+    check(r.get("ok"), f"JS が動かなかった {r}")
+    v = r["value"]
+    if not v.get("ok"):
+        try:
+            pane_file = json.load(open(os.path.join(data, "app_panes.json")))
+            panes = {"app_pid": pane_file.get("app_pid"), "alive": _pid_alive(pane_file.get("app_pid")),
+                     "panes": [(p.get("pane"), p.get("tty")) for p in pane_file.get("panes", [])]}
+        except Exception as e:      # 台帳が無い/壊れている事自体が手がかり
+            panes = f"app_panes.json: {e}"
+        raise Fail(f"{v.get('why')} / 台帳: {panes} / 見えているタブ: {v.get('tabs')} / 端末の画面: {v.get('screen')!r}")
+    check((v["sent"] or {}).get("ok"), f"送信が通らない {v['sent']}")
+    kinds = [k for k, _ in v["rows"]]
+    asked = [t for k, t in v["rows"] if k == "依頼" and "1+1" in t]
+    replied = [t for k, t in v["rows"] if k == "返答"]
+    check(asked, f"送った文が会話に出ない {v['rows'][-4:]} / {v.get('diag')}")
+    check(replied, f"返事が返っていない {v['rows'][-4:]}")
+    check(any("2" in t for t in replied), f"返事の中身 {replied[-2:]}")
+    return f"{prof} のアカウントで本物のセッションに送信→返答({replied[-1][:20]})・会話 {len(v['rows'])} 行・アプリ終了で片付け"
 
 
 # ------------------------------------------------------------------ 実行

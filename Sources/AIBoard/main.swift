@@ -251,8 +251,14 @@ final class PaneManager {
     private func write(_ obj: [String: Any], to path: String) {
         guard let d = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted]) else { return }
         let tmp = path + ".\(ProcessInfo.processInfo.processIdentifier).tmp"
+        try? FileManager.default.createDirectory(atPath: (path as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         if (try? d.write(to: URL(fileURLWithPath: tmp))) != nil {
-            _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
+            // replaceItemAt は置き換え先が無いと失敗するので、初回は普通に移す(念のため)
+            if FileManager.default.fileExists(atPath: path) {
+                _ = try? FileManager.default.replaceItemAt(URL(fileURLWithPath: path), withItemAt: URL(fileURLWithPath: tmp))
+            } else {
+                _ = try? FileManager.default.moveItem(atPath: tmp, toPath: path)
+            }
         }
     }
 }
@@ -519,7 +525,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             // 会話ビューからの入力を、アプリの端末へ。文章は貼り付け+Enter、1 文字はキーとして、esc はエスケープ
             guard let tab = b["tab"] as? String, let p = pm.pane(tab: tab) else { return }
             if let key = b["key"] as? String {
-                if key == "esc" { _ = p.view.sendKey(.escape) } else if key == "enter" { _ = p.view.sendKey(.enter) }
+                // 選択肢の画面(フォルダ信頼の確認・承認)は矢印で選ぶので、上下も送れるようにしてある
+                let keys: [String: TerminalKey] = ["esc": .escape, "enter": .enter, "down": .arrowDown, "up": .arrowUp]
+                if let k = keys[key] { _ = p.view.sendKey(k) }
             } else if let text = b["text"] as? String, !text.isEmpty, text.count <= 4000 {
                 let enter = (b["enter"] as? Bool) ?? true
                 if text.count == 1, !enter, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
