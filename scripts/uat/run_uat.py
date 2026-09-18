@@ -562,10 +562,13 @@ def mm05(ctx):
 
 # ------------------------------------------------------------------ 画面(ブラウザ)
 def wait_js(pg, expr, timeout=60):
+    # 式に "=>" が入っていると Playwright は文字列を関数と読もうとして評価できない(静かに false 扱いになり、
+    # 「待ったが成り立たない」で落ちる)。always 関数にして渡す。2026-09-18 実測
+    body = expr if expr.lstrip().startswith(("()", "function", "async")) else "() => (" + expr + ")"
     t0 = time.time()
     while time.time() - t0 < timeout:
         try:
-            if pg.evaluate(expr):
+            if pg.evaluate(body):
                 return
         except Exception:
             pass
@@ -2055,18 +2058,23 @@ def bd17(ctx):
         pg.click("[data-mode=history]")
         wait_js(pg, "document.querySelectorAll('.card.past').length > 0", 60)
         pg.evaluate("() => { const c = document.querySelector('#fUnatt'); c.checked = true; c.dispatchEvent(new Event('change', {bubbles: true})); }")
-        wait_js(pg, "(board.snap() && (window._nodes || []).length) || document.querySelectorAll('.card.bundle').length >= 0", 30)
-        pg.wait_for_timeout(4000)
+        # 索引(無人実行つき)が届いて束が描かれるまで待つ。機械が混んでいると数十秒かかる
+        wait_js(pg, "(board.index().records || []).some(r => r.unattended)", 120)
+        wait_js(pg, "[...document.querySelectorAll('.card')].some(c => (c.dataset.id || '').startsWith('bundle:una:'))", 60)
+        pg.wait_for_timeout(1500)
         n_una = pg.evaluate("(board.index ? (board.index().records || []) : []).filter(r => r.unattended).length")
         cards = lambda: pg.evaluate("document.querySelectorAll('.card').length")
         bundles = pg.evaluate("[...document.querySelectorAll('.card')].filter(c => (c.dataset.id || '').startsWith('bundle:una:')).map(c => c.dataset.id)")
         before = cards()
         if not bundles:
             return {"skip": f"無人実行の束ができていない(索引の無人実行 {n_una} 件)"}
-        pg.click(f"[data-id='{bundles[0]}']")
+        # 盤の外にはみ出した位置にあることがあるので、要素へ直接クリックを送る(処理は同じ委譲先)
+        tap = """(id) => { const el = document.querySelector(`[data-id="${id}"]`);
+          if (!el) return false; el.dispatchEvent(new MouseEvent('click', {bubbles: true})); return true; }"""
+        check(pg.evaluate(tap, bundles[0]), f"束のカードが見つからない {bundles[0]}")
         pg.wait_for_timeout(1200)
         opened = cards()
-        pg.click(f"[data-id='{bundles[0]}']")   # もう一度押して畳む
+        pg.evaluate(tap, bundles[0])   # もう一度押して畳む
         pg.wait_for_timeout(800)
         closed = cards()
         pg.fill("#q", "claude")
