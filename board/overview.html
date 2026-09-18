@@ -945,11 +945,17 @@ stage.addEventListener('touchmove', ev => {
   applyView();
 }, {passive: false});
 stage.addEventListener('touchend', () => { touches = null; });
+const MIN_FIT = 0.45;   // これより引くと文字が読めない(色の塊になる)。収まらない時は引かずに左上から見せる
 function fitTo(nodes) {
   if (!nodes.length) return;
   const x0 = Math.min(...nodes.map(n => n.x)) - 40, y0 = Math.min(...nodes.map(n => n.y)) - 130 /* 枠の上に出る見出しのぶん */, x1 = Math.max(...nodes.map(n => n.x + (n.w || CARD_W))) + 40, y1 = Math.max(...nodes.map(n => n.y + (n.h || CARD_H))) + 40;
   const r = stage.getBoundingClientRect(), top = chromeH();
-  const k = Math.min(3, Math.min(r.width / (x1 - x0), (r.height - top) / (y1 - y0)));
+  const raw = Math.min(r.width / (x1 - x0), (r.height - top) / (y1 - y0));
+  const k = Math.min(3, Math.max(MIN_FIT, raw));
+  if (raw < MIN_FIT) {   // 全部は入らない: 左上から読める大きさで見せ、残りはスクロールで
+    animateTo({k, x: 24 - x0 * k, y: top + 24 - y0 * k});
+    return;
+  }
   animateTo({k, x: (r.width - (x1 - x0) * k) / 2 - x0 * k, y: top + ((r.height - top) - (y1 - y0) * k) / 2 - y0 * k});
 }
 function fitAll() { fitTo(window._frames || []); }

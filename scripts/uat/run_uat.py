@@ -4695,6 +4695,42 @@ def gp03(ctx):
     return "JSON を前後の文ごと貼っても 2 件だけ表に入り、知らない顧客は空・保存はしない・送信 0"
 
 
+@case("BD-16", "小さい窓でも引きすぎない: 全体表示は 45% を下回らず、カードの文字が残る")
+def bd16(ctx):
+    now = time.time()
+    base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "作業中", "mark": "🟢", "doing": "npm test",
+            "task": "UAT fixture", "topic": "", "project": os.path.basename(HOME), "cwd": HOME, "client": None,
+            "model_style": {"emoji": "🔷", "label": "Sonnet", "rgb": [80, 140, 220]}, "ago": 5, "state_for": 5,
+            "mem_mb": 100, "limit": None, "loop": None, "tools": None, "account": "", "transcript": "",
+            "group_label": "", "group_rgb": None}
+    ss = [dict(base, tab=f"9-{i}", sid=f"uat-{i}", project_hint=f"proj{i}") for i in range(1, 13)]   # 12 の持ち場
+
+    def extra(pg):
+        def fake(route):
+            r = route.fetch(); d = r.json()
+            d["sessions"] = ss; d["attention"] = []
+            d["counts"] = dict(d.get("counts") or {}, working=len(ss), tabs=len(ss))
+            route.fulfill(response=r, body=json.dumps(d))
+        pg.route("**/api/snapshot*", fake)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card[data-id^=\"uat-\"]').length === 12", 30)
+        pg.evaluate("board.fitAll()"); pg.wait_for_timeout(900)
+        return pg.evaluate("""(() => { const z = parseFloat(document.querySelector('#zoomPct').textContent) / 100;
+            const c = document.querySelector('.card[data-id=\"uat-1\"]'); const st = c && getComputedStyle(c.querySelector('.c-title'));
+            const r = c.getBoundingClientRect();
+            return {zoom: z, lodFar: document.getElementById('nodes').classList.contains('lod-far'),
+                    titleHidden: !st || st.display === 'none' || st.visibility === 'hidden',
+                    onscreen: r.right > 0 && r.bottom > 0 && r.left < window.innerWidth}; })()"""), list(errs)
+
+    got, errs = with_page(ctx, fn, "?lang=ja", width=900, height=420, route_extra=extra)
+    check(got["zoom"] >= 0.44, f"引きすぎ {got['zoom']*100:.0f}%(45% 未満だと色の塊になる)")
+    check(not got["lodFar"] and not got["titleHidden"], f"文字が消えている {got}")
+    check(got["onscreen"], f"最初のカードが画面外 {got}")
+    check(not errs, f"{errs[:1]}")
+    return f"900x420 の窓・持ち場 12 個で {got['zoom']*100:.0f}%・文字あり・左上から見える"
+
+
 # ------------------------------------------------------------------ 実行
 MANUAL = [
     ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない。もう一度 Enter で送られる"),
