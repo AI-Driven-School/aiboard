@@ -847,7 +847,7 @@ def st01(ctx):
         return pg.evaluate("[[...document.querySelectorAll('#pBody h3')].map(h => h.textContent), document.querySelectorAll('.accts .acct').length]"), errs
     (heads, n), errs = with_page(ctx, fn, "?lang=ja")
     st, d, _ = http("/api/settings")
-    want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤"]
+    want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤", "遠隔（同じ Wi-Fi の中だけ）"]
     check(heads == want and n == len(d["logins"]) and not errs, f"見出し {heads} != {want} / アカウント {n}/{len(d['logins'])} errs {errs[:1]}")
     return f"{heads} / アカウント {n}"
 
@@ -2059,20 +2059,28 @@ def bd17(ctx):
         wait_js(pg, "document.querySelectorAll('.card.past').length > 0", 60)
         pg.evaluate("() => { const c = document.querySelector('#fUnatt'); c.checked = true; c.dispatchEvent(new Event('change', {bubbles: true})); }")
         # 索引(無人実行つき)が届いて束が描かれるまで待つ。機械が混んでいると数十秒かかる
-        wait_js(pg, "(board.index().records || []).some(r => r.unattended)", 120)
+        wait_js(pg, "(board.index().records || []).filter(r => r.unattended).length"
+                    " >= Math.min(50, ((board.index().counts || {}).unattended || 0))", 150)
         try:   # 描き直しは機械が混んでいると遅れる。落ちる時は「何がどこまで出来ているか」を残す
             wait_js(pg, "document.querySelectorAll('[data-id^=\"bundle:una:\"]').length > 0", 120)
         except Fail:
-            return {"skip": "束のカードが出ない: " + json.dumps(pg.evaluate(
+            state = pg.evaluate(
                 "() => ({recs: (board.index().records || []).length,"
-                " una: (board.index().records || []).filter(Boolean).length,"
+                " una: (board.index().records || []).filter(r => r.unattended).length,"
+                " unatt: !!(document.querySelector('#fUnatt') || {}).checked,"
                 " vis: (board.vis() || []).length,"
+                " visUna: (board.vis() || []).filter(n => n.unattended).length,"
                 " visBundles: (board.vis() || []).filter(n => String(n.id).indexOf('bundle:una:') === 0).length,"
-                " cards: document.querySelectorAll('.card').length})"), ensure_ascii=False)}
+                " cards: document.querySelectorAll('.card').length})")
+            return {"skip": f"束のカードが出ない: {json.dumps(state, ensure_ascii=False)} / ページエラー {errs[:2]}"}
         pg.wait_for_timeout(1500)
         n_una = pg.evaluate("(board.index ? (board.index().records || []) : []).filter(r => r.unattended).length")
+        members = pg.evaluate("(board.vis() || []).filter(n => n.unattended && !n.bundle).length")
         cards = lambda: pg.evaluate("document.querySelectorAll('.card').length")
-        bundles = pg.evaluate("[...document.querySelectorAll('.card')].filter(c => (c.dataset.id || '').startsWith('bundle:una:')).map(c => c.dataset.id)")
+        # いちばん中身の多い束を押す(1 件しか入っていない束だと「開いた」が分からない)
+        bundles = pg.evaluate("(board.vis() || []).filter(n => n.bundle && String(n.id).indexOf('bundle:una:') === 0)"
+                              ".sort((a, b) => (b.n || 0) - (a.n || 0)).map(n => n.id)")
+        biggest = pg.evaluate("Math.max(0, ...(board.vis() || []).filter(n => n.bundle && String(n.id).indexOf('bundle:una:') === 0).map(n => n.n || 0))")
         before = cards()
         if not bundles:
             return {"skip": f"無人実行の束ができていない(索引の無人実行 {n_una} 件)"}
@@ -2088,16 +2096,22 @@ def bd17(ctx):
         pg.fill("#q", "claude")
         pg.wait_for_timeout(1500)
         searched = pg.evaluate("[...document.querySelectorAll('.card')].filter(c => getComputedStyle(c).display !== 'none').length")
-        return {"n_una": n_una, "bundles": len(bundles), "before": before, "opened": opened, "closed": closed,
-                "searched": searched, "errs": errs[:2]}
+        return {"n_una": n_una, "members": members, "bundles": len(bundles), "biggest": biggest, "before": before,
+                "opened": opened, "closed": closed, "searched": searched, "errs": errs[:2]}
     r = with_page(ctx, fn, "?lang=ja")
     if r.get("skip"):
         return "SKIP: " + r["skip"]
     check(not r["errs"], f"ページエラー {r['errs']}")
-    check(r["before"] < r["n_una"], f"畳めていない: カード {r['before']} 枚 / 無人実行 {r['n_una']} 件")
-    check(r["opened"] > r["before"], f"束を押しても中身が出ない {r['before']}→{r['opened']}")
+    if r["n_una"] < 5:
+        return f"SKIP: 索引に無人実行が {r['n_una']} 件しかなく、畳む効果を測れない"
+    # 畳めている＝束が出ていて、その中身(1 件ずつのカード)は 1 枚も出ていない
+    check(r["bundles"] >= 1, f"束が 1 つも無い(無人実行 {r['n_una']} 件)")
+    check(r["members"] == 0, f"畳んだはずの無人実行が {r['members']} 枚出ている")
+    check(r["bundles"] < r["n_una"], f"束 {r['bundles']} 枚 / 無人実行 {r['n_una']} 件(減っていない)")
+    check(r["opened"] == r["before"] + r["biggest"],
+          f"束を押しても中身が出ない {r['before']}→{r['opened']}(中身 {r['biggest']} 件のはず)")
     check(r["closed"] == r["before"], f"もう一度押しても畳まれない {r['opened']}→{r['closed']}")
-    return (f"無人実行 {r['n_una']} 件 → 束 {r['bundles']} 枚(全カード {r['before']} 枚)"
+    return (f"無人実行 {r['n_una']} 件 → 束 {r['bundles']} 枚・中身は 0 枚(全カード {r['before']} 枚)"
             f"・押すと {r['opened']} 枚に開き、もう一度で戻る・検索中は {r['searched']} 枚")
 
 
