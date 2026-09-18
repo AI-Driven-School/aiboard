@@ -270,6 +270,17 @@ def is_codex(cmd):
     return _argv0_is(cmd, "codex") or "@openai/codex" in cmd.split(" ")[0]
 
 
+OTHER_AI = [("Gemini", "gemini"), ("Grok", "grok"), ("Cursor", "cursor-agent")]
+
+
+def other_ai(cmd):
+    """Claude / Codex 以外の AI の CLI。名前だけは分かるが、状態を知る口は無い。"""
+    for label, name in OTHER_AI:
+        if _argv0_is(cmd, name):
+            return label
+    return ""
+
+
 def session_record(pid):
     for d in SESS_DIRS:
         try:
@@ -604,6 +615,14 @@ def classify(tabs, procs):
             elif cx.get("doing", "").startswith(("⛔", "⏹")):
                 t["state"], t["mark"] = "codex 停止", "🔴"
             t["client"] = _clients and _clients.classify(cwd=t["cwd"], texts=(cx.get("task", ""), topic))
+        elif any(other_ai(procs[p]["cmd"]) for p in pids):
+            # Gemini / Grok / Cursor など: 動いていることは分かるが、状態の記録が無いので「状態不明」と出す
+            oth = [p for p in pids if other_ai(procs[p]["cmd"])]
+            root = outermost_ai(procs, oth)
+            label = other_ai(procs[root]["cmd"])
+            t.update(state="他の AI", mark="🔵", ai=label, model="", model_id="", model_style=model_style(""),
+                     pid=root, mem=descendants_rss(procs, root), cwd=proc_cwd(root), started=proc_start(root),
+                     doing="", task="", topic=label)
         elif len(pids) > 1:
             # zsh 以外のジョブがある(ssh・npm run dev など)
             # iTerm はシェルを login 経由で起動するので、login とシェル自身はジョブに数えない

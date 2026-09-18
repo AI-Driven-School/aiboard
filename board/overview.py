@@ -1107,6 +1107,146 @@ def accounts():
     return out
 
 
+AI_CLI_DEFS = [
+    {"id": "claude", "label": "Claude Code", "cmd": "claude"},
+    {"id": "codex", "label": "Codex", "cmd": "codex"},
+    {"id": "gemini", "label": "Gemini CLI", "cmd": "gemini"},
+    {"id": "grok", "label": "Grok CLI", "cmd": "grok"},
+    {"id": "cursor", "label": "Cursor Agent", "cmd": "cursor-agent"},
+]
+_CLIS = {"t": 0, "val": []}
+
+
+def _which_all(cmds, timeout=15):
+    """入っている CLI の場所を 1 回のシェルで調べる(1 つずつ呼ぶと遅い)。"""
+    lines = []
+    for c in cmds:
+        lines.append('echo "{0}\t$(command -v {0} 2>&1 | head -1)"'.format(c))
+    try:
+        r = subprocess.run(["/bin/zsh", "-l", "-c", "; ".join(lines)], capture_output=True, text=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    out = {}
+    for line in r.stdout.splitlines():
+        if "\t" in line:
+            k, v = line.split("\t", 1)
+            v = v.strip()
+            out[k.strip()] = v if v.startswith("/") else ""
+    return out
+
+
+def _gemini_auth():
+    """Gemini CLI は Google アカウントで入る。~/.gemini/google_accounts.json の active を見る。"""
+    try:
+        with open(os.path.join(HOME, ".gemini", "google_accounts.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        who = d.get("active") or ""
+        return (bool(who), who, "Google アカウント")
+    except (OSError, ValueError):
+        return (False, "", "Google アカウント")
+
+
+def _grok_auth():
+    """Grok CLI は API 鍵(GROK_API_KEY か設定ファイル)。鍵そのものは読まない・出さない。"""
+    if os.environ.get("GROK_API_KEY") or os.environ.get("XAI_API_KEY"):
+        return (True, "", "API 鍵(環境変数)")
+    for name in ("user-settings.json", "settings.json"):
+        try:
+            with open(os.path.join(HOME, ".grok", name), encoding="utf-8") as f:
+                d = json.load(f)
+            if any("key" in k.lower() or "token" in k.lower() for k in (d or {})):
+                return (True, "", "API 鍵(設定ファイル)")
+        except (OSError, ValueError):
+            pass
+    return (False, "", "API 鍵(GROK_API_KEY)")
+
+
+def _cursor_auth():
+    try:
+        r = subprocess.run(["/bin/zsh", "-l", "-c", "command cursor-agent status"], capture_output=True, text=True, timeout=25)
+        txt = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", "", r.stdout + r.stderr)
+        if re.search(r"Not logged in", txt, re.I):
+            return (False, "", "Cursor")
+        m = re.search(r"(?:Logged in as|Email)[:\s]+(\S+@\S+)", txt)
+        return (bool(re.search(r"Logged in", txt, re.I)), m.group(1) if m else "", "Cursor")
+    except (subprocess.TimeoutExpired, OSError):
+        return (None, "", "Cursor")
+
+
+def ai_clis(force=False, logins=None):
+    """この Mac に入っている AI の CLI と、その認証の状態。鍵そのものは読まない。
+
+    claude / codex は各 CLI に聞く(login_status)。gemini は Google アカウントの設定、
+    grok は API 鍵の有無、cursor-agent は status の文言で判断する。
+    """
+    if not force and time.time() - _CLIS["t"] < 120 and _CLIS["val"]:
+        return _CLIS["val"]
+    where = _which_all([d["cmd"] for d in AI_CLI_DEFS])
+    st = {(x["profile"] if x["ai"] == "Claude" else "codex"): x for x in (logins if logins is not None else login_status())}
+    out = []
+    for d in AI_CLI_DEFS:
+        row = dict(d, installed=bool(where.get(d["cmd"])), path=where.get(d["cmd"], ""),
+                   logged_in=None, who="", how="", login_cmd="", logout_cmd="", note="")
+        if not row["installed"]:
+            row["note"] = "入っていない"
+            out.append(row)
+            continue
+        if d["id"] == "claude":
+            base = st.get("default") or {}
+            row.update(logged_in=base.get("logged_in"), who=base.get("email", ""), how=base.get("method", "claude.ai"),
+                       login_cmd="env -u CLAUDE_CONFIG_DIR command claude auth login",
+                       logout_cmd="env -u CLAUDE_CONFIG_DIR command claude auth logout",
+                       note="アカウントの切替は上の一覧から")
+        elif d["id"] == "codex":
+            cx = st.get("codex") or {}
+            row.update(logged_in=cx.get("logged_in"), who="", how=cx.get("method", "ChatGPT"),
+                       login_cmd="command codex login", logout_cmd="command codex logout")
+        elif d["id"] == "gemini":
+            ok, who, how = _gemini_auth()
+            row.update(logged_in=ok, who=who, how=how, login_cmd="command gemini", note="初回起動で Google のログインに進む")
+        elif d["id"] == "grok":
+            ok, who, how = _grok_auth()
+            row.update(logged_in=ok, who=who, how=how, login_cmd="",
+                       note="" if ok else "GROK_API_KEY を設定する(AIBoard は鍵を預かりません)")
+        elif d["id"] == "cursor":
+            ok, who, how = _cursor_auth()
+            row.update(logged_in=ok, who=who, how=how, login_cmd="command cursor-agent login", logout_cmd="command cursor-agent logout")
+        out.append(row)
+    _CLIS.update(t=time.time(), val=out)
+    return out
+
+
+def accounts_full(sess=None, logins=None):
+    """アカウント 1 か所ぶんの全部: 誰か(公式のログイン状態)・プラン・上限・いま何本動いているか。
+
+    メールとプランは `claude auth status --json`(login_status)を正とする。設定ファイルは古いことがある
+    (実際、ログイン済みのアカウントを「未ログイン」と出していた。2026-09-18 実測)。
+    """
+    acc = accounts()
+    st = {(x.get("ai"), x.get("profile")): x for x in (logins if logins is not None else login_status()) if isinstance(x, dict)}
+    live = sess if sess is not None else []
+    for a in acc:
+        if not isinstance(a, dict) or "ai" not in a:
+            continue   # 形の違う行は触らない(ここで落ちると API ごと 500 になる)
+        s0 = st.get((a.get("ai"), a.get("profile"))) or {}
+        if s0.get("email"):
+            a["email"] = s0["email"]
+        if s0.get("plan"):
+            a["plan"] = s0["plan"]
+        if s0.get("org"):
+            a["org"] = s0["org"]
+        a["logged_in"] = s0.get("logged_in")
+        a["method"] = s0.get("method", "")
+        a["auth_error"] = s0.get("error", "")
+        a["from_file"] = bool(s0.get("from_file"))
+        name = "" if a.get("profile") == "default" else (a.get("profile") or "")
+        if a.get("ai") == "Codex":
+            a["running"] = sum(1 for x in live if (x.get("ai") or "").startswith("Codex"))
+        else:
+            a["running"] = sum(1 for x in live if (x.get("ai") or "").startswith("Claude") and (x.get("account") or "") == name)
+    return acc
+
+
 def login_status():
     """各アカウントのログイン状態を、それぞれの CLI 自身に聞く(推測しない)。数秒かかるので呼ぶ側で使い回す。"""
     out = []
@@ -1118,18 +1258,22 @@ def login_status():
         else:
             env["CLAUDE_CONFIG_DIR"] = base
         st = {"ai": "Claude", "profile": name, "config_dir": base, "logged_in": None, "method": "", "error": ""}
+        j = {}
         try:
-            r = subprocess.run(["/bin/zsh", "-l", "-c", "command claude auth status"], env=env, capture_output=True, text=True, timeout=20)
+            r = subprocess.run(["/bin/zsh", "-l", "-c", "command claude auth status --json"], env=env, capture_output=True, text=True, timeout=20)
             j = json.loads(r.stdout[r.stdout.find("{"):]) if "{" in r.stdout else {}
             st["logged_in"] = bool(j.get("loggedIn")); st["method"] = j.get("authMethod") or ""
         except (subprocess.TimeoutExpired, ValueError, OSError) as e:
             st["error"] = f"{type(e).__name__}"
-        try:
-            with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
-                a = json.load(f).get("oauthAccount") or {}
-            st.update(email=a.get("emailAddress") or "", org=a.get("organizationName") or "", plan=a.get("billingType") or "")
-        except (OSError, ValueError):
-            st.update(email="", org="", plan="")
+        # 正はこの CLI の答え。設定ファイルは CLI が答えられなかった時だけ使う(古い値が残っていることがある)
+        st.update(email=j.get("email") or "", org=j.get("orgName") or "", plan=j.get("subscriptionType") or "")
+        if not st["email"]:
+            try:
+                with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
+                    a = json.load(f).get("oauthAccount") or {}
+                st.update(email=a.get("emailAddress") or "", org=a.get("organizationName") or "", plan=a.get("billingType") or "", from_file=True)
+            except (OSError, ValueError):
+                pass
         out.append(st)
     cx = {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "logged_in": None, "method": "", "error": "", "email": "", "org": "", "plan": ""}
     try:

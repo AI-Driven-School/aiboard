@@ -413,6 +413,10 @@ table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6
 .pjrow .pjt{color:var(--f-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pjrow .pjs{color:var(--f-ink3);white-space:nowrap}
 #toolbar .tbwarn{font-size:11.5px;color:#FF7A59;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#panel .kvrow.cli small{color:var(--f-ink3);margin-left:6px}
+#panel .kvrow.cli.off{opacity:.55}
+#panel .kvrow.cli button{margin-left:8px;padding:2px 8px;font-size:11px}
+#panel .acct.out{border-color:rgba(255,122,89,.4) !important}
 #zoomctl{background:#2C2C2C !important;border-color:var(--f-line) !important}
 </style>
 </head>
@@ -504,6 +508,7 @@ const JA = {
   'tour.next': '次へ', 'tour.done': 'わかった', 'tour.skip': 'とばす',
 };
 const EN = {
+  'アカウント': 'Accounts', 'いま動いている': 'Running now', '本': '', 'いまは無し': 'none', 'このアカウントで開く': 'Open a terminal on it', '設定ファイル': 'Config file', 'ログイン状態とプランは各 CLI に聞いた値です（claude auth status / codex login status）。上限はセッションの記録から読みます。AIBoard は資格情報を持ちません。': 'Sign-in state and plan come from each CLI itself (claude auth status / codex login status). Limits are read from session logs. AIBoard never holds your credentials.', '端末で続きを操作してください': 'Continue in the terminal', 'で端末を開きました': ' — terminal opened', '確認中…': 'Checking…', '直近の窓の使用率': 'Usage in the current window', '使用': 'Used', 'リセット': 'resets', 'この Mac に入っている AI の CLI': 'Agent CLIs on this Mac', '入っていない': 'not installed', '鍵やトークンは AIBoard が持ちません。ログインは各 CLI 自身のコマンドを端末で動かします。': 'AIBoard holds no keys or tokens. Signing in runs each CLI’s own command in a terminal.', 'この CLI は端末から設定します': 'Set this one up from the terminal', 'ログアウトします。': 'Sign out?', '設定ファイルの値': 'from the config file',
   '秒で返事がない': 's with no answer', 'osascript を動かせない': 'cannot run osascript',
   'iTerm が応答しません': 'iTerm is not responding', '前の一覧を表示中': ' ago list shown',
   '案件': 'Project', 'この案件の指示・申し送り・経過を見る': 'Open this project: brief, handover, history', '共通の指示': 'Brief', 'まだありません（設定 → 束ね方 → 指示 で書けます）': 'None yet (Settings → Grouping → Brief)', '設定を開く': 'Open settings', '申し送り': 'Handover', '次にこの案件に入る人と AI に渡す引き継ぎ。端末を開くときに一緒に渡します。': 'What the next person or agent on this project needs to know. Handed to every terminal you open for it.', '例: 本番の切替は 9/25 まで凍結。索引の再作成は 20 分かかる。失敗したら logs/index.log を先に見る。': 'e.g. Production switch is frozen until the 25th. Rebuilding the index takes 20 minutes. If it fails, read logs/index.log first.', '予約': 'Scheduled', 'この案件の経過': 'History', 'まだ記録がありません': 'Nothing recorded yet', '字': ' chars',
@@ -1129,25 +1134,73 @@ function limitWhen(lim) {
   return lim.resets || T('解除時刻不明');
 }
 let accounts = [];
-async function loadAccounts() {
-  try { const d = await getJSON('/api/accounts'); accounts = d.accounts || []; } catch (e) { return; }
+async function loadAccounts(refresh) {
+  try { const d = await getJSON('/api/accounts' + (refresh ? '?refresh=1' : '')); accounts = d.accounts || []; window._clis = d.clis || window._clis || []; } catch (e) { return; }
   const n = accounts.filter(a => a.limit && a.limit.active).length;
   $('#nLimit').textContent = n ? String(n) : ''; $('#btnAcct').classList.toggle('alert', n > 0);
   if ($('#panel.open') && $('#pTitle').dataset.kind === 'accounts') renderAccounts();
 }
-function renderAccounts() {
+function acctName(a) { return DEMO ? (a.ai === 'Codex' ? 'Codex' : 'account-' + a.profile.slice(0, 1)) : (a.email || (a.profile === 'default' ? T('既定') : a.profile)); }
+function renderAccounts(refresh) {
   $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
-  $('#pTitle').textContent = T('アカウントと上限'); $('#pTitle').dataset.kind = 'accounts';
-  const rows = accounts.map(a => {
+  $('#pTitle').textContent = T('アカウント'); $('#pTitle').dataset.kind = 'accounts';
+  const rows = accounts.map((a, i) => {
     const lim = a.limit && a.limit.active ? a.limit : null;
-    const who = DEMO ? (a.ai === 'Codex' ? 'Codex' : 'account-' + a.profile.slice(0, 1)) : (a.email || a.profile);
-    const u = a.usage ? `<div class="bar"><i style="width:${Math.min(100, a.usage.used_percent)}%;background:${a.usage.used_percent >= 90 ? 'var(--red)' : a.usage.used_percent >= 70 ? 'var(--yellow)' : 'var(--green)'}"></i></div><div class="sub">${T('使用')} ${Math.round(a.usage.used_percent)}% · ${T('窓')} ${fmtDur(a.usage.window_minutes * 60)} · ${T('リセット')} ${new Date(a.usage.resets_at * 1000).toLocaleString(LANG === 'ja' ? 'ja-JP' : 'en-US', {month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</div>` : '';
-    return `<div class="acct ${lim ? 'lim' : ''}"><div class="h"><span class="ai">${esc(a.ai)}</span><b>${esc(who)}</b><span class="st">${lim ? `<span class="dot lim"></span>${T('上限')} · ${esc(limitWhen(lim))}` : `<span class="dot ok"></span>${T('使える')}`}</span></div>
-      ${a.org && !DEMO ? `<div class="sub">${esc(a.org)}</div>` : ''}${u}
-      ${a.limit && !a.limit.active ? `<div class="sub">${T('最後に上限')} ${esc(fmtIso(a.limit.at))}</div>` : ''}</div>`; }).join('');
-  $('#pBody').innerHTML = `<div class="accts">${rows || T('読込中…')}</div><p class="legend" style="margin-top:12px">${T('上限はセッションの記録から読んでいます（Claude は当たった時だけ分かる。Codex は使用率も分かる）。')}</p>`;
+    const inn = a.logged_in === true, unk = a.logged_in == null;
+    const u = a.usage ? `<div class="bar" title="${esc(T('直近の窓の使用率'))}"><i style="width:${Math.min(100, a.usage.used_percent)}%;background:${a.usage.used_percent >= 90 ? 'var(--f-red)' : a.usage.used_percent >= 70 ? 'var(--f-yellow)' : 'var(--f-green)'}"></i></div><div class="sub">${T('使用')} ${Math.round(a.usage.used_percent)}% · ${T('リセット')} ${esc(hhmm(a.usage.resets_at))}</div>` : '';
+    return `<div class="acct ${lim ? 'lim' : ''} ${inn ? '' : 'out'}" data-i="${i}">
+      <div class="h"><span class="ai">${esc(a.ai)}</span><b>${esc(acctName(a))}</b>
+        <span class="st">${inn ? `<span class="dot ok"></span>${esc(a.plan ? a.plan.toUpperCase() : T('ログイン中'))}` : unk ? `<span class="dot"></span>${T('確認できない')}` : `<span class="dot lim"></span>${T('未ログイン')}`}</span></div>
+      <div class="kvrow"><span>${T('いま動いている')}</span><span>${a.running ? `<b>${a.running}</b> ${T('本')}` : `<span class="dim">0</span>`}</span></div>
+      <div class="kvrow"><span>${T('上限')}</span><span>${lim ? `<span class="warnTxt">${esc(limitWhen(lim))}</span>` : a.limit ? `${T('いまは無し')}（${T('最後に上限')} ${esc(fmtIso(a.limit.at))}）` : T('いまは無し')}</span></div>
+      ${a.org && !DEMO ? `<div class="sub">${esc(a.org)}${a.method ? ' · ' + esc(a.method) : ''}${a.from_file ? ' · ' + T('設定ファイルの値') : ''}</div>` : ''}${u}
+      <div class="opts">${inn
+        ? `${APP ? `<button data-open-ai="${i}">${T('このアカウントで開く')}</button>` : ''}<button data-run="${i}" data-kind="logout">${T('ログアウト')}</button>`
+        : `<button class="primary" data-run="${i}" data-kind="login">${T('ログイン')}</button>`}<button data-cfg="${i}">${T('設定ファイル')}</button></div></div>`; }).join('');
+  const clis = (window._clis || []).map((c, i) => {
+    const inn = c.logged_in === true, unk = c.logged_in == null;
+    const who = DEMO ? '' : (c.who ? ` · ${esc(c.who)}` : '');
+    return `<div class="kvrow cli ${c.installed ? '' : 'off'}"><span><span class="dot ${!c.installed ? '' : inn ? 'ok' : unk ? '' : 'lim'}"></span>${esc(c.label)}${c.installed ? '' : ` <small>${T('入っていない')}</small>`}</span>
+      <span>${c.installed ? `${inn ? T('ログイン中') : unk ? T('確認できない') : T('未ログイン')}<small> ${esc(c.how)}${who}</small>${c.login_cmd && !inn ? ` <button data-cli="${i}" data-kind="login">${T('ログイン')}</button>` : ''}${c.logout_cmd && inn ? ` <button data-cli="${i}" data-kind="logout">${T('ログアウト')}</button>` : ''}` : `<small>${esc(c.note || '')}</small>`}</span></div>`;
+  }).join('');
+  $('#pBody').innerHTML = `<div class="accts">${rows || T('読込中…')}</div>
+    <div class="opts" style="margin-top:8px"><button id="acctAdd">＋ ${T('Claude アカウントを追加')}</button><button id="acctRefresh">${T('再確認')}</button><span id="acctMsg" class="legend"></span></div>
+    <h3>${T('この Mac に入っている AI の CLI')}</h3><div class="acct">${clis || T('読込中…')}
+      <div class="sub">${T('鍵やトークンは AIBoard が持ちません。ログインは各 CLI 自身のコマンドを端末で動かします。')}</div></div>
+    <p class="legend" style="margin-top:10px">${T('ログイン状態とプランは各 CLI に聞いた値です（claude auth status / codex login status）。上限はセッションの記録から読みます。AIBoard は資格情報を持ちません。')}</p>`;
+  const B = $('#pBody');
+  const envFor = a => a.ai === 'Codex' ? '' : (a.profile === 'default' ? 'env -u CLAUDE_CONFIG_DIR ' : `CLAUDE_CONFIG_DIR=${shq(a.config_dir)} `);
+  B.querySelectorAll('button[data-run]').forEach(b => b.onclick = () => {
+    const a = accounts[+b.dataset.run], out = b.dataset.kind === 'logout';
+    if (out && !confirm(T('ログアウトします。このアカウントで動いているセッションは次の操作から失敗します。'))) return;
+    const cmd = a.ai === 'Codex' ? (out ? 'command codex logout' : 'command codex login') : envFor(a) + (out ? 'command claude auth logout' : 'command claude auth login');
+    runCmd(`${a.ai} ${b.dataset.kind}`, cmd);
+    $('#acctMsg').textContent = T('端末で続きを操作してください');
+    setTimeout(() => { loadAccounts(true); }, 15000);
+  });
+  B.querySelectorAll('button[data-open-ai]').forEach(b => b.onclick = () => {
+    const a = accounts[+b.dataset['openAi']];
+    toApp({type: 'newWithAccount', ai: a.ai, profile: a.profile === 'default' ? '' : a.profile, cwd: (snap.sessions.find(x => x.cwd) || {}).cwd || ''});
+    $('#acctMsg').textContent = `${acctName(a)} ${T('で端末を開きました')}`;
+  });
+  B.querySelectorAll('button[data-cfg]').forEach(b => b.onclick = () => { const a = accounts[+b.dataset.cfg];
+    openPath(a.ai === 'Codex' ? a.config_dir + '/config.toml' : a.config_dir + '/settings.json'); });
+  B.querySelectorAll('button[data-cli]').forEach(b => b.onclick = () => {
+    const c = (window._clis || [])[+b.dataset.cli], out = b.dataset.kind === 'logout';
+    const cmd = out ? c.logout_cmd : c.login_cmd;
+    if (!cmd) { $('#acctMsg').textContent = c.note || T('この CLI は端末から設定します'); return; }
+    if (out && !confirm(`${c.label}: ${T('ログアウトします。')}`)) return;
+    runCmd(`${c.label} ${b.dataset.kind}`, cmd);
+    $('#acctMsg').textContent = T('端末で続きを操作してください');
+    setTimeout(() => loadAccounts(true).then(() => renderAccounts()), 15000);
+  });
+  $('#acctRefresh').onclick = () => { $('#acctMsg').textContent = T('確認中…'); loadAccounts(true).then(() => renderAccounts()); };
+  $('#acctAdd').onclick = () => { const name = (prompt(T('新しいアカウントの名前（英数字）'), 'work') || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) return;
+    runCmd('Claude login ' + name, `mkdir -p ~/.claude-profiles/${name} && CLAUDE_CONFIG_DIR=~/.claude-profiles/${name} command claude auth login`);
+    setTimeout(() => loadAccounts(true).then(() => renderAccounts()), 20000); };
 }
-$('#btnAcct').onclick = () => { renderAccounts(); loadAccounts(); };
+$('#btnAcct').onclick = () => { renderAccounts(); loadAccounts().then(() => { if ($('#pTitle').dataset.kind === 'accounts') renderAccounts(); }); };
 loadAccounts(); setInterval(loadAccounts, 60000);
 
 // ---------------- 設定 ----------------

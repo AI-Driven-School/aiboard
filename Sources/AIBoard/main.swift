@@ -529,6 +529,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             guard let key = b["key"] as? String, key.count <= 80, !key.contains("/"), !key.contains(".."),
                   let cwd = b["cwd"] as? String, cwd.hasPrefix("/"), !cwd.contains("..") else { return }
             openInProject(key: key, cwd: cwd, ai: (b["ai"] as? String) == "Codex" ? "Codex" : "Claude")
+        case "newWithAccount":
+            // アカウント一覧から「このアカウントで開く」: Claude はプロファイル、Codex はそのまま
+            let ai = (b["ai"] as? String) ?? "Claude"
+            let profile = (b["profile"] as? String) ?? ""
+            guard profile.range(of: "^[A-Za-z0-9_-]{0,32}$", options: .regularExpression) != nil else { return }
+            let cwd0 = (b["cwd"] as? String) ?? HOME
+            let dir = (cwd0.hasPrefix("/") && !cwd0.contains("..") && FileManager.default.fileExists(atPath: cwd0)) ? cwd0 : HOME
+            let cmd2: String
+            if ai == "Codex" { cmd2 = "codex" }
+            else if profile.isEmpty { cmd2 = "env -u CLAUDE_CONFIG_DIR command claude" }
+            else { cmd2 = "CLAUDE_CONFIG_DIR=\(shellQuote(HOME + "/.claude-profiles/" + profile)) command claude" }
+            showTerminal()
+            pm.open(kind: ai == "Codex" ? "codex" : "claude", cwd: dir, command: cmd2)
+            if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
         case "delegate":
             // 案件に仕事を任せる: 選ばれた AI(と Claude のアカウント)で端末を起こし、共通の指示つきで依頼文を渡す
             guard let key = b["key"] as? String, key.count <= 80, !key.contains("/"), !key.contains(".."),
@@ -555,8 +569,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "run":
             // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
             guard let cmd = b["command"] as? String, !cmd.isEmpty, cmd.count < 600,
-                  cmd.hasPrefix("command claude auth") || cmd.hasPrefix("command codex log") || cmd.hasPrefix("env -u CLAUDE_CONFIG_DIR command claude auth")
-                  || cmd.hasPrefix("CLAUDE_CONFIG_DIR=") || cmd.hasPrefix("mkdir -p ~/.claude-profiles/") else { return }   // 決まった形以外は動かさない
+                  ["command claude auth", "command codex log", "env -u CLAUDE_CONFIG_DIR command claude auth",
+                   "CLAUDE_CONFIG_DIR=", "mkdir -p ~/.claude-profiles/",
+                   "command cursor-agent login", "command cursor-agent logout", "command cursor-agent status",
+                   "command gemini", "command grok"].contains(where: { cmd.hasPrefix($0) }) else { return }   // 決まった形以外は動かさない
             showTerminal()
             pm.open(kind: "shell", cwd: HOME, command: cmd)
         case "open":

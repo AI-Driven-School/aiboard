@@ -344,9 +344,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, **overview.extensions_info(refresh=q.get("refresh") == "1")})
             elif path == "/api/accounts":
                 now = time.time()
-                if not _acct.get("data") or now - _acct.get("t", 0) > 60:
-                    _acct.update(t=now, data=overview.accounts())
-                self._json(200, {"ok": True, "accounts": _acct["data"], "fetched": _acct["t"]})
+                if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
+                    _login.update(t=now, data=overview.login_status())
+                if q.get("refresh") == "1" or not _acct.get("data") or now - _acct.get("t", 0) > 60:
+                    _acct.update(t=now, data=overview.accounts_full(snapshot_cached()["sessions"], _login["data"]))
+                self._json(200, {"ok": True, "accounts": _acct["data"], "fetched": _acct["t"], "auth_fetched": _login["t"],
+                                 "clis": overview.ai_clis(force=q.get("refresh") == "1", logins=_login["data"])})
             elif path == "/api/conv":
                 # 会話ビュー用: 依頼・返答・操作を時系列で(最大 150 件)。記録が変わっていなければ 304 相当で軽く返す
                 tab = q.get("tab", "")

@@ -922,10 +922,15 @@ def ap04(ctx):
       window.fetch = async (u, o) => {
         const url = String(u);
         if (url.includes('/api/stop') || url.includes('/api/send')) { calls.push([url.split('/api/')[1], JSON.parse(o.body)]); return new Response(JSON.stringify({ok: true, reason: 'uat'}), {headers: {'Content-Type': 'application/json'}}); }
+        if (url.includes('/api/snapshot') && window.__keepBusy) {   // 作業中のまま止まらない相手を作る(実セッションの自然な終了で結果が揺れないように)
+          const r = await realFetch(u, o); const d = await r.json();
+          d.sessions = (d.sessions || []).map(x => x.sid === window.__keepBusy ? Object.assign({}, x, {mark: '🟢', state: '作業中'}) : x);
+          return new Response(JSON.stringify(d), {headers: {'Content-Type': 'application/json'}});
+        }
         return realFetch(u, o); };
       board.setToApp(m => sent.push(m));
       if (idle) { await board.openInApp(idle); out.idle = {calls: calls.splice(0), sent: sent.splice(0), expect: {tab: idle.tab, sid: idle.sid, cwd: idle.cwd, ai: idle.ai}}; }
-      if (busy) { await board.openInApp(busy); out.busy = {calls: calls.splice(0), sent: sent.splice(0), expect: {tab: busy.tab, sid: busy.sid}}; }
+      if (busy) { window.__keepBusy = busy.sid; await board.openInApp(busy); out.busy = {calls: calls.splice(0), sent: sent.splice(0), expect: {tab: busy.tab, sid: busy.sid}}; }
       return out;"""
     r = run_app_js(ctx, js, {"AIBOARD_DIALOG_AUTO": "yes"}, wait="10")
     check(r.get("ok"), f"{r}")
@@ -3772,6 +3777,8 @@ def sv13(ctx):
     import overview_server as osv
     n = {"login": 0, "acct": 0}
     real = (o.login_status, o.accounts, o.settings_info)
+    real_clis = o.ai_clis
+    o.ai_clis = lambda force=False, logins=None: []   # この試験は使い回しだけを見る(実際の CLI は呼ばない)
     # 試験専用の盤サーバを行きずりのポートに 1 つ立てる(本番の PID ファイルにも 8793 にも触らない)
     import threading
     from http.server import ThreadingHTTPServer
@@ -3809,6 +3816,7 @@ def sv13(ctx):
         check(n["acct"] == 2, f"60 秒を過ぎても数え直さない {n}")
     finally:
         o.login_status, o.accounts, o.settings_info = real
+        o.ai_clis = real_clis
         osv._login.clear(); osv._acct.clear()
         srv.shutdown(); srv.server_close()
     return f"設定: 2 回の要求で CLI 1 回 → refresh=1 と 120 秒超で再取得(計 {n['login']} 回)/ アカウントは 60 秒(計 {n['acct']} 回)"
@@ -5060,6 +5068,79 @@ def it01(ctx):
     check("iTerm" in warn and "応答" in warn, f"画面の警告 {warn!r}")
     check(not errs, f"{errs[:1]}")
     return f"8 秒で打ち切り・前の一覧を継続・30 秒は再挑戦しない・画面に「{warn[:28]}…」"
+
+
+@case("AC-02", "アカウント: ログイン状態とプランは CLI を正とし、設定ファイルの古い値で上書きしない")
+def ac02(ctx):
+    import overview as o
+    fake_login = [
+        {"ai": "Claude", "profile": "default", "logged_in": True, "email": "new@example.com", "plan": "max", "org": "Org", "method": "claude.ai", "error": ""},
+        {"ai": "Claude", "profile": "som", "logged_in": False, "email": "", "plan": "", "org": "", "method": "", "error": ""},
+        {"ai": "Codex", "profile": "codex", "logged_in": True, "email": "", "plan": "", "org": "", "method": "ChatGPT", "error": ""},
+    ]
+    old_file = [
+        {"ai": "Claude", "profile": "default", "config_dir": HOME + "/.claude", "email": "old@example.com", "org": "", "plan": "stripe_subscription", "limit": None},
+        {"ai": "Claude", "profile": "som", "config_dir": HOME + "/.claude-profiles/som", "email": "stale@example.com", "org": "", "plan": "stripe_subscription", "limit": None},
+        {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "email": "", "org": "", "plan": "", "limit": None, "usage": {"used_percent": 42.0, "window_minutes": 10080, "resets_at": time.time() + 3600}},
+    ]
+    sess = [{"ai": "Claude Opus", "account": ""}, {"ai": "Claude Opus", "account": ""}, {"ai": "Claude", "account": "som"}, {"ai": "Codex gpt", "account": ""}]
+    with patched(o, "accounts", lambda: [dict(x) for x in old_file]):
+        got = o.accounts_full(sess, fake_login)
+    by = {a["profile"]: a for a in got}
+    check(by["default"]["email"] == "new@example.com" and by["default"]["plan"] == "max", f"CLI の値を使っていない {by['default']}")
+    check(by["default"]["logged_in"] is True and by["som"]["logged_in"] is False, f"ログイン状態 {[(a['profile'], a['logged_in']) for a in got]}")
+    check(by["som"]["email"] == "stale@example.com", "CLI が答えられない時に設定ファイルの値を捨てた")
+    check(by["default"]["running"] == 2 and by["som"]["running"] == 1 and by["codex"]["running"] == 1,
+          f"稼働中の本数 {[(a['profile'], a['running']) for a in got]}")
+    st, d, _ = http("/api/accounts")
+    check(st == 200 and d["accounts"] and all("running" in a and "logged_in" in a for a in d["accounts"]), f"API の中身 {str(d)[:150]}")
+    real = [a for a in d["accounts"] if a["ai"] == "Claude"]
+    return f"CLI 優先・設定ファイルは補助・稼働中の本数(既定 2/som 1/codex 1)/ 実機の Claude アカウント {len(real)} 件"
+
+
+@case("AC-03", "この Mac の AI CLI 一覧: 入っているか・ログインしているか・鍵は読まない")
+def ac03(ctx):
+    import overview as o
+    clis = o.ai_clis(force=True)
+    ids = [c["id"] for c in clis]
+    check(ids == ["claude", "codex", "gemini", "grok", "cursor"], f"並び {ids}")
+    inst = [c for c in clis if c["installed"]]
+    check(inst, "1 つも見つからない(検出が壊れている)")
+    for c in inst:
+        check(c["path"].startswith("/"), f"{c['id']} の場所 {c['path']!r}")
+        check(c["logged_in"] in (True, False, None), f"{c['id']} の状態 {c['logged_in']!r}")
+    blob = json.dumps(clis, ensure_ascii=False)
+    for bad in ("sk-", "xai-", "ghp_", "Bearer ", "api_key", "apiKey"):
+        check(bad not in blob, f"一覧に鍵らしき文字列が出ている: {bad}")
+    gem = next(c for c in clis if c["id"] == "gemini")
+    if gem["installed"] and gem["logged_in"]:
+        check("@" in gem["who"], f"Gemini の誰か {gem['who']!r}")
+    grok = next(c for c in clis if c["id"] == "grok")
+    if grok["installed"] and not grok["logged_in"]:
+        check("GROK_API_KEY" in (grok["note"] or "") + (grok["how"] or ""), f"Grok の直し方が書かれていない {grok}")
+    st, d, _ = http("/api/accounts")
+    check(st == 200 and len(d.get("clis") or []) == len(clis), f"API に CLI 一覧が無い {str(d)[:120]}")
+    return f"{len(clis)} 種のうち入っているのは {len(inst)} 種({', '.join(c['id'] for c in inst)})・鍵は 0 件"
+
+
+@case("AC-04", "他の AI(Gemini/Grok/Cursor)の端末も盤に出る(状態は不明と出す)")
+def ac04(ctx):
+    import cs
+    spec = {"/Users/x/.nvm/versions/node/v22/bin/gemini": "Gemini", "node /x/bin/grok -m grok-4": "Grok",
+            "/Users/x/.local/bin/cursor-agent": "Cursor", "vim gemini.md": "", "tail -f /tmp/grok": "", "zsh": ""}
+    bad = {c: (cs.other_ai(c), w) for c, w in spec.items() if cs.other_ai(c) != w}
+    check(not bad, f"判定違い {bad}")
+    procs = {700: {"ppid": 1, "rss": 1000, "tty": "ttys910", "cmd": "/usr/bin/login -fp uat"},
+             701: {"ppid": 700, "rss": 2000, "tty": "ttys910", "cmd": "-zsh"},
+             702: {"ppid": 701, "rss": 120000, "tty": "ttys910", "cmd": "/x/bin/gemini"},
+             703: {"ppid": 702, "rss": 30000, "tty": "ttys910", "cmd": "/bin/bash -c ls"}}
+    tabs = [{"win": 1, "tab": 1, "tty": "ttys910", "title": "gemini"}]
+    with patched(cs, "_clients", None):
+        out = cs.classify(tabs, procs)
+    t0 = out[0]
+    check(t0["ai"] == "Gemini" and t0["state"] == "他の AI", f"分類 {t0['ai']!r} {t0['state']!r}")
+    check(t0["pid"] == 702 and t0["mem"] == 150000, f"本体と合計メモリ {t0['pid']} {t0['mem']}")
+    return "6 通りの判定一致・Gemini の端末が pid 702・メモリ 150000 で 1 枚のカードになる"
 
 
 # ------------------------------------------------------------------ 実行
