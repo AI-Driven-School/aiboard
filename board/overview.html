@@ -549,7 +549,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
+  '無人ジョブ': 'Unattended jobs', '無人実行': 'Unattended', 'の無人実行。クリックで展開': 'unattended runs. Click to expand', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
   'tour.1.t': 'This is your board', 'tour.1.b': 'Each running Claude Code or Codex session is a card. Squares are clients, dots are models. Drag to pan, wheel to zoom, F fits everything. Switch to History to see the last 30 days.',
   'tour.2.t': 'Your turn', 'tour.2.b': 'This number is how many agents are waiting for a decision. Click it to zoom to them. In History, a strip at the top lists live sessions by urgency.',
   'tour.3.t': 'Color tells you the state', 'tour.3.b': 'Red = stuck on a permission or question. Yellow = replied, your turn. Green = working. Your Dock badge and macOS notifications tell you too.',
@@ -707,6 +707,23 @@ function nodeList() {
     else if (n.role !== 'subagent') { n.parentId = 'bundle:helpers'; n.frameKey = 'home'; orphans++; }
     else n.parentId = null;
   });
+  // 無人実行(claude -p / SDK)は日ごと・持ち場ごとに 1 枚へ畳む。実測 5,904 枚で 1 フレーム 35ms だったため
+  if (filters.unatt) {
+    const groups = {};
+    nodes.forEach(n => {
+      if (!n.unattended || n.bundle || isChild(n)) return;
+      const d = new Date((n.t || 0) * 1000);
+      const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      const key = `bundle:una:${n.frameKey}:${day}`;
+      n.bundleId = key;
+      const g = groups[key] = groups[key] || {n: 0, t: 0, frameKey: n.frameKey, day: day, ai: n.ai};
+      g.n++; g.t = Math.max(g.t, n.t || 0);
+    });
+    Object.entries(groups).forEach(([key, g]) => nodes.push({id: key, live: false, bundle: true, n: g.n, ai: g.ai,
+      model: null, client: null, cwd: '', project: '', frameKey: g.frameKey, state: '束', mark: '⚪',
+      doing: `${T('無人実行')} ×${g.n}`, task: `${g.day} ${T('の無人実行。クリックで展開')}`, t: g.t,
+      text: `無人 ${g.day}`, tab: null, role: 'bundle', kind: 'bundle', unattended: true}));
+  }
   if (orphans) nodes.push({id: 'bundle:helpers', live: false, bundle: true, n: orphans, ai: '', model: null, client: null, cwd: '', project: '', frameKey: 'home', state: '束', mark: '⚪', doing: `${T('補助（元不明）')}×${orphans}`, task: T('元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開'), t: 0, text: '補助 元不明', tab: null, role: 'bundle', kind: 'bundle'});
   return nodes;
 }
@@ -731,7 +748,8 @@ function isChild(n) { return n.role === 'subagent' || n.role === 'review' || n.r
 function passes(n) {
   if (n.role === 'subagent' && !filters.sub && !(sel && (n.parentId === sel || n.id === sel))) return false;
   if ((n.role === 'review' || n.role === 'helper') && !filters.help && !(sel && (n.parentId === sel || n.id === sel))) return false;
-  if (n.bundle) return !filters.help;
+  if (n.bundle) return n.unattended ? !filters.q : !filters.help;   // 無人の束は、検索中は畳まず中身を見せる
+  if (n.bundleId && sel !== n.bundleId && !filters.q) return false;  // 畳んだ無人実行(束を選ぶか、検索すれば出る)
   if (filters.q && !n.text.toLowerCase().includes(filters.q.toLowerCase())) return false;
   if (filters.client && (!n.client || n.client.id !== filters.client)) return false;
   if (filters.ai && n.ai !== filters.ai) return false;
@@ -1636,7 +1654,7 @@ setInterval(loadIndex, 300000);
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
 window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
   frames: () => window._frames, vis: () => window._vis, snap: () => snap,
-  toolbar: () => renderToolbar(window._frames || [], window._vis || [])};   // 試験用: いまの snap で上のバーだけ描き直す
+  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

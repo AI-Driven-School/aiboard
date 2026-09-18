@@ -2049,6 +2049,42 @@ def sv19(ctx):
     return f"古い版 pid {v1['pid']}/{v1['stamp']} → アプリ起動で pid {v2['pid']}/{v2['stamp']}(手元のコードと一致・古い方は終了)"
 
 
+@case("BD-17", "無人実行は日ごとに 1 枚へ畳む: 枚数が実測より減り、束を押すと中身が出て、検索は畳んだ中まで届く")
+def bd17(ctx):
+    def fn(pg, errs, bl):
+        pg.click("[data-mode=history]")
+        wait_js(pg, "document.querySelectorAll('.card.past').length > 0", 60)
+        pg.evaluate("() => { const c = document.querySelector('#fUnatt'); c.checked = true; c.dispatchEvent(new Event('change', {bubbles: true})); }")
+        wait_js(pg, "(board.snap() && (window._nodes || []).length) || document.querySelectorAll('.card.bundle').length >= 0", 30)
+        pg.wait_for_timeout(4000)
+        n_una = pg.evaluate("(board.index ? (board.index().records || []) : []).filter(r => r.unattended).length")
+        cards = lambda: pg.evaluate("document.querySelectorAll('.card').length")
+        bundles = pg.evaluate("[...document.querySelectorAll('.card')].filter(c => (c.dataset.id || '').startsWith('bundle:una:')).map(c => c.dataset.id)")
+        before = cards()
+        if not bundles:
+            return {"skip": f"無人実行の束ができていない(索引の無人実行 {n_una} 件)"}
+        pg.click(f"[data-id='{bundles[0]}']")
+        pg.wait_for_timeout(1200)
+        opened = cards()
+        pg.click(f"[data-id='{bundles[0]}']")   # もう一度押して畳む
+        pg.wait_for_timeout(800)
+        closed = cards()
+        pg.fill("#q", "claude")
+        pg.wait_for_timeout(1500)
+        searched = pg.evaluate("[...document.querySelectorAll('.card')].filter(c => getComputedStyle(c).display !== 'none').length")
+        return {"n_una": n_una, "bundles": len(bundles), "before": before, "opened": opened, "closed": closed,
+                "searched": searched, "errs": errs[:2]}
+    r = with_page(ctx, fn, "?lang=ja")
+    if r.get("skip"):
+        return "SKIP: " + r["skip"]
+    check(not r["errs"], f"ページエラー {r['errs']}")
+    check(r["before"] < r["n_una"], f"畳めていない: カード {r['before']} 枚 / 無人実行 {r['n_una']} 件")
+    check(r["opened"] > r["before"], f"束を押しても中身が出ない {r['before']}→{r['opened']}")
+    check(r["closed"] == r["before"], f"もう一度押しても畳まれない {r['opened']}→{r['closed']}")
+    return (f"無人実行 {r['n_una']} 件 → 束 {r['bundles']} 枚(全カード {r['before']} 枚)"
+            f"・押すと {r['opened']} 枚に開き、もう一度で戻る・検索中は {r['searched']} 枚")
+
+
 @case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
 def tu01(ctx):
     import cs
