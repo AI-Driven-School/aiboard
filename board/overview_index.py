@@ -823,6 +823,28 @@ def build_edges(idx, progress=None):
     idx["edges"] = edges
 
 
+def _hint_from_files(r):
+    """cwd がホームの会話について、触ったファイルの置き場を 1 つ選ぶ(overview.work_root と同じ規則)。
+
+    人の会話 321 件のうち 263 件(82%)がホームで動いており、cwd だけでは仕事が分けられない。
+    ファイルから付けられるのはそのうち 54%(2026-09-18 実測)。
+    """
+    if (r.get("cwd") or "").rstrip("/") != os.path.expanduser("~"):
+        return ""
+    import overview   # 置き場の決め方は overview.work_root に 1 本化(索引と盤で同じ規則にする)
+    counts = {}
+    src = r.get("files_top") or []
+    for item in src:   # files_top は [パス, 回数] の組。回数で重みを付ける(1 組=1 回ではない)
+        path, hits = (item[0], item[1] if len(item) > 1 else 1) if isinstance(item, (list, tuple)) else (item, 1)
+        d = overview.work_root(path) if isinstance(path, str) else ""
+        if d:
+            counts[d] = counts.get(d, 0) + (hits if isinstance(hits, int) else 1)
+    if not counts:
+        return ""
+    name, n = max(counts.items(), key=lambda kv: kv[1])
+    return name if n >= 2 else ""
+
+
 # ---------------------------------------------------------------- 取り出し ----
 def query(idx, days=30, include_unattended=False, live_ids=(), known_ids=None):
     """表示用に絞ったレコードとエッジ。live_ids のセッションは state=live。
@@ -847,10 +869,14 @@ def query(idx, days=30, include_unattended=False, live_ids=(), known_ids=None):
             if x not in out and x in idx["records"]:
                 extra[x] = idx["records"][x]
     out.update(extra)
+    for r in out.values():   # ホームで動いた会話に、触ったファイルから持ち場の名前を付ける(cwd では分けられない)
+        if not r.get("project_hint"):
+            r["project_hint"] = _hint_from_files(r)
     edges = [e for es in idx["edges"].values() for e in es if e["from"] in out and e["to"] in out]
     keep = ("id", "ai", "model", "model_style", "model_history", "account", "client", "cwd", "project", "start", "end",
             "prompts", "tools", "responses", "files_top", "kind", "parent", "parent_session", "child_models",
-            "unattended", "unattended_by", "role", "title", "tokens", "git", "last_turn", "last_error", "agent_nickname", "path")
+            "unattended", "unattended_by", "role", "title", "tokens", "git", "last_turn", "last_error", "agent_nickname", "path",
+            "project_hint")
     rows = []
     for r in out.values():
         row = {k: r.get(k) for k in keep}
@@ -879,8 +905,9 @@ def query_cli(argv):
     res = query_db(days=a.get("days"), include_unattended=bool(a.get("unattended")), live_ids=a.get("live_ids") or (),
                    children=bool(a.get("children")))
     for r in res["records"]:
-        r["first_prompt"] = overview.redact(r.get("first_prompt", ""))
-        r["last_prompt"] = overview.redact(r.get("last_prompt", ""))
+        for k in ("first_prompt", "last_prompt", "title", "last_turn", "last_error"):   # 題名にも鍵が入る(2026-09-18 実測)
+            if isinstance(r.get(k), str):
+                r[k] = overview.redact(r[k])
     res.update(a.get("extra") or {})
     sys.stdout.write(json.dumps(res, ensure_ascii=False))
 

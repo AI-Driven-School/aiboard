@@ -79,7 +79,7 @@
 <div class="wrap">
   <nav>
     <div class="logo"><i><b style="background:#7DD3FC"></b><b style="background:#9B4DE0"></b><b style="background:#3DF2A6"></b><b style="background:#FF5C6C"></b></i>AIBoard</div>
-    <div class="links"><a href="#why">Why</a><a href="#install">Install</a><a href="#privacy">Privacy</a><a href="https://github.com/REPO_OWNER/aiboard">GitHub</a></div>
+    <div class="links"><a href="#why">Why</a><a href="#install">Install</a><a href="#privacy">Privacy</a>GitHub</div>
   </nav>
 
   <header class="hero">
@@ -87,12 +87,12 @@
     <h1>The whiteboard for your <em>coding agents</em>.</h1>
     <p class="lede">Every Claude Code and Codex session on one canvas, grouped by client and project, with real terminals inside. When an agent needs you, its card lights up — and your Dock tells you how many are waiting.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/REPO_OWNER/aiboard/releases">Download for macOS</a>
-      <a class="btn" href="https://github.com/REPO_OWNER/aiboard">Star on GitHub</a>
-      <span class="install"><span>$</span>brew install --cask aiboard</span>
+      <a class="btn primary" href="#install">Download for macOS</a>
+      <a class="btn" href="#install">Build from source</a>
+      <span class="install"><span>$</span>./make_app.sh</span>
     </div>
     <div class="shot"><video src="demo.mp4" poster="img/board-overview-crop.png" autoplay muted loop playsinline style="display:block;width:100%;height:auto"></video></div>
-    <div class="shot" hidden><img src="img/board-overview-crop.png" alt="AIBoard: sessions grouped by client and project on a dark canvas; live cards glow, one is waiting for you" width="1600" height="1000"></div>
+    <div class="shot" hidden><img src="img/board-overview-crop.png" alt="AIBoard: sessions grouped by client and project on a dark canvas; live cards glow, one is waiting for you" width="3200" height="1788"></div>
   </header>
 
   <div class="pain">
@@ -106,12 +106,12 @@
     <div class="feat">
       <div class="card" style="--c:#9B4DE0"><h3>One canvas, every agent</h3><p>Claude Code and Codex, live and past. Grouped by client (square) and project. Model shown as a colored dot. Lines connect a session to the one it continued from, reviewed, or edited the same files as.</p></div>
       <div class="card" style="--c:#FF5C6C"><h3>Lights up when it needs you</h3><p>Permission prompts, questions, stopped sessions. The card pulses red, the Dock badge counts them, and a macOS notification takes you straight to that terminal.</p></div>
-      <div class="card" style="--c:#3DF2A6"><h3>Real terminals inside</h3><p>Not a chat wrapper. A native terminal (SwiftTerm) runs the actual CLI. ⌘T for a new Claude, ⌥⌘T for Codex, ⇧⌘W for Claude in a fresh git worktree.</p></div>
+      <div class="card" style="--c:#3DF2A6"><h3>Real terminals inside</h3><p>Not a chat wrapper. A native terminal (libghostty) runs the actual CLI. ⌘T for a new Claude, ⌥⌘T for Codex, ⇧⌘W for Claude in a fresh git worktree.</p></div>
     </div>
   </section>
 
   <section class="two">
-    <div class="shot"><img src="img/board-terminal.png" alt="Clicking a card opens the real terminal on the right, with the agent's recent activity below" width="1600" height="1000"></div>
+    <div class="shot"><img src="img/board-terminal.png" alt="Clicking a card opens the real terminal on the right, with the agent's recent activity below" width="3200" height="2000"></div>
     <div>
       <h2 class="sec">Click a card. Type.</h2>
       <p class="sub">The right pane is the session's own terminal. Approve with one key, send a message, or jump into it fullscreen. Sessions still running in iTerm show up too — AIBoard finds them by tty, so nothing changes about how you already work.</p>
@@ -123,7 +123,7 @@
   </section>
 
   <section class="two flip">
-    <div class="shot"><img src="img/board-working.png" alt="Zoomed-out view: dozens of past sessions per project, with live ones highlighted" width="1600" height="1000"></div>
+    <div class="shot"><img src="img/board-working.png" alt="Zoomed-out view: dozens of past sessions per project, with live ones highlighted" width="3200" height="2000"></div>
     <div>
       <h2 class="sec">Your last 30 days, on the same board.</h2>
       <p class="sub">13,000+ sessions indexed into SQLite, queried in under half a second. Resume any of them into a new terminal with one click. Subagents fold under their parent. Unattended runs (cron, <code class="kbd">claude -p</code>) stay out of the way unless you ask.</p>
@@ -159,7 +159,7 @@
   <section id="install">
     <h2 class="sec">Install</h2>
     <div class="steps">
-      <div class="step"><div><code>brew install --cask aiboard</code><p>or download the .app from Releases. macOS 13+. Requires Python 3 (ships with Xcode Command Line Tools) for the board server.</p></div></div>
+      <div class="step"><div><code>./make_app.sh</code><p>or download the .app from Releases. macOS 13+. Requires Python 3 (ships with Xcode Command Line Tools) for the board server.</p></div></div>
       <div class="step"><div><code>Open AIBoard</code><p>Your running Claude Code and Codex sessions appear on the board within a few seconds — including the ones already open in iTerm.</p></div></div>
       <div class="step"><div><code>⌘T</code><p>Opens a new Claude Code terminal in the current folder. <span class="kbd">⌥⌘T</span> Codex · <span class="kbd">⇧⌘W</span> Claude in a git worktree · <span class="kbd">⌘B</span> hide the board.</p></div></div>
     </div>
@@ -179,7 +179,7 @@
 
   <footer>
     <div>AIBoard · MIT License · built by one person who runs too many agents</div>
-    <div><a href="https://github.com/REPO_OWNER/aiboard">GitHub</a> · <a href="https://github.com/REPO_OWNER/aiboard/issues">Issues</a></div>
+    <div>GitHub · Issues</div>
   </footer>
 </div>
 </body>

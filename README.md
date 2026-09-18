@@ -13,7 +13,7 @@ Native macOS · open source (MIT) · local only, no telemetry
 ## Install
 
 ```sh
-git clone https://github.com/REPO_OWNER/aiboard && cd aiboard
+git clone <this repository> && cd aiboard
 ./make_app.sh          # builds and installs /Applications/AIBoard.app
 ```
 

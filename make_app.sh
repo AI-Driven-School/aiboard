@@ -2,7 +2,14 @@
 # AIBoard.app を作って ~/Applications に置く。SwiftPM の実行ファイルを .app に包み、ad-hoc 署名する。
 set -eu
 cd "$(dirname "$0")"
-swift build -c release 2>&1 | grep -E "error|Build complete" || true
+# ビルドが失敗したら、そこで止める(古い実行ファイルを包んで配らない。grep に通すと rc が消えるので PIPESTATUS で見る)
+mkdir -p build
+swift build -c release 2>&1 | tee build/build.log | grep -E "error|Build complete" || true
+rc=${pipestatus[1]:-${PIPESTATUS[0]:-0}}
+if [ "$rc" != "0" ]; then
+  echo "ビルド失敗(rc=$rc)。.app は作り直していない: build/build.log" >&2
+  exit "$rc"
+fi
 APP=build/AIBoard.app
 # /Applications に書けるならそこへ(Finder の「アプリケーション」・Spotlight・Launchpad から見える)。書けなければ ~/Applications
 if [ -w /Applications ]; then DEST="/Applications/AIBoard.app"; else DEST="$HOME/Applications/AIBoard.app"; fi

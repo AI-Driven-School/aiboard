@@ -184,20 +184,60 @@ def descendants_rss(procs, pid):
     kids = {}
     for p, v in procs.items():
         kids.setdefault(v["ppid"], []).append(p)
-    total, stack = 0, [pid]
+    total, stack, seen = 0, [pid], set()   # ps の取得中に親子が循環して見えることがある(そこで止まると盤が固まる)
     while stack:
         x = stack.pop()
+        if x in seen:
+            continue
+        seen.add(x)
         total += procs.get(x, {}).get("rss", 0)
         stack.extend(kids.get(x, []))
     return total
 
 
+def _argv0_is(cmd, name):
+    """そのコマンド行が「その道具を動かしている」か。引数に名前が出るだけのもの(vim ~/logs/codex)は数えない。
+
+    以前は行のどこかに /codex があれば Codex と見なしていて、`tail -f ~/logs/codex` まで
+    セッション扱いになっていた(2026-09-18 実測)。
+    """
+    toks = cmd.split()
+    if not toks:
+        return False
+    if os.path.basename(toks[0]) == name:
+        return True
+    # node/bun/npx 経由(node …/bin/codex exec)は 2 つ目までを見る
+    if os.path.basename(toks[0]) in ("node", "bun", "npx", "deno") and len(toks) > 1:
+        return os.path.basename(toks[1]) == name
+    return False
+
+
+def outermost_ai(procs, pids):
+    """同じ tty に AI が入れ子で居るとき、他の AI の子孫でない「外側」を 1 つ選ぶ。
+
+    以前は min(pid) で選んでいたので、pid が一周した後に起きた入れ子の `claude -p` を
+    本体と取り違えることがあった(メモリ・状態・終了の宛先が全部ずれる。2026-09-18 実測)。
+    """
+    s = set(pids)
+    outer = []
+    for p in s:
+        up, seen = procs.get(p, {}).get("ppid"), set()
+        while up in procs and up not in seen:
+            seen.add(up)
+            if up in s:
+                break
+            up = procs[up]["ppid"]
+        else:
+            outer.append(p)
+    return min(outer) if outer else min(s)
+
+
 def is_claude(cmd):
-    return re.match(r"(\S*/)?claude(\s|$)", cmd) is not None
+    return _argv0_is(cmd, "claude")
 
 
 def is_codex(cmd):
-    return re.search(r"(^|/)codex(\s|$)|@openai/codex", cmd) is not None
+    return _argv0_is(cmd, "codex") or "@openai/codex" in cmd.split(" ")[0]
 
 
 def session_record(pid):
@@ -224,9 +264,12 @@ def prompt_text(d):
     """トランスクリプトの1レコード(dict)が「人が打った依頼」ならその本文、違えば ""。
     ツール結果・system 注入(< で始まる)・isMeta・サブエージェント側(isSidechain)は除く。
     依頼の判定はここ1か所(overview / 索引 もこれを使う)。"""
-    if d.get("type") != "user" or d.get("isMeta") or d.get("isSidechain"):
+    if not isinstance(d, dict) or d.get("type") != "user" or d.get("isMeta") or d.get("isSidechain"):
         return ""
-    c = d.get("message", {}).get("content")
+    m = d.get("message")
+    if not isinstance(m, dict):   # 壊れた行(message が文字列/None)で索引ごと落ちない(2026-09-18 実測)
+        return ""
+    c = m.get("content")
     text = c if isinstance(c, str) else "".join(
         b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
     text = " ".join(text.split())
@@ -448,7 +491,7 @@ def classify(tabs, procs):
         t["topic"] = topic
         t["title_topic"] = topic
         if claude:
-            pid = min(claude)
+            pid = outermost_ai(procs, claude)   # 入れ子の一時実行(claude -p)でなく、外側の本体を選ぶ
             t["pid"] = pid
             t["mem"] = descendants_rss(procs, pid)
             rec = session_record(pid)
@@ -507,10 +550,10 @@ def classify(tabs, procs):
                     t["state"], t["mark"] = "起動中?", "🔴"
                 t["cwd"] = proc_cwd(pid)
         elif codex:
-            root = min(p for p in codex if procs[p]["ppid"] not in codex)
+            root = outermost_ai(procs, codex)   # 親が codex でなくても、間に bash を挟んだ入れ子がある
             t["state"], t["mark"] = "codex", "🟩"
             t["pid"] = root
-            t["mem"] = sum(descendants_rss(procs, p) for p in codex if procs[p]["ppid"] not in codex)
+            t["mem"] = descendants_rss(procs, root)
             t["cwd"] = proc_cwd(root)
             t["started"] = proc_start(root)
             cx = codex_session(t["cwd"], t["started"], codex)
@@ -550,22 +593,29 @@ def classify(tabs, procs):
     return tabs
 
 
-def first_user_prompt(path, head_bytes=400_000):
-    """トランスクリプト先頭から、人が打った最初の依頼(顧客判定の材料)。"""
+def first_user_prompt(path, head_bytes=400_000, max_bytes=8_000_000):
+    """トランスクリプト先頭から、人が打った最初の依頼(顧客判定の材料)。
+
+    判定は末尾側と同じ規則(user_prompts_in)を使う。以前はここだけ '"type":"user"' の
+    文字列一致で、すきまの入った JSON を読み落としていた。
+    先頭 head_bytes に依頼が無ければ、そこから先も max_bytes まで読む
+    (道具の出力が先に並ぶ長い記録で、静かに「依頼なし」と返さないため。2026-09-18 実測)。
+    """
     try:
         with open(path, "rb") as f:
-            chunk = f.read(head_bytes).decode("utf-8", errors="replace")
+            read, buf = 0, b""
+            while read < max_bytes:
+                chunk = f.read(min(head_bytes, max_bytes - read))
+                if not chunk:
+                    break
+                read += len(chunk)
+                parts = (buf + chunk).split(b"\n")
+                buf = parts.pop()            # 最後は書きかけかもしれないので次へ回す
+                for raw in parts:
+                    for _, text in user_prompts_in(raw.decode("utf-8", errors="replace")):
+                        return text
     except OSError:
         return ""
-    for line in chunk.splitlines():
-        if '"type":"user"' not in line:
-            continue
-        try:
-            text = prompt_text(json.loads(line))
-        except ValueError:
-            continue
-        if text:
-            return text
     return ""
 
 
@@ -588,11 +638,16 @@ def width(s):
 
 
 def clip(s, w):
+    """幅 w ちょうどに収める(全角混じりでも列がずれない)。
+
+    以前は全角の手前で切ると out+"…" が w-1 桁になり、一覧の列が 1 桁ずれていた(2026-09-18 実測)。
+    """
     out, cur = "", 0
     for ch in s:
         cw = 2 if unicodedata.east_asian_width(ch) in "WF" else 1
         if cur + cw > w - 1:
-            return out + "…"
+            out += "…"
+            return out + " " * max(0, w - (cur + 1))
         out += ch
         cur += cw
     return out + " " * (w - cur)

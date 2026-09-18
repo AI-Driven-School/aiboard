@@ -535,6 +535,7 @@ function demoClient(c, key) { if (!DEMO) return c; if (!c) return null; const d 
 function demoText(t, key, list) { return DEMO ? (t ? pick(list, key + t) : '') : t; }
 // プロジェクト名は「元の名前」だけから決める(セッションごとに変えると同じプロジェクトが散って枠が崩れる)
 function demoProject(p, key) { return DEMO ? (p ? pick(DEMO_PROJECTS, 'p:' + p) : '') : p; }
+function demoHint(h, key) { return DEMO ? (h ? pick(DEMO_PROJECTS, 'w:' + h) : '') : h; }
 function demoCwd(p, key) { if (!DEMO) return p; if (isHome(p)) return '/Users/dev'; return '/Users/dev/' + demoProject(p ? p.split('/').pop() : 'home', key); }
 
 // AIBoard.app の中では、アプリの端末("0-N")はアプリ自身が前面に出す。iTerm のタブは従来どおり AppleScript
@@ -602,17 +603,17 @@ function nodeList() {
   return nodes;
 }
 function liveNode(s) {
-  if (DEMO) s = Object.assign({}, s, {client: demoClient(s.client, s.sid), cwd: demoCwd(s.cwd, s.sid), project: demoProject(s.project, s.sid), doing: demoText(s.doing, s.sid + 'd', DEMO_DOING), task: demoText(s.task, s.sid + 't', DEMO_TASKS), topic: demoText(s.topic, s.sid + 'o', DEMO_TASKS), account: s.account ? 'demo' : '',
+  if (DEMO) s = Object.assign({}, s, {client: demoClient(s.client, s.sid), cwd: demoCwd(s.cwd, s.sid), project: demoProject(s.project, s.sid), project_hint: demoHint(s.project_hint, s.sid), doing: demoText(s.doing, s.sid + 'd', DEMO_DOING), task: demoText(s.task, s.sid + 't', DEMO_TASKS), topic: demoText(s.topic, s.sid + 'o', DEMO_TASKS), account: s.account ? 'demo' : '',
     tools: s.tools ? {skills: s.tools.skills.map(([k, v], i) => [['frontend-design', 'pdf', 'code-review', 'webapp-testing'][i % 4], v]), mcp: s.tools.mcp.map(([k, v], i) => [['github', 'linear', 'playwright', 'sentry'][i % 4], v])} : null,
     loop: s.loop ? {wake: s.loop.wake ? {next_at: s.loop.wake.next_at, reason: 'Waiting for the CI run to finish'} : null, crons: (s.loop.crons || []).map(c => Object.assign({}, c, {prompt: 'Check the nightly build and report failures'}))} : null});
   return {id: s.sid, live: true, s, ai: s.ai.startsWith('Codex') ? 'Codex' : 'Claude', model: s.model_style, client: s.client, cwd: s.cwd, project: s.project,
-    frameKey: s.client ? 'c:' + s.client.id : isHome(s.cwd) ? 'home' : 'p:' + (s.project || '?'), state: s.state, mark: s.mark, doing: s.doing, task: s.task, t: s.ago != null ? (snap.time - s.ago) : snap.time,
+    frameKey: s.client ? 'c:' + s.client.id : isHome(s.cwd) ? (s.project_hint ? 'w:' + s.project_hint : 'home') : 'p:' + (s.project || '?'), state: s.state, mark: s.mark, doing: s.doing, task: s.task, t: s.ago != null ? (snap.time - s.ago) : snap.time,
     text: [s.task, s.topic, s.cwd, s.doing].join(' '), tab: s.tab, unattended: false, kind: 'live', role: 'live', title: s.topic, parentId: null};
 }
 function pastNode(r) {
-  if (DEMO) r = Object.assign({}, r, {client: demoClient(r.client, r.id), cwd: demoCwd(r.cwd, r.id), project: demoProject(r.project, r.id), first_prompt: demoText(r.first_prompt, r.id + 'f', DEMO_TASKS), last_prompt: demoText(r.last_prompt, r.id + 'l', DEMO_TASKS), title: demoText(r.title, r.id + 'i', DEMO_TASKS), files: [], files_top: [], account: r.account ? 'demo' : ''});
+  if (DEMO) r = Object.assign({}, r, {client: demoClient(r.client, r.id), cwd: demoCwd(r.cwd, r.id), project: demoProject(r.project, r.id), project_hint: demoHint(r.project_hint, r.id), first_prompt: demoText(r.first_prompt, r.id + 'f', DEMO_TASKS), last_prompt: demoText(r.last_prompt, r.id + 'l', DEMO_TASKS), title: demoText(r.title, r.id + 'i', DEMO_TASKS), files: [], files_top: [], account: r.account ? 'demo' : ''});
   return {id: r.id, live: false, r, ai: r.ai, model: r.model_style, client: r.client, cwd: r.cwd, project: r.project,
-    frameKey: r.client ? 'c:' + r.client.id : isHome(r.cwd) ? 'home' : 'p:' + (r.project || '?'), state: r.kind === 'subagent' ? 'サブエージェント' : '終了', mark: '⚪', doing: r.last_prompt, task: r.first_prompt, t: r.end,
+    frameKey: r.client ? 'c:' + r.client.id : isHome(r.cwd) ? (r.project_hint ? 'w:' + r.project_hint : 'home') : 'p:' + (r.project || '?'), state: r.kind === 'subagent' ? 'サブエージェント' : '終了', mark: '⚪', doing: r.last_prompt, task: r.first_prompt, t: r.end,
     text: [r.title, r.first_prompt, r.last_prompt, r.cwd, (r.files || []).join(' ')].join(' '), tab: null, unattended: r.unattended, ghost: r.ghost, kind: r.kind, role: r.role || 'human', title: r.title || '',
     parentId: r.kind === 'subagent' ? r.parent : (r.role === 'review' || r.role === 'helper') ? (r.parent_session || 'bundle:helpers') : null};
 }
@@ -637,7 +638,7 @@ function layout(nodes) {
   nodes.forEach(n => (groups[n.frameKey] = groups[n.frameKey] || []).push(n));
   Object.keys(groups).forEach(k => { if (!frameOrder.includes(k)) frameOrder.push(k); });
   // 顧客 → 自社 → macmini の順
-  const rank = k => k.startsWith('c:') ? 0 : k === 'home' ? 2 : 1;
+  const rank = k => k.startsWith('c:') ? 0 : k === 'home' ? 2 : 1;   // 顧客 → プロジェクト/持ち場 → ホーム
   const keys = frameOrder.filter(k => groups[k]).sort((a, b) => rank(a) - rank(b));
   const frames = [];
   let x = 0, y = 0, rowH = 0;
@@ -709,6 +710,7 @@ function render() {
     let label, color = null, sum = '';
     if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
     else if (f.key.startsWith('c:')) { const c = f.sample.client; label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
+    else if (f.key.startsWith('w:')) { label = '◇ ' + f.key.slice(2); sum = frameSummary(f); }   // ホームで動いているが、触っているファイルで持ち場が分かるもの
     else if (f.key === 'home') { label = T('● 自社・その他（直近）'); sum = frameSummary(f) + (f.hidden ? ` <span class="fmore" data-more="1">${T('さらに表示')} (+${f.hidden})</span>` : homeExpanded ? ` <span class="fmore" data-more="0">${T('直近だけに戻す')}</span>` : ''); }
     else { label = '● ' + f.key.slice(2); sum = frameSummary(f); }
     if (f.w < 420) sum = '';   // 狭い枠では見出しと重なるので要約を出さない

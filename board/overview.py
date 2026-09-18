@@ -292,10 +292,11 @@ def session_tools(path):
         return None
     slot = _TOOLS.get(path)
     if not slot or slot["ino"] != st.st_ino or st.st_size < slot["off"]:
-        slot = _TOOLS[path] = {"off": 0, "ino": st.st_ino, "val": {"skills": {}, "mcp": {}, "wake": None, "crons": []}}
+        slot = _TOOLS[path] = {"off": 0, "ino": st.st_ino, "val": {"skills": {}, "mcp": {}, "wake": None, "crons": [], "dirs": {}}}
     if st.st_size == slot["off"]:
         return slot["val"]
     v = slot["val"]
+    v.setdefault("dirs", {})
     with open(path, "rb") as f:
         f.seek(slot["off"])
         while True:
@@ -314,7 +315,44 @@ def session_tools(path):
                     v["wake"] = None if inp.get("stop") else {"at": _iso_epoch(ts), "delay": inp.get("delaySeconds") or 0, "reason": str(inp.get("reason") or "")[:140]}
                 elif name == "CronCreate":
                     v["crons"].append({"cron": str(inp.get("cron") or ""), "recurring": bool(inp.get("recurring", True)), "prompt": str(inp.get("prompt") or "")[:140], "at": _iso_epoch(ts)})
+                for k in ("file_path", "notebook_path", "path"):   # 触ったファイルの置き場(ホームで動く会話の実質の持ち場)
+                    d = work_root(inp.get(k))
+                    if d:
+                        v["dirs"][d] = v["dirs"].get(d, 0) + 1
     return v
+
+
+SKIP_ROOTS = {".claude", ".codex", ".aiboard", "Library", "Applications", "Downloads", "tmp", ".Trash"}
+
+
+def work_root(path):
+    """触ったファイルから「実質の持ち場」を 1 つ決める。~/Desktop/X のように 1 段では足りない所は 2 段見る。
+
+    利用者の 8 割超がホーム直下で Claude を動かしており(30 日で 263/321)、cwd だけでは仕事が分けられない。
+    触っているファイルの置き場なら、そのうち 54% に本当の持ち場が付く(2026-09-18 実測)。
+    """
+    if not isinstance(path, str) or not path.startswith(HOME + "/"):
+        return ""
+    parts = [x for x in path[len(HOME) + 1:].split("/") if x]
+    if not parts or len(parts) < 2:   # ホーム直下のファイルそのものは持ち場にしない
+        return ""
+    top = parts[0]
+    if top in SKIP_ROOTS:
+        return ""
+    if top in ("Desktop", "Documents", "src", "work", "repos"):
+        return top + "/" + parts[1] if len(parts) > 2 else ""   # 直下に置いただけのファイルは持ち場でない
+    return top
+
+
+def project_hint(tools, cwd, min_hits=3):
+    """ホームで動いている会話に、触ったファイルから持ち場の名前を付ける(足りなければ空)。"""
+    if not tools or (cwd or "").rstrip("/") != HOME:
+        return ""
+    dirs = tools.get("dirs") or {}
+    if not dirs:
+        return ""
+    name, n = max(dirs.items(), key=lambda kv: kv[1])
+    return name if n >= min_hits else ""
 
 
 def cron_next(expr, after, horizon_days=8):
@@ -424,8 +462,12 @@ def extensions_info(refresh=False):
 
 
 # ---------------------------------------------------------------- セッション ----
+def _tools_of(t):
+    return session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None
+
+
 def _tools_brief(t):
-    tl = session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None
+    tl = _tools_of(t)
     if not tl:
         return None
     top = lambda d: sorted(d.items(), key=lambda kv: -kv[1])[:6]
@@ -448,6 +490,7 @@ def sessions(procs=None):
             "model_id": t.get("model_id", ""),
             "model_style": t.get("model_style") or (cs.model_style(t.get("model_id", "")) if t.get("ai") else None),
             "cwd": t.get("cwd", ""), "project": project_name(t.get("cwd", "")),
+            "project_hint": project_hint(_tools_of(t), t.get("cwd", "")),
             "doing": redact(t.get("doing", "")),
             "task": redact(t.get("task", "")),
             "topic": redact(t.get("title_topic", "")),

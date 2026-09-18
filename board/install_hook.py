@@ -18,7 +18,24 @@ import time
 HERE = os.path.dirname(os.path.realpath(__file__))
 HOOK = os.path.join(HERE, "hooks", "tab-status.py")
 EVENTS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop"]
-MARK = "tab-status.py"   # AIBoard の hook を見分ける印(コマンドの末尾)
+MARK = "tab-status.py"   # 手がかり(最終判定は _is_ours。名前だけで決めると別人の同名ファイルを触る)
+
+
+def _is_ours(cmd):
+    """その命令が AIBoard の hook か。名前が同じだけの別人のファイルは触らない(2026-09-18 実測で発覚)。
+
+    自分と認めるのは、実体がこのファイルと同じもの(symlink 経由も同じ)か、
+    AIBoard の置き方 <どこか>/board/hooks/tab-status.py を指しているもの(前の版の置き場)だけ。
+    """
+    if MARK not in (cmd or ""):
+        return False
+    path = (cmd or "").split()[-1]
+    try:
+        if os.path.realpath(path) == os.path.realpath(HOOK):
+            return True
+    except OSError:
+        pass
+    return path.endswith(os.path.join("board", "hooks", "tab-status.py"))
 
 
 def default_settings():
@@ -34,7 +51,7 @@ def load(path):
 
 
 def ours(entry):
-    return any(MARK in (h.get("command") or "") for h in entry.get("hooks", []))
+    return any(_is_ours(h.get("command")) for h in entry.get("hooks", []))
 
 
 def check(path):
@@ -44,12 +61,15 @@ def check(path):
 
 def write(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
+    mode = None
     if os.path.exists(path):
+        mode = os.stat(path).st_mode & 0o777   # 秘密が入り得るので権限は元のまま(600 を 644 に緩めない)
         shutil.copy2(path, f"{path}.aiboard-backup-{time.strftime('%Y%m%d-%H%M%S')}")
     tmp = f"{path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    os.chmod(tmp, mode if mode is not None else 0o600)
     os.replace(tmp, path)
 
 
@@ -65,7 +85,7 @@ def install(path):
             # 既にある: コマンドの場所だけ今のアプリに合わせる(アプリを動かした時のため)
             for e in mine:
                 for h in e["hooks"]:
-                    if MARK in (h.get("command") or "") and h["command"] != cmd:
+                    if _is_ours(h.get("command")) and h["command"] != cmd:
                         h["command"] = cmd; changed = True
             continue
         arr.append({"hooks": [{"type": "command", "command": cmd, "async": True, "timeout": 5}]})

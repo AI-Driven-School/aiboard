@@ -22,6 +22,10 @@ let BOARD_DIR: String = {
     if let r = Bundle.main.resourcePath, FileManager.default.fileExists(atPath: r + "/board/cs.py") { return r + "/board" }
     return HOME + "/aiboard/board"
 }()
+/// 自己試験(UAT)で動かしているか。試験中はダイアログを出さない(出すとアプリが終わらず、試験が時間切れになる)
+let SELF_TEST: Bool = ["AIBOARD_SELFTEST", "AIBOARD_RESTORE_TEST", "AIBOARD_SWITCH_TEST", "AIBOARD_JS_TEST", "AIBOARD_SHOT"]
+    .contains { ProcessInfo.processInfo.environment[$0] != nil }
+
 let BOARD_URL = URL(string: "http://127.0.0.1:\(ProcessInfo.processInfo.environment["OVERVIEW_PORT"] ?? "8791")/")!   // 試験では別ポート
 
 func shellQuote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -81,6 +85,33 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
             envVars: ["LANG": "ja_JP.UTF-8", "LC_CTYPE": "ja_JP.UTF-8", "TERM_PROGRAM": "AIBoard", "AIBOARD_PANE": "\(id)"],
             command: cmdline, waitAfterCommand: false)
         resolveTty(attempt: 0)
+    }
+
+    /// 盤から送る文は端末ごとに 1 件ずつ順に流す。
+    /// 貼り付けは即座には終わらないので、Enter は少し置いてから送り、次の送信はそれを待つ
+    /// (待たずに続けると、長い文の途中に次の行が割り込んで混ざる。3500 字で再現。2026-09-18 実測)。
+    private var sendQueue: [(String, Bool)] = []
+    private var sending = false
+
+    func enqueue(text: String, enter: Bool) {
+        sendQueue.append((text, enter))
+        pump()
+    }
+
+    private func pump() {
+        guard !sending, !sendQueue.isEmpty else { return }
+        sending = true
+        let (text, enter) = sendQueue.removeFirst()
+        _ = view.paste(text: text)
+        let wait = min(0.8, 0.08 + Double(text.count) / 6000.0)
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self else { return }
+            if enter { _ = self.view.sendKey(.enter) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self.sending = false
+                self.pump()
+            }
+        }
     }
 
     /// 端末のプロセスは libghostty が起こすので pid は見えない。このアプリの子(login ラッパー)のうち、
@@ -368,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         NSApp.activate(ignoringOtherApps: true)
         startServerThenLoad()
         // 右の端末は空にしない: iTerm と同じく、起動したらシェルを 1 枚開いて打てる状態にする(復元の試験中は除く)
-        if ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_NO_SHELL"] == nil && pm.panes.isEmpty {
+        if ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_SWITCH_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_NO_SHELL"] == nil && pm.panes.isEmpty {
             pm.open(kind: "shell", cwd: HOME, command: nil)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.offerHookIfNeeded() }
@@ -478,7 +509,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             } else if let text = b["text"] as? String, !text.isEmpty, text.count <= 4000 {
                 let enter = (b["enter"] as? Bool) ?? true
                 if text.count == 1, !enter, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
-                else { _ = p.view.paste(text: text); if enter { _ = p.view.sendKey(.enter) } }
+                else { p.enqueue(text: text, enter: enter) }
             }
         case "run":
             // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
@@ -548,7 +579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func offerHookIfNeeded(force: Bool = false) {
         let declined = STATE_DIR + "/hook-declined"
         if !force && FileManager.default.fileExists(atPath: declined) { return }
-        if ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"] != nil { return }
+        if SELF_TEST { return }
         runHook("--check") { rc, _ in
             guard rc != 0 || force else { return }
             if rc == 0 { let a = NSAlert(); a.messageText = L("The Claude Code hook is already installed.", "Claude Code の hook は入っています。"); a.runModal(); return }
@@ -628,7 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ s: NSApplication) -> NSApplication.TerminateReply {
         let busy = pm.panes.filter { $0.kind != "shell" }.count
-        if busy == 0 || ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] != nil || ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"] != nil { return .terminateNow }
+        if busy == 0 || SELF_TEST { return .terminateNow }
         let a = NSAlert(); a.messageText = L("\(busy) AI terminal(s) are open", "AI の端末が \(busy) 枚開いています")
         a.informativeText = L("Quitting stops the sessions inside them (you can restore them next time with Restore last terminals).", "終了すると端末の中のセッションも止まります(次回「前回の端末を復元」で再開できます)。")
         a.addButton(withTitle: L("Quit", "終了する")); a.addButton(withTitle: L("Cancel", "やめる"))
