@@ -549,7 +549,14 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', '予約（アプリを開いている間に走ります）': 'Scheduled (runs while this app is open)',
+  '無人ジョブ': 'Unattended jobs',
+  'この依頼を、並行できる小さな仕事に分けますか？（分けた案を見てから選べます。いいえ＝そのまま 1 本で任せる）':
+    'Split this into tasks that can run in parallel? (You will see the plan before anything runs. No = delegate as one.)',
+  '分け方を考えています…': 'Working out how to split it…', '分けられませんでした': 'Could not split it',
+  'この分け方で同時に動かします。走らせる番号をカンマで（空欄＝全部・取り消しは Esc）':
+    'Run these in parallel. Numbers to run, comma separated (empty = all, Esc = cancel)',
+  '走らせるものがありません': 'Nothing selected', '件を同時に走らせました': ' started in parallel',
+  '分けて同時に': 'Split in parallel', '終わり': 'done', '予約（アプリを開いている間に走ります）': 'Scheduled (runs while this app is open)',
   '止めています': 'paused', '分ごと': ' min', '止める': 'pause', '再開': 'resume', '消す': 'delete', '予約する': 'Schedule',
   '例: 今日の失敗したジョブをまとめて': 'e.g. summarise today\u2019s failed jobs',
   '時刻(HH:MM)を入れると毎日その時刻に。アプリが閉じている間は走りません。走った仕事は普通のカードとして出ます。':
@@ -651,10 +658,13 @@ async function renderProject(frameKey) {
       <div class="opts"><button class="primary" id="pjSave">${T('保存')}</button><span id="pjMsg" class="legend"></span></div></div>
     ${crons.length ? `<h3>${T('予約')}</h3><div class="acct">${crons.map(c => `<div class="kvrow"><span>${esc(hhmm(c.next_at))} <code>${esc(c.cron)}</code>${c.recurring ? ' ↻' : ''}</span><span>${esc(c.prompt)}</span></div>`).join('')}</div>` : ''}
     ${(dg.rows || []).length ? `<h3>${T('任せた仕事')} <span class="legend">${dg.rows.length}${T('件')}</span></h3>
+      ${(() => { const gs = {}; (dg.rows || []).forEach(g => { if (g.group) { (gs[g.group] = gs[g.group] || []).push(g); } });
+        return Object.entries(gs).map(([gid, rows]) => { const done = rows.filter(g => { const m = delegResult(g, live, past); return m.node && !m.node.live; }).length;
+          return `<div class="sub">${T('分けて同時に')} ${rows.length}${T('件')} — ${T('終わり')} ${done}/${rows.length}</div>`; }).join(''); })()}
       <div class="pjlist">${dg.rows.map(g => { const m = delegResult(g, live, past);
         return `<div class="pjrow ${m.node && m.node.live ? 'live' : ''}"${m.node ? ` data-open="${esc(m.node.id)}"` : ''}>
           <div class="pjw">${esc(fmtT(g.at))}</div>
-          <div class="pjt">${esc(String(DEMO ? pick(DEMO_TASKS, 'dg' + g.at) : g.text).slice(0, 90))}</div>
+          <div class="pjt">${g.group ? '<span class="tchip">' + T('束') + '</span> ' : ''}${esc(String(DEMO ? pick(DEMO_TASKS, 'dg' + g.at) : (g.title || g.text)).slice(0, 90))}</div>
           <div class="pjs">${esc(g.ai || '')}${g.profile ? '(' + esc(DEMO ? 'demo' : g.profile) + ')' : ''} · ${esc(m.label)}</div></div>`; }).join('')}</div>` : ''}
     <h3>${T('予約（アプリを開いている間に走ります）')}</h3>
     <div class="acct">
@@ -721,7 +731,8 @@ function delegResult(g, live, past) {
   return {node: n, label: `${T('終了')} · ${String(s0.last_prompt || s0.title || '').slice(0, 30)}`};
 }
 async function openDelegate(frameKey) {
-  // 案件に仕事を任せる: 空いている AI を選び、共通の指示つきで新しい端末を起こして依頼文を渡す
+  // 案件に仕事を任せる: 空いている AI を選び、共通の指示つきで新しい端末を起こして依頼文を渡す。
+  // 長い依頼は「分けて同時に」も選べる(分解案は必ず人が見てから動かす)
   const f = (window._frames || []).find(x => x.key === frameKey); if (!f) return;
   const cwds = f.nodes.map(n => (n.s || n.r || {}).cwd).filter(Boolean);
   const cwd = cwds.sort((a, b) => cwds.filter(x => x === b).length - cwds.filter(x => x === a).length)[0] || '';
@@ -730,10 +741,36 @@ async function openDelegate(frameKey) {
   if (!pick.ai) { say(`${T('いま任せられる AI がありません')}: ${pick.why}`, true); alert(`${T('いま任せられる AI がありません')}\n${pick.why}`); return; }
   const text = prompt(`${label} ${T('に任せる仕事')}（${pick.ai}${pick.profile ? ' / ' + pick.profile : ''}・${pick.why}）`, '');
   if (!text || !text.trim()) return;
-  const body = {key: frameKey.slice(2), cwd, ai: pick.ai, profile: pick.profile || '', text: text.trim().slice(0, 4000)};
+  const one = {key: frameKey.slice(2), cwd, ai: pick.ai, profile: pick.profile || '', text: text.trim().slice(0, 4000)};
+  if (confirm(T('この依頼を、並行できる小さな仕事に分けますか？（分けた案を見てから選べます。いいえ＝そのまま 1 本で任せる）'))) {
+    const ok = await planAndRun(frameKey, one);
+    if (ok) return;
+  }
+  await runDelegation(frameKey, one);
+}
+async function runDelegation(frameKey, body) {
   toApp(Object.assign({type: 'delegate'}, body));
   try { await getJSON('/api/delegations', {method: 'POST', body: JSON.stringify(body)}); } catch (e) { say(String(e), true); }
   if ($('#pTitle') && $('#pTitle').dataset.kind === 'project') renderProject(frameKey);   // 任せた分をすぐ出す
+}
+async function planAndRun(frameKey, base) {
+  // 分解は AI に頼む(時間がかかる)。出た案はそのまま動かさず、選んでもらう
+  say(T('分け方を考えています…'));
+  let r; try { r = await getJSON('/api/plan', {method: 'POST', body: JSON.stringify({text: base.text})}); } catch (e) { r = {ok: false, reason: String(e)}; }
+  if (!r.ok || !(r.tasks || []).length) { say(`${T('分けられませんでした')}: ${r.reason || ''}`, true); return false; }
+  const lines = r.tasks.map((t, i) => `${i + 1}. ${t.title}`).join('\n');
+  const ans = prompt(`${T('この分け方で同時に動かします。走らせる番号をカンマで（空欄＝全部・取り消しは Esc）')}\n\n${lines}`, r.tasks.map((t, i) => i + 1).join(','));
+  if (ans === null) return true;   // 取り消し: 1 本での依頼もしない
+  const want = ans.trim() ? ans.split(',').map(x => parseInt(x.trim(), 10)).filter(n => n >= 1 && n <= r.tasks.length) : r.tasks.map((t, i) => i + 1);
+  if (!want.length) { say(T('走らせるものがありません'), true); return true; }
+  const group = 'g' + Date.now();
+  for (const n of want) {
+    const t = r.tasks[n - 1];
+    await runDelegation(frameKey, Object.assign({}, base, {text: t.prompt, title: t.title, group}));
+    await new Promise(res => setTimeout(res, 400));   // 端末を一度に開きすぎない
+  }
+  say(`${want.length}${T('件を同時に走らせました')}`);
+  return true;
 }
 async function goTab(tab) { if (APP && isAppTab(tab)) { toApp({type: 'focus', tab}); return {ok: true}; } return getJSON('/api/go', {method: 'POST', body: JSON.stringify({tab})}); }
 async function getJSON(u, opt) { opt = opt || {}; opt.headers = Object.assign({'X-Overview': '1'}, opt.headers || {}); const r = await fetch(u, opt); return r.json(); }

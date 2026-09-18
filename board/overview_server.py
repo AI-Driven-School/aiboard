@@ -446,6 +446,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/plan":
+            # まとめ役: 依頼を並行できる小さな仕事に分ける(案を返すだけ。動かすのは人が選んでから)
+            pick = overview.pick_ai(str(body.get("prefer", "")), _acct.get("data"))
+            tasks, why = overview.plan_tasks(str(body.get("text", "")), ai=pick.get("ai"), profile=pick.get("profile", ""))
+            return self._json(200 if tasks else 400, {"ok": bool(tasks), "tasks": tasks, "reason": why,
+                                                      "by": pick.get("ai", ""), "profile": pick.get("profile", "")})
         if path == "/api/schedule":
             op = str(body.get("op", "save"))
             try:

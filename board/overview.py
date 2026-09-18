@@ -21,6 +21,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -427,6 +428,71 @@ def notes_path(key):
     return os.path.join(d, safe_key(key) + ".notes.md")
 
 
+# ------------------------------------------------------------ まとめ役 ----
+PLAN_MAX = 5
+PLAN_PROMPT = """あなたは仕事を分解する係です。次の依頼を、**並行して別々のセッションで進められる**小さな仕事に分けてください。
+
+規則:
+- 1〜{n} 件。分ける必要が無ければ 1 件でよい
+- 互いに依存しない(順番に実行しないと成り立たないものは 1 件にまとめる)
+- 各件は「その 1 件だけ読めば作業を始められる」文にする
+- 出力は **JSON 配列だけ**。説明や ``` は書かない
+- 形: [{{"title": "20 字以内の見出し", "prompt": "その仕事への指示"}}]
+
+依頼:
+{text}
+"""
+
+
+def plan_tasks(text, ai=None, profile="", timeout=150):
+    """依頼を並行できる小さな仕事に分ける。返り値 (件のリスト, 理由)。
+
+    分解そのものを AI に頼むので、**実行はしない**。出た案は盤で人が選んでから動かす。
+    """
+    text = str(text or "").strip()
+    if not (1 <= len(text) <= 4000):
+        return [], "依頼文は 1〜4000 字"
+    cmd = os.environ.get("AIBOARD_PLAN_CMD")   # 試験用: モデルを呼ばずに決まった答えを返す
+    prompt = PLAN_PROMPT.format(n=PLAN_MAX, text=text)
+    env = dict(os.environ)
+    if cmd:
+        argv = ["/bin/zsh", "-lc", cmd]
+    else:
+        if profile:
+            env["CLAUDE_CONFIG_DIR"] = os.path.join(HOME, ".claude-profiles", profile)
+        else:
+            env.pop("CLAUDE_CONFIG_DIR", None)
+        argv = ["/bin/zsh", "-lc", "command claude --model claude-haiku-4-5-20251001 -p " + shlex.quote(prompt)]
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL, env=env)   # stdin を閉じないと警告が本文に混ざる
+    except subprocess.TimeoutExpired:
+        return [], f"分解が {timeout} 秒で返らなかった"
+    out = (r.stdout or "").strip()
+    if r.returncode != 0 and not out:
+        return [], ((r.stderr or "").strip().splitlines() or ["失敗"])[-1][:160]
+    m = re.search(r"\[.*\]", out, re.S)
+    if not m:
+        return [], "分解の答えが JSON 配列でない: " + out[:120]
+    try:
+        rows = json.loads(m.group(0))
+    except ValueError as e:
+        return [], f"分解の答えを読めない: {e}"
+    if not isinstance(rows, list) or not rows:
+        return [], "分解の答えが空"
+    tasks = []
+    for i, x in enumerate(rows[:PLAN_MAX]):
+        if not isinstance(x, dict):
+            continue
+        p = str(x.get("prompt") or "").strip()
+        if not p:
+            continue
+        tasks.append({"title": (str(x.get("title") or "").strip() or p)[:40], "prompt": p[:4000]})
+    if not tasks:
+        return [], "分解の答えに仕事が無い"
+    return tasks, ""
+
+
 # ---------------------------------------------------------------- 予約 ----
 # 「毎朝 6 時にこれを」を盤から作る。crontab や launchd は触らない(再起動で消える・TCC で読めない場所がある)。
 # 代わりにアプリが開いている間に見張って走らせる。走った仕事は普通のセッションとして盤に出る。
@@ -582,7 +648,9 @@ def add_delegation(key, row, keep=100):
            "text": str(row.get("text", ""))[:4000],
            "ai": str(row.get("ai", ""))[:40],
            "profile": str(row.get("profile", ""))[:40],
-           "cwd": str(row.get("cwd", ""))[:400]}
+           "cwd": str(row.get("cwd", ""))[:400],
+           "group": str(row.get("group", ""))[:40],      # 分解して同時に出した仕事は同じ束
+           "title": str(row.get("title", ""))[:80]}
     if not rec["text"]:
         raise ValueError("依頼文が空")
     rows = read_delegations(key, limit=keep) + [rec]

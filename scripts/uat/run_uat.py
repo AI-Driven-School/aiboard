@@ -2101,6 +2101,11 @@ def bd17(ctx):
             f"・押すと {r['opened']} 枚に開き、もう一度で戻る・検索中は {r['searched']} 枚")
 
 
+def shlex_quote(v):
+    import shlex as _s
+    return _s.quote(v)
+
+
 def safe_name(key):
     ok = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
     return "".join(c if c in ok else "_" for c in str(key))[:64]
@@ -2285,6 +2290,82 @@ def sc04(ctx):
         for j in [x for x in o.read_schedule() if x.get("key") == key]:
             o.delete_job(j["id"])
     return f"案件 {fk} に予約を作成→一覧に表示→止める→消す(確認ダイアログつき)"
+
+
+@case("PL-01", "分解: 答えが JSON 配列でない・空・多すぎ・壊れている時は 1 件も動かさず理由を返す")
+def pl01(ctx):
+    import importlib
+    import overview as o
+    keep = os.environ.get("AIBOARD_PLAN_CMD")
+    good = '[{"title":"索引","prompt":"索引を作り直す"},{"title":"照合","prompt":"件数を照合する"}]'
+    many = json.dumps([{"title": f"t{i}", "prompt": f"仕事 {i}"} for i in range(9)], ensure_ascii=False)
+    cases = [
+        ("普通", f"echo {shlex_quote(good)}", 2, ""),
+        ("前後に説明", f"echo {shlex_quote('はい、分けました:' + good + ' 以上です')}", 2, ""),
+        ("JSON でない", "echo こんにちは", 0, "JSON"),
+        ("空の配列", "echo '[]'", 0, "空"),
+        ("多すぎ", f"echo {shlex_quote(many)}", 5, ""),        # 5 件で打ち切る
+        ("prompt が無い", """echo '[{"title":"x"}]'""", 0, "仕事が無い"),
+        ("落ちた", "echo 認証エラー >&2; exit 1", 0, "認証"),
+    ]
+    bad = {}
+    try:
+        for name, cmd, n, why in cases:
+            os.environ["AIBOARD_PLAN_CMD"] = cmd
+            importlib.reload(o)
+            tasks, reason = o.plan_tasks("索引を作り直して件数を照合して")
+            if len(tasks) != n or (why and why not in reason):
+                bad[name] = (len(tasks), reason[:60])
+        os.environ["AIBOARD_PLAN_CMD"] = f"echo {shlex_quote(good)}"
+        importlib.reload(o)
+        long_text = "あ" * 4001
+        check(o.plan_tasks(long_text)[0] == [], "4000 字を超える依頼を受けた")
+        check(o.plan_tasks("")[0] == [], "空の依頼を受けた")
+    finally:
+        if keep is None:
+            os.environ.pop("AIBOARD_PLAN_CMD", None)
+        else:
+            os.environ["AIBOARD_PLAN_CMD"] = keep
+        importlib.reload(o)
+    check(not bad, f"分解の結果が期待と違う(件数, 理由) {bad}")
+    return f"{len(cases)} 通り(普通・説明混じり・非 JSON・空・多すぎ・不備・失敗)＋長さの検査"
+
+
+@case("PL-02", "分解して同時に: 選んだ分だけ端末を起こし、同じ束として控えに残る(実行は差し替え)")
+def pl02(ctx):
+    import overview as o
+    key = "pl-uat-" + str(int(time.time()))
+    fake = '[{"title":"索引","prompt":"索引を作り直す"},{"title":"照合","prompt":"件数を照合する"},{"title":"報告","prompt":"結果を書く"}]'
+
+    def route(pg):
+        # 分解は決まった答えに差し替える(本物のモデルを呼ばない)
+        pg.route("**/api/plan", lambda r, req: r.fulfill(status=200, content_type="application/json",
+                 body=json.dumps({"ok": True, "tasks": json.loads(fake), "by": "Claude", "profile": ""})))
+
+    def fn(pg, errs, bl):
+        sent = []
+        pg.evaluate("() => { window.__sent = []; board.setToApp(m => window.__sent.push(m)); }")
+        pg.evaluate("""(k) => { window.confirm = () => true;
+            window.prompt = (msg, def) => msg.indexOf('走らせる番号') >= 0 ? '1,3' : '索引を作り直して件数を照合して報告して'; }""", key)
+        pg.evaluate("""(k) => { const f = (board.frames() || [])[0]; window.__key = f && f.key; }""", key)
+        fk = pg.evaluate("window.__key")
+        pg.evaluate("(fk) => board.openDelegate(fk)", fk)
+        wait_js(pg, "(window.__sent || []).filter(m => m.type === 'delegate').length >= 2", 40)
+        pg.wait_for_timeout(800)
+        return {"sent": pg.evaluate("window.__sent"), "fk": fk}, errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    dele = [m for m in v["sent"] if m.get("type") == "delegate"]
+    check(len(dele) == 2, f"選んだ 2 件だけ動かすはずが {len(dele)} 件 {[d.get('title') for d in dele]}")
+    check([d.get("title") for d in dele] == ["索引", "報告"], f"選んだ番号と違う {[d.get('title') for d in dele]}")
+    check(len({d.get("group") for d in dele}) == 1 and all(d.get("group") for d in dele), f"束が揃っていない {dele}")
+    pkey = v["fk"][2:]
+    mine = [r for r in o.read_delegations(pkey) if r.get("group") == dele[0]["group"]]
+    check(len(mine) == 2, f"控えに残っていない {len(mine)}")
+    left = [x for x in o.read_delegations(pkey) if x.get("group") != dele[0]["group"]]
+    with open(o.deleg_path(pkey), "w", encoding="utf-8") as f:   # 試験で足した分を戻す
+        json.dump(left, f, ensure_ascii=False)
+    return f"3 件の案から 1,3 を選んで 2 件だけ起動・同じ束 {dele[0]['group']}・控えにも 2 件"
 
 
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
