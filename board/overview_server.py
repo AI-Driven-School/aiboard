@@ -322,6 +322,9 @@ class Handler(BaseHTTPRequestHandler):
                 key = q.get("key", "")
                 self._json(200, {"ok": True, "key": key, "text": overview.read_notes(key) if key else "",
                                  "instructions": (overview.groups().get(key) or {}).get("instructions", "")})
+            elif path == "/api/delegations":
+                key = q.get("key", "")
+                self._json(200, {"ok": True, "key": key, "rows": overview.read_delegations(key) if key else []})
             elif path == "/api/pick":
                 now = time.time()
                 if not _login.get("data") or now - _login.get("t", 0) > 120:
@@ -437,6 +440,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/delegations":
+            try:
+                rec = overview.add_delegation(str(body.get("key", "")), body)
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
+            return self._json(200, {"ok": True, "row": rec})
         if path == "/api/groups":
             try:
                 saved = overview.save_groups(body.get("groups") or {}, {c["id"] for c in overview.client_defs()})

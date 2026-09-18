@@ -427,6 +427,51 @@ def notes_path(key):
     return os.path.join(d, safe_key(key) + ".notes.md")
 
 
+def deleg_path(key):
+    import aiboard_paths as ap
+    d = ap.data("projects")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, safe_key(key) + ".delegations.json")
+
+
+def read_delegations(key, limit=30):
+    """その案件で「任せた仕事」の控え。新しい順。無ければ空。
+
+    任せた後どうなったかが盤に戻ってこなかったので、依頼した事実をここに残し、
+    経過(会話)と突き合わせて結果を出す。
+    """
+    try:
+        with open(deleg_path(key), encoding="utf-8") as f:
+            rows = json.load(f)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(rows, list):
+        return []
+    return sorted([r for r in rows if isinstance(r, dict)], key=lambda r: r.get("at") or 0, reverse=True)[:limit]
+
+
+def add_delegation(key, row, keep=100):
+    if not isinstance(key, str) or not (1 <= len(key) <= 80):
+        raise ValueError("案件の名前が不正")
+    if not isinstance(row, dict):
+        raise ValueError("控えの形が不正")
+    rec = {"at": time.time(),
+           "text": str(row.get("text", ""))[:4000],
+           "ai": str(row.get("ai", ""))[:40],
+           "profile": str(row.get("profile", ""))[:40],
+           "cwd": str(row.get("cwd", ""))[:400]}
+    if not rec["text"]:
+        raise ValueError("依頼文が空")
+    rows = read_delegations(key, limit=keep) + [rec]
+    rows = sorted(rows, key=lambda r: r.get("at") or 0)[-keep:]
+    p = deleg_path(key)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False)
+    os.replace(tmp, p)
+    return rec
+
+
 def read_notes(key):
     """案件の申し送り(次に入る人・AI への引き継ぎ)。無ければ空。"""
     try:

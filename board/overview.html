@@ -549,7 +549,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', '無人実行': 'Unattended', 'の無人実行。クリックで展開': 'unattended runs. Click to expand', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
+  '無人ジョブ': 'Unattended jobs', '任せた仕事': 'Delegated', '結果待ち': 'waiting for a result', '無人実行': 'Unattended', 'の無人実行。クリックで展開': 'unattended runs. Click to expand', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
   'tour.1.t': 'This is your board', 'tour.1.b': 'Each running Claude Code or Codex session is a card. Squares are clients, dots are models. Drag to pan, wheel to zoom, F fits everything. Switch to History to see the last 30 days.',
   'tour.2.t': 'Your turn', 'tour.2.b': 'This number is how many agents are waiting for a decision. Click it to zoom to them. In History, a strip at the top lists live sessions by urgency.',
   'tour.3.t': 'Color tells you the state', 'tour.3.b': 'Red = stuck on a permission or question. Yellow = replied, your turn. Green = working. Your Dock badge and macOS notifications tell you too.',
@@ -626,6 +626,7 @@ async function renderProject(frameKey) {
   $('#pTitle').textContent = `${T('案件')}: ${DEMO ? pick(DEMO_PROJECTS, 'w:' + key) : label}`; $('#pTitle').dataset.kind = 'project';
   $('#pBody').innerHTML = T('読込中…');
   let d; try { d = await getJSON('/api/notes?key=' + encodeURIComponent(key)); } catch (e) { $('#pBody').textContent = String(e); return; }
+  let dg = {rows: []}; try { dg = await getJSON('/api/delegations?key=' + encodeURIComponent(key)); } catch (e) {}
   if (mode !== 'history' && !(index.records || []).length) loadIndex();
   const live = (snap.sessions || []).filter(x => (x.project_hint || x.project) === key).map(liveNode);
   const past = (index.records || []).filter(r => (r.project_hint || r.project) === key && !live.some(l => l.id === r.id)).map(pastNode);
@@ -641,6 +642,12 @@ async function renderProject(frameKey) {
       <textarea id="pjNotes" rows="8" placeholder="${esc(T('例: 本番の切替は 9/25 まで凍結。索引の再作成は 20 分かかる。失敗したら logs/index.log を先に見る。'))}">${esc(d.text || '')}</textarea>
       <div class="opts"><button class="primary" id="pjSave">${T('保存')}</button><span id="pjMsg" class="legend"></span></div></div>
     ${crons.length ? `<h3>${T('予約')}</h3><div class="acct">${crons.map(c => `<div class="kvrow"><span>${esc(hhmm(c.next_at))} <code>${esc(c.cron)}</code>${c.recurring ? ' ↻' : ''}</span><span>${esc(c.prompt)}</span></div>`).join('')}</div>` : ''}
+    ${(dg.rows || []).length ? `<h3>${T('任せた仕事')} <span class="legend">${dg.rows.length}${T('件')}</span></h3>
+      <div class="pjlist">${dg.rows.map(g => { const m = delegResult(g, live, past);
+        return `<div class="pjrow ${m.node && m.node.live ? 'live' : ''}"${m.node ? ` data-open="${esc(m.node.id)}"` : ''}>
+          <div class="pjw">${esc(fmtT(g.at))}</div>
+          <div class="pjt">${esc(String(DEMO ? pick(DEMO_TASKS, 'dg' + g.at) : g.text).slice(0, 90))}</div>
+          <div class="pjs">${esc(g.ai || '')}${g.profile ? '(' + esc(DEMO ? 'demo' : g.profile) + ')' : ''} · ${esc(m.label)}</div></div>`; }).join('')}</div>` : ''}
     <h3>${T('この案件の経過')} <span class="legend">${rows.length}${T('件')}</span></h3>
     <div class="pjlist">${rows.map(n => {
       const s0 = n.s || n.r || {}, when = n.live ? T('いま') : fmtT(n.t);
@@ -659,6 +666,19 @@ async function renderProject(frameKey) {
   if ($('#pjAsk')) $('#pjAsk').onclick = () => openDelegate(frameKey);
   $('#pBody').querySelectorAll('.pjrow[data-open]').forEach(el => el.onclick = () => select(el.dataset.open));
 }
+function delegResult(g, live, past) {
+  // 任せた後にその場所で始まった会話を、いちばん近いものから 1 つ選ぶ(±10 分以内)。無ければ「結果待ち」
+  const cands = [...live, ...past].filter(n => {
+    const s0 = n.s || n.r || {};
+    const started = n.live ? (s0.started || n.t) : ((s0.start != null) ? s0.start : n.t);
+    return (!g.cwd || s0.cwd === g.cwd) && started != null && started >= g.at - 60 && started <= g.at + 600;
+  }).sort((a, b) => Math.abs(((a.s || a.r || {}).started || a.t) - g.at) - Math.abs(((b.s || b.r || {}).started || b.t) - g.at));
+  const n = cands[0];
+  if (!n) return {node: null, label: T('結果待ち')};
+  const s0 = n.s || n.r || {};
+  if (n.live) return {node: n, label: `${TS(s0.state || '')}${s0.doing ? ' · ' + String(s0.doing).slice(0, 30) : ''}`};
+  return {node: n, label: `${T('終了')} · ${String(s0.last_prompt || s0.title || '').slice(0, 30)}`};
+}
 async function openDelegate(frameKey) {
   // 案件に仕事を任せる: 空いている AI を選び、共通の指示つきで新しい端末を起こして依頼文を渡す
   const f = (window._frames || []).find(x => x.key === frameKey); if (!f) return;
@@ -669,7 +689,10 @@ async function openDelegate(frameKey) {
   if (!pick.ai) { say(`${T('いま任せられる AI がありません')}: ${pick.why}`, true); alert(`${T('いま任せられる AI がありません')}\n${pick.why}`); return; }
   const text = prompt(`${label} ${T('に任せる仕事')}（${pick.ai}${pick.profile ? ' / ' + pick.profile : ''}・${pick.why}）`, '');
   if (!text || !text.trim()) return;
-  toApp({type: 'delegate', key: frameKey.slice(2), cwd, ai: pick.ai, profile: pick.profile || '', text: text.trim().slice(0, 4000)});
+  const body = {key: frameKey.slice(2), cwd, ai: pick.ai, profile: pick.profile || '', text: text.trim().slice(0, 4000)};
+  toApp(Object.assign({type: 'delegate'}, body));
+  try { await getJSON('/api/delegations', {method: 'POST', body: JSON.stringify(body)}); } catch (e) { say(String(e), true); }
+  if ($('#pTitle') && $('#pTitle').dataset.kind === 'project') renderProject(frameKey);   // 任せた分をすぐ出す
 }
 async function goTab(tab) { if (APP && isAppTab(tab)) { toApp({type: 'focus', tab}); return {ok: true}; } return getJSON('/api/go', {method: 'POST', body: JSON.stringify({tab})}); }
 async function getJSON(u, opt) { opt = opt || {}; opt.headers = Object.assign({'X-Overview': '1'}, opt.headers || {}); const r = await fetch(u, opt); return r.json(); }
@@ -1654,7 +1677,7 @@ setInterval(loadIndex, 300000);
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
 window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
   frames: () => window._frames, vis: () => window._vis, snap: () => snap,
-  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index};   // 試験用: いまの snap で上のバーだけ描き直す
+  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

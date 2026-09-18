@@ -2085,6 +2085,73 @@ def bd17(ctx):
             f"・押すと {r['opened']} 枚に開き、もう一度で戻る・検索中は {r['searched']} 枚")
 
 
+def safe_name(key):
+    ok = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    return "".join(c if c in ok else "_" for c in str(key))[:64]
+
+
+@case("DG-03", "任せた仕事が案件の画面に残り、その後に始まった会話と結び付いて結果が出る")
+def dg03(ctx):
+    key = "dg-uat-" + str(int(time.time()))
+    origin = {"Origin": BASE.rstrip("/")}
+    # 控えは POST でしか作らない(読むだけの GET で空・形の違う依頼は 400)
+    st, d, _ = http(f"/api/delegations?key={key}")
+    check(st == 200 and d["rows"] == [], f"最初から控えがある {d}")
+    st, bad, _ = http("/api/delegations", "POST", {"key": key, "text": ""}, headers=origin)
+    check(st == 400, f"空の依頼を受けた {st} {bad}")
+    st, r1, _ = http("/api/delegations", "POST",
+                     {"key": key, "text": "索引を作り直して件数を照合して", "ai": "Claude", "profile": "som", "cwd": "/tmp/dg-uat"},
+                     headers=origin)
+    check(st == 200 and r1["ok"], f"控えを作れない {r1}")
+    st, d, _ = http(f"/api/delegations?key={key}")
+    check(len(d["rows"]) == 1 and d["rows"][0]["text"].startswith("索引"), f"控えの中身 {d['rows']}")
+    at = d["rows"][0]["at"]
+
+    # 盤の突き合わせ: 任せた後に同じ場所で始まった会話を結果として出す / 何も無ければ「結果待ち」
+    def fn(pg, errs, bl):
+        js = """(g) => {
+          const mk = (started, live) => ({live: live, id: 'x' + started, t: started,
+            s: {cwd: '/tmp/dg-uat', started: started, state: '作業中', doing: '索引を作り直しています'},
+            r: {cwd: '/tmp/dg-uat', start: started, last_prompt: '照合まで終えた'}});
+          const before = mk(g.at - 3600, true), after = mk(g.at + 120, true), past = mk(g.at + 60, false);
+          return {none: board.delegResult(g, [], []).label,
+                  onlyBefore: board.delegResult(g, [before], []).label,
+                  live: board.delegResult(g, [after], []).label,
+                  livePicked: (board.delegResult(g, [after], []).node || {}).id,
+                  past: board.delegResult(g, [], [past]).label,
+                  otherCwd: board.delegResult(Object.assign({}, g, {cwd: '/tmp/other'}), [after], []).label}; }"""
+        return pg.evaluate(js, {"at": at, "cwd": "/tmp/dg-uat", "text": "x", "ai": "Claude"}), errs
+    v, errs = with_page(ctx, fn, "?lang=ja")
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(v["none"] == "結果待ち" and v["onlyBefore"] == "結果待ち", f"任せる前の会話を結果にした {v}")
+    check("作業中" in v["live"] and v["livePicked"], f"任せた後の会話を結果にできない {v}")
+    check("終了" in v["past"], f"終わった会話の結果 {v['past']!r}")
+    check(v["otherCwd"] == "結果待ち", f"別の場所の会話を結果にした {v['otherCwd']!r}")
+    # 案件の画面に「任せた仕事」として出るか(実在する枠で確かめる)
+    def fn2(pg, errs, bl):
+        fk = pg.evaluate("((board.frames() || []).find(f => f.key.startsWith('p:')) || {}).key")
+        if not fk:
+            return None, errs
+        return fk, errs
+    fk, errs = with_page(ctx, fn2, "?lang=ja")
+    shown = None
+    if fk:
+        http("/api/delegations", "POST", {"key": fk[2:], "text": "盤に出るかの確認", "ai": "Codex", "cwd": "/tmp/dg-uat"}, headers=origin)
+
+        def fn3(pg, errs2, bl):
+            pg.evaluate("(k) => board.renderProject(k)", fk)
+            wait_js(pg, "document.querySelector('#pBody') && document.querySelector('#pBody').textContent.length > 20", 30)
+            pg.wait_for_timeout(600)
+            return pg.evaluate("document.querySelector('#pBody').innerText"), errs2
+        body, errs = with_page(ctx, fn3, "?lang=ja")
+        shown = ("任せた仕事" in body, "盤に出るかの確認" in body, "結果待ち" in body or "作業中" in body or "終了" in body)
+        os.remove(os.path.join(ctx["data"], "projects", safe_name(fk[2:]) + ".delegations.json"))
+        check(all(shown[:2]), f"案件の画面に出ていない(見出し/依頼文) {shown}")
+    os.remove(os.path.join(ctx["data"], "projects", key + ".delegations.json"))
+    return ("控えの作成/読み出し/形の検査 + 突き合わせ 5 通り(前の会話・別の場所は結果にしない)"
+            + (f" / 案件 {fk} の画面に見出しと依頼文と結果 {shown}" if fk else " / 枠が無いので画面の確認は省略"))
+
+
 @case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
 def tu01(ctx):
     import cs
