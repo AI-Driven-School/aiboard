@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ja"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AIBoard — 判断待ち</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f7f9; --fg:#14161a; --sub:#5b6270; --card:#fff; --line:#e3e6ec; --red:#e5484d; --green:#30a46c; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111317; --fg:#e8eaee; --sub:#9aa3b2; --card:#181b21; --line:#282d36; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+         padding: env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0); }
+  header { display:flex; align-items:baseline; gap:8px; padding:14px 0 6px; }
+  h1 { font-size:17px; margin:0; } .sub { color:var(--sub); font-size:12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:12px; margin:10px 0; }
+  .who { font-weight:600; } .doing { color:var(--sub); font-size:13px; margin:6px 0 10px; overflow-wrap:anywhere; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  button { font:inherit; padding:10px 14px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); }
+  button.p { background:var(--green); border-color:var(--green); color:#fff; }
+  button.n { border-color:var(--red); color:var(--red); }
+  input { font:inherit; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--card); color:var(--fg); width:100%; margin-top:8px; }
+  .empty { color:var(--sub); padding:24px 0; }
+  .msg { position:sticky; bottom:8px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:8px 12px; font-size:13px; }
+</style></head>
+<body>
+<header><h1>判断待ち</h1><span class="sub" id="when"></span></header>
+<div id="list"></div>
+<div class="msg" id="msg" hidden></div>
+<script>
+// 同じ LAN の中からだけ。合言葉は URL の ?k= で受け取り、この端末にだけ覚える。
+const key = new URLSearchParams(location.search).get('k') || sessionStorage.getItem('k') || '';
+if (key) sessionStorage.setItem('k', key);
+const H = {'X-Overview': '1', 'X-Key': key};
+const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function say(t, bad) { const m = document.querySelector('#msg'); m.hidden = false; m.textContent = t; m.style.color = bad ? 'var(--red)' : ''; setTimeout(() => { m.hidden = true; }, 4000); }
+async function send(s, body) {
+  try {
+    const r = await fetch('/api/send', {method: 'POST', headers: Object.assign({'Content-Type': 'application/json'}, H),
+      body: JSON.stringify(Object.assign({tab: s.tab, sid: s.sid}, body))}).then(x => x.json());
+    say(r.ok ? '送りました' : ('送れません: ' + (r.reason || '')), !r.ok);
+  } catch (e) { say(String(e), true); }
+  setTimeout(pull, 800);
+}
+function card(s) {
+  const d = document.createElement('div'); d.className = 'card';
+  d.innerHTML = `<div class="who">${esc((s.model_style && s.model_style.label) || s.ai || 'AI')} · ${esc(s.project || s.tab)}</div>
+    <div class="doing">${esc(s.doing || s.task || '判断を待っています')}</div>
+    <div class="row"><button class="p" data-k="1">1 はい</button><button data-k="2">2 はい、今後も</button>
+      <button class="n" data-k="esc">Esc いいえ</button></div>
+    <input placeholder="自由に答える…（Enter で送信）">`;
+  d.querySelectorAll('button').forEach(b => b.onclick = () => send(s, b.dataset.k === 'esc' ? {key: 'esc'} : {text: b.dataset.k, enter: false}));
+  const inp = d.querySelector('input');
+  inp.addEventListener('keydown', ev => { if (ev.key !== 'Enter' || ev.isComposing || ev.keyCode === 229) return;
+    const v = inp.value.trim(); if (!v) return; inp.value = ''; send(s, {text: v, enter: true}); });
+  return d;
+}
+async function pull() {
+  let d;
+  try { d = await fetch('/api/snapshot', {headers: H}).then(x => x.json()); }
+  catch (e) { document.querySelector('#list').innerHTML = `<div class="empty">つながりません: ${esc(e)}</div>`; return; }
+  if (d.ok === false) { document.querySelector('#list').innerHTML = `<div class="empty">${esc(d.reason || '見られません')}</div>`; return; }
+  const waiting = (d.sessions || []).filter(s => s.state === '確認待ち');
+  document.querySelector('#when').textContent = new Date().toLocaleTimeString() + ' 現在';
+  const list = document.querySelector('#list');
+  list.textContent = '';
+  if (!waiting.length) { list.innerHTML = '<div class="empty">待っているものはありません。</div>'; return; }
+  waiting.forEach(s => list.appendChild(card(s)));
+}
+pull(); setInterval(pull, 5000);
+</script>
+</body></html>

@@ -2368,6 +2368,94 @@ def pl02(ctx):
     return f"3 件の案から 1,3 を選んで 2 件だけ起動・同じ束 {dele[0]['group']}・控えにも 2 件"
 
 
+@case("RM-02", "遠隔の判定: 自分の機械は素通し・外からは切ってあれば全部拒否・合言葉が合っても決まった道だけ")
+def rm02(ctx):
+    import overview as o
+    off = {"enabled": False, "token": ""}
+    on = {"enabled": True, "token": "s3cret-token-uat"}
+    rows = [
+        ("自分(127.0.0.1)は素通し", "/api/stop", True, "127.0.0.1", "", off, True),
+        ("自分(::1)も素通し", "/api/stop", True, "::1", "", off, True),
+        ("外から・切ってある", "/api/snapshot", False, "192.168.1.9", "s3cret-token-uat", off, False),
+        ("外から・合言葉なし", "/api/snapshot", False, "192.168.1.9", "", on, False),
+        ("外から・合言葉違い", "/api/snapshot", False, "192.168.1.9", "s3cret-token-uat ", on, False),
+        ("外から・読める道", "/api/snapshot", False, "192.168.1.9", "s3cret-token-uat", on, True),
+        ("外から・小さな画面", "/m", False, "192.168.1.9", "s3cret-token-uat", on, True),
+        ("外から・返事は書ける", "/api/send", True, "192.168.1.9", "s3cret-token-uat", on, True),
+        ("外から・終了は不可", "/api/stop", True, "192.168.1.9", "s3cret-token-uat", on, False),
+        ("外から・起動は不可", "/api/resume", True, "192.168.1.9", "s3cret-token-uat", on, False),
+        ("外から・設定の変更は不可", "/api/remote", True, "192.168.1.9", "s3cret-token-uat", on, False),
+        ("外から・束ね方の変更は不可", "/api/groups", True, "192.168.1.9", "s3cret-token-uat", on, False),
+        ("外から・盤そのものは不可", "/", False, "192.168.1.9", "s3cret-token-uat", on, False),
+        ("127.0.0.x の詐称は素通しでよい(自機内)", "/api/stop", True, "127.0.0.2", "", off, True),
+    ]
+    bad = {}
+    for name, path, write, addr, key, cfg, want in rows:
+        ok, why = o.remote_allowed(path, write, addr, key, cfg=cfg)
+        if ok != want:
+            bad[name] = (ok, why)
+    check(not bad, f"判定が違う(実際, 理由) {bad}")
+    check(o.remote_config()["enabled"] is False, "既定で遠隔が入っている(既定は切ってあること)")
+    return f"{len(rows)} 通りすべて期待どおり(既定は切・合言葉は完全一致・遠隔は一覧と返事だけ)"
+
+
+@case("RM-03", "遠隔を切ってあるうちは LAN に出さない: 待ち受けは 127.0.0.1 だけ")
+def rm03(ctx):
+    import overview as o
+    check(o.remote_config()["enabled"] is False, "この試験は遠隔を切った状態で行う")
+    r = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{PORT}", "-sTCP:LISTEN"], capture_output=True, text=True)
+    lines = [l for l in r.stdout.splitlines()[1:] if l.strip()]
+    check(lines, f"試験サーバの待ち受けが見つからない {r.stdout[:200]}")
+    outside = [l for l in lines if "127.0.0.1" not in l]
+    check(not outside, f"127.0.0.1 以外で待ち受けている: {outside}")
+    st, d, _ = http("/api/remote")
+    check(st == 200 and d["enabled"] is False and not d["token"], f"/api/remote {d}")
+    return f"待ち受け {len(lines)} 個すべて 127.0.0.1・合言葉は出さない"
+
+
+@case("RM-04", "遠隔を入れた時だけ LAN に出て、合言葉が無ければ 403(実際に LAN の口を開けて確かめる)")
+def rm04(ctx):
+    if not os.environ.get("UAT_REMOTE"):
+        return "SKIP: 実際に LAN の口を開ける試験(UAT_REMOTE=1 のときだけ)"
+    import overview as o
+    import urllib.request
+    import urllib.error
+    ip = (o.remote_urls(PORT)[0].split("//")[1].split(":")[0] if o.remote_urls(PORT) else "")
+    check(ip, "LAN の住所が取れない")
+    def restart():
+        # 待ち受け先が変わるので、入れ替えでなく一度止めてから起こす
+        subprocess.run([sys.executable, os.path.join(BOARD, "overview_server.py"), "stop"],
+                       env=env_for_test(ctx["data"]), capture_output=True, text=True, timeout=60)
+        for _ in range(30):
+            if not subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{PORT}", "-sTCP:LISTEN", "-t"],
+                                  capture_output=True, text=True).stdout.strip():
+                break
+            time.sleep(0.5)
+        start_server(ctx["data"])
+        time.sleep(1.5)
+    cfg = o.remote_set(True)
+    try:
+        restart()
+        base = f"http://{ip}:{PORT}"
+
+        def get(path, key=None):
+            req = urllib.request.Request(base + path, headers={"X-Overview": "1", **({"X-Key": key} if key else {})})
+            try:
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    return r.status, r.read()[:200]
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()[:200]
+        check(get("/api/snapshot")[0] == 403, "合言葉なしで見られた")
+        check(get("/api/snapshot", "wrong-key-uat")[0] == 403, "違う合言葉で見られた")   # ヘッダーは ASCII のみ
+        check(get("/api/snapshot", cfg["token"])[0] == 200, "合言葉が合っても見られない")
+        check(get("/m", cfg["token"])[0] == 200, "小さな画面が出ない")
+        check(get("/", cfg["token"])[0] == 403, "盤そのものが遠隔から開けてしまう")
+    finally:
+        o.remote_set(False)
+        restart()
+    return f"{ip}:{PORT} で 合言葉なし/違い=403・一覧と小さな画面だけ 200・盤は 403(試験後に切り戻した)"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

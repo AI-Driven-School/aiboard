@@ -58,6 +58,7 @@ AIBoard.app (Swift/AppKit)
 ## Privacy: local only
 
 - The board server listens on `127.0.0.1` only, checks `Host` and `Origin`, and rejects cross-site writes.
+- One opt-in exception, off by default: **Remote (same Wi-Fi only)** in Settings. Turning it on binds the board server to the LAN and lets a device that knows the generated key open `/m` — a small page listing what is waiting and answering it. Nothing else is reachable remotely (no stopping, starting, or settings), and nothing goes through an outside server. `scripts/prove-local-only.sh` prints whether it is on.
 - The board page is served with a Content-Security-Policy of `default-src 'self'; connect-src 'self'` — the browser engine itself blocks any request to another host.
 - Secrets that appear in transcripts (API keys, tokens) are masked before display.
 - **Measured:** `scripts/prove-local-only.sh` samples every socket of the app and the board server once a second. On 2026-09-18, 90 s with a clean config: **0 connections to anything other than this Mac**. Run it yourself.

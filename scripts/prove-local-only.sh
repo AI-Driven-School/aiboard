@@ -7,6 +7,21 @@ set -u
 SECS=${1:-120}
 OUT="${AIBOARD_DATA:-$HOME/.aiboard}/local-only-proof.txt"
 : > "$OUT"
+# 遠隔(同じ LAN から判断待ちに答える)を入れていれば、その事実を先に書く。
+# 入れていると盤サーバは 0.0.0.0 で待ち受ける(外へ「送る」わけではないが、隠さずに出す)
+CFG="${AIBOARD_DATA:-$HOME/.aiboard}/config.json"
+REMOTE=$(python3 -c "
+import json, sys
+try:
+    print('on' if (json.load(open('$CFG')).get('remote') or {}).get('enabled') else 'off')
+except Exception:
+    print('off')
+")
+if [ "$REMOTE" = "on" ]; then
+  echo "遠隔: 入(同じ LAN から /m と一覧・返事のみ・合言葉つき。待ち受けは 0.0.0.0)" | tee -a "$OUT"
+else
+  echo "遠隔: 切(待ち受けは 127.0.0.1 のみ)" | tee -a "$OUT"
+fi
 pids_of() {
   local app srv
   app=$(pgrep -x AIBoard | tr '\n' ' ')

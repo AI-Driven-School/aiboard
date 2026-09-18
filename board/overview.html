@@ -550,6 +550,14 @@ const EN = {
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
   '無人ジョブ': 'Unattended jobs',
+  '遠隔（同じ Wi-Fi の中だけ）': 'Remote (same Wi-Fi only)', 'スマホから判断待ちに答える': 'Answer from your phone',
+  '入れています': 'on', '切ってあります': 'off', '切る': 'Turn off', '開く場所': 'Open at',
+  'LAN の住所が取れません': 'no LAN address', '切りました': 'Turned off',
+  '入れると、同じ Wi-Fi の中からだけ、合言葉つきで「判断待ちの一覧」と「返事」だけが使えます。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。':
+    'When on, devices on the same Wi-Fi can see what is waiting and answer it, with a key. Stopping, starting and settings stay local. Nothing goes through an outside server.',
+  '同じ Wi-Fi の中から、合言葉を知っている端末だけが「判断待ちの一覧」と「返事」を使えるようになります。よろしいですか？':
+    'Devices on this Wi-Fi that know the key will be able to see what is waiting and answer it. Continue?',
+  '入れました（盤サーバを開き直すと有効になります）': 'Turned on (restart the board server to take effect)',
   'この依頼を、並行できる小さな仕事に分けますか？（分けた案を見てから選べます。いいえ＝そのまま 1 本で任せる）':
     'Split this into tasks that can run in parallel? (You will see the plan before anything runs. No = delegate as one.)',
   '分け方を考えています…': 'Working out how to split it…', '分けられませんでした': 'Could not split it',
@@ -1491,8 +1499,28 @@ async function renderSettings(refresh) {
       <div class="kvrow"><span>${T('遠隔の無人ジョブ')}</span><span>${DEMO ? '—' : (st.remote_hosts.length ? esc(st.remote_hosts.join(', ')) : T('なし'))} <button data-open="${esc(st.config_file)}">config.json</button></span></div>
       <div class="kvrow"><span>${T('データの置き場')}</span><span><code>${esc(DEMO ? '~/.aiboard' : st.data_dir.replace(/^\/Users\/[^/]+/, '~'))}</code></span></div>
       <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
-    </div>`;
+    </div>
+    <h3>${T('遠隔（同じ Wi-Fi の中だけ）')}</h3>
+    <div class="acct" id="rmBox"><div class="sub">${T('読込中…')}</div></div>`;
   const B = $('#pBody');
+  // 遠隔(同一 LAN のみ・合言葉つき)。既定は切ってある。入れる時は何が開くのかを書いてから聞く
+  (async () => {
+    let rm; try { rm = await getJSON('/api/remote'); } catch (e) { rm = {ok: false, reason: String(e)}; }
+    const box = $('#rmBox'); if (!box) return;
+    const on = !!(rm && rm.enabled);
+    box.innerHTML = `<div class="h"><b>${T('スマホから判断待ちに答える')}</b><span class="st"><span class="dot ${on ? 'ok' : ''}"></span>${on ? T('入れています') : T('切ってあります')}</span></div>
+      <div class="sub">${T('入れると、同じ Wi-Fi の中からだけ、合言葉つきで「判断待ちの一覧」と「返事」だけが使えます。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。')}</div>
+      ${on && !DEMO ? `<div class="kvrow"><span>${T('開く場所')}</span><span>${(rm.urls || []).map(u => `<code>${esc(u)}?k=${esc(rm.token)}</code>`).join(' ') || T('LAN の住所が取れません')}</span></div>` : ''}
+      <div class="opts">${on ? `<button id="rmOff">${T('切る')}</button>` : `<button class="primary" id="rmOn">${T('入れる')}</button>`}</div>`;
+    const setRemote = async (enabled) => {
+      if (enabled && !confirm(T('同じ Wi-Fi の中から、合言葉を知っている端末だけが「判断待ちの一覧」と「返事」を使えるようになります。よろしいですか？'))) return;
+      let r; try { r = await getJSON('/api/remote', {method: 'POST', body: JSON.stringify({enabled})}); } catch (e) { r = {ok: false, reason: String(e)}; }
+      say(r.ok ? (enabled ? T('入れました（盤サーバを開き直すと有効になります）') : T('切りました')) : String(r.reason), !r.ok);
+      renderSettings(true);
+    };
+    if ($('#rmOn')) $('#rmOn').onclick = () => setRemote(true);
+    if ($('#rmOff')) $('#rmOff').onclick = () => setRemote(false);
+  })();
   B.querySelectorAll('button[data-run]').forEach(b => b.onclick = () => { const l = d.logins[+b.dataset.run];
     const cmd = b.dataset.kind === 'login' ? (l.ai === 'Codex' ? 'command codex login' : envFor(l) + 'command claude auth login') : (l.ai === 'Codex' ? 'command codex logout' : envFor(l) + 'command claude auth logout');
     if (b.dataset.kind === 'logout' && !confirm(T('ログアウトします。このアカウントで動いているセッションは次の操作から失敗します。'))) return;

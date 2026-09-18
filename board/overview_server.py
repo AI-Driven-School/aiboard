@@ -262,19 +262,33 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _remote_ok(self, write):
+        """自分の機械以外(同じ LAN)からの要求を、遠隔の設定と合言葉で選り分ける。"""
+        addr = self.client_address[0] if self.client_address else ""
+        path, q = self._query()
+        key = self.headers.get("X-Key") or q.get("k", "")
+        ok, why = overview.remote_allowed(path, write, addr, key)
+        if not ok:
+            self._json(403, {"ok": False, "reason": why})
+        return ok
+
     def _guard(self, write):
         """ブラウザ経由の攻撃を塞ぐ(2026-09-17 メイン追加)。
         - Host が 127.0.0.1 / localhost 以外 → DNS リバインディング(攻撃者ドメインを 127.0.0.1 に向ける)で
           会話やターミナル画面を読まれるのを防ぐ
         - 書き込み系(POST)は Origin が自分自身で、かつ独自ヘッダー X-Overview: 1 必須 →
           外部サイトからのフォーム送信・fetch では付けられない(付けるとプリフライトになり、ここは応じない)"""
+        if not self._remote_ok(write):
+            return False
+        addr = self.client_address[0] if self.client_address else ""
         host = (self.headers.get("Host") or "").lower()
-        if host not in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
+        # 自分の機械からは 127.0.0.1 / localhost だけ。遠隔(同じ LAN)は合言葉で通したので Host は問わない
+        if overview.is_loopback(addr) and host not in (f"127.0.0.1:{PORT}", f"localhost:{PORT}"):
             self._json(403, {"ok": False, "reason": "Host が不正"})
             return False
         if write:
             origin = self.headers.get("Origin")
-            if origin not in (None, f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
+            if overview.is_loopback(addr) and origin not in (None, f"http://127.0.0.1:{PORT}", f"http://localhost:{PORT}"):
                 self._json(403, {"ok": False, "reason": "Origin が不正"})
                 return False
             if self.headers.get("X-Overview") != "1":
@@ -304,6 +318,22 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/m":
+                # 遠隔用の小さな画面(判断待ちに答えるだけ)。CSP は盤と同じで、外へはつながらない
+                body = open(os.path.join(HERE, "mobile.html"), "rb").read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Security-Policy", "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                                 "style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; "
+                                 "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
+                self.end_headers()
+                self.wfile.write(body)
+            elif path == "/api/remote":
+                c = overview.remote_config()
+                self._json(200, {"ok": True, "enabled": c["enabled"], "token": c["token"] if c["enabled"] else "",
+                                 "urls": overview.remote_urls(PORT) if c["enabled"] else []})
             elif path == "/api/version":
                 self._json(200, {"ok": True, "stamp": CODE_STAMP, "pid": os.getpid()})
             elif path == "/api/snapshot":
@@ -446,6 +476,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/remote":
+            # 遠隔の入切は自分の機械からだけ(遠隔からこの道は通らない)
+            c = overview.remote_set(bool(body.get("enabled")))
+            return self._json(200, {"ok": True, "enabled": c["enabled"], "token": c["token"] if c["enabled"] else "",
+                                    "urls": overview.remote_urls(PORT) if c["enabled"] else [],
+                                    "restart": "待ち受けの変更は盤サーバの入れ直しで効きます"})
         if path == "/api/plan":
             # まとめ役: 依頼を並行できる小さな仕事に分ける(案を返すだけ。動かすのは人が選んでから)
             pick = overview.pick_ai(str(body.get("prefer", "")), _acct.get("data"))
@@ -497,9 +533,10 @@ def serve():
     threading.Thread(target=snapshot_loop, daemon=True).start()
     if not os.environ.get("OVERVIEW_NO_INDEX"):   # 検証中など、別プロセスが索引を作っている時は止める
         threading.Thread(target=index_loop, daemon=True).start()
-    srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    bind = "0.0.0.0" if overview.remote_config().get("enabled") else HOST   # 遠隔を入れた時だけ LAN に出す
+    srv = ThreadingHTTPServer((bind, PORT), Handler)
     srv.daemon_threads = True
-    sys.stderr.write(f"overview server http://{HOST}:{PORT}/ pid={os.getpid()}\n")
+    sys.stderr.write(f"overview server http://{HOST}:{PORT}/ pid={os.getpid()} bind={bind}\n")
     try:
         srv.serve_forever()
     finally:
@@ -511,7 +548,9 @@ def serve():
 
 def listener_pid():
     """このポートで実際に待ち受けている盤サーバの pid。PID ファイルは別の起動に上書きされ得るので使わない。"""
-    r = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP@{HOST}:{PORT}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
+    # ポートだけで引く: 遠隔を入れると 0.0.0.0 で待ち受けるので、@127.0.0.1 で引くと自分のサーバを見失い、
+    # 止めることも入れ替えることもできなくなる(2026-09-18 実測)
+    r = subprocess.run(["/usr/sbin/lsof", "-nP", f"-iTCP:{PORT}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
     for tok in r.stdout.split():
         cmd = subprocess.run(["/bin/ps", "-o", "command=", "-p", tok], capture_output=True, text=True).stdout
         if "overview_server.py" in cmd and "--serve" in cmd:

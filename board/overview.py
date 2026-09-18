@@ -428,6 +428,81 @@ def notes_path(key):
     return os.path.join(d, safe_key(key) + ".notes.md")
 
 
+# ---------------------------------------------------------------- 遠隔 ----
+# 既定は切ってある。入れると「同じ LAN の中から、合言葉つきで」だけ届く。
+# 読み取りと、判断待ちへの返事だけを通す(終了・起動・設定の変更は通さない)。
+REMOTE_PATHS_READ = ("/m", "/m.js", "/api/snapshot", "/api/conv", "/api/schedule", "/api/version")
+REMOTE_PATHS_WRITE = ("/api/send",)
+
+
+def remote_config():
+    import aiboard_paths as ap
+    c = (ap.config() or {}).get("remote") or {}
+    return {"enabled": bool(c.get("enabled")), "token": str(c.get("token") or "")}
+
+
+def remote_set(enabled, token=None):
+    """遠隔の入切。入れる時に合言葉を作る(呼ぶ側が持っていなければ)。設定ファイルは本人だけが読める形にする。"""
+    import aiboard_paths as ap
+    import secrets
+    p = ap.data("config.json")
+    try:
+        with open(p, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    if enabled:
+        cfg["remote"] = {"enabled": True, "token": token or (cfg.get("remote") or {}).get("token") or secrets.token_urlsafe(24)}
+    else:
+        cfg["remote"] = {"enabled": False, "token": (cfg.get("remote") or {}).get("token", "")}
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=1)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+    ap._cfg = None    # 読み直させる
+    return cfg["remote"]
+
+
+def remote_urls(port):
+    """同じ LAN から開く URL(この機械の LAN 側の住所)。合言葉は付けない(画面で別に見せる)。"""
+    out = []
+    try:
+        r = subprocess.run(["/usr/sbin/ipconfig", "getifaddr", "en0"], capture_output=True, text=True, timeout=5)
+        ip = r.stdout.strip()
+        if ip:
+            out.append(f"http://{ip}:{port}/m")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return out
+
+
+def is_loopback(addr):
+    a = str(addr or "")
+    return a == "::1" or a.startswith("127.") or a.startswith("::ffff:127.")
+
+
+def remote_allowed(path, write, addr, key, cfg=None):
+    """この要求を通してよいか。返り値 (可否, 理由)。
+
+    自分の機械からはこれまでどおり全部通す。外(同じ LAN)からは
+    「遠隔が入っている」「合言葉が合う」「決まった道だけ」の 3 つが揃った時だけ。
+    """
+    if is_loopback(addr):
+        return True, ""
+    c = cfg if cfg is not None else remote_config()
+    if not c.get("enabled"):
+        return False, "遠隔は切ってあります"
+    tok = str(c.get("token") or "")
+    import hmac
+    if not tok or not hmac.compare_digest(tok, str(key or "")):
+        return False, "合言葉が違います"
+    allowed = REMOTE_PATHS_WRITE if write else (REMOTE_PATHS_READ + REMOTE_PATHS_WRITE)
+    if path not in allowed:
+        return False, f"遠隔からは {path} を使えません"
+    return True, ""
+
+
 # ------------------------------------------------------------ まとめ役 ----
 PLAN_MAX = 5
 PLAN_PROMPT = """あなたは仕事を分解する係です。次の依頼を、**並行して別々のセッションで進められる**小さな仕事に分けてください。
