@@ -385,6 +385,18 @@ table.grp td:nth-child(4){white-space:nowrap}
 #grpIn textarea{width:100%;background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:6px;font:12px var(--mono);margin-top:6px}
 table.grp .gc{width:28px;height:22px;padding:0;border:1px solid var(--f-line2);border-radius:4px;background:#262626}
 table.grp .gk{background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:3px 6px;max-width:130px}
+.frame.fold{display:flex;align-items:center;justify-content:space-between;padding:0 12px;cursor:pointer;background:#252525 !important;border-style:solid !important}
+.frame.fold:hover{border-color:#555 !important;background:#2A2A2A !important}
+.frame.fold .fold-l{display:flex;align-items:center;gap:8px;min-width:0}
+.frame.fold .fold-l i{width:10px;height:10px;border-radius:3px;flex:none}
+.frame.fold .fold-l b{font:600 13px inherit;color:var(--f-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frame.fold .fold-r{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--f-ink2);white-space:nowrap}
+.frame.fold .fd{width:7px;height:7px;border-radius:50%;display:inline-block;margin-left:6px}
+.frame.fold .fd.turn{background:var(--f-red)} .frame.fold .fd.yourturn{background:var(--f-yellow)}
+.frame.fold .fd.work{background:var(--f-green)} .frame.fold .fd.past{background:#6E6E6E}
+.frame.fold .fold-x{color:var(--f-ink3);margin-left:4px}
+.frame .ffold{position:absolute;right:6px;top:-22px;width:20px;height:18px;padding:0;border:1px solid var(--f-line2);border-radius:5px;background:#2A2A2A;color:var(--f-ink3);font-size:10px;line-height:16px;cursor:pointer;opacity:0;transition:opacity .1s}
+.frame:hover .ffold{opacity:1}
 #zoomctl{background:#2C2C2C !important;border-color:var(--f-line) !important}
 </style>
 </head>
@@ -475,6 +487,7 @@ const JA = {
   'tour.next': '次へ', 'tour.done': 'わかった', 'tour.skip': 'とばす',
 };
 const EN = {
+  '押すと開く': 'Click to expand', '畳む': 'Collapse',
   'AI に頼む文をコピー': 'Copy a prompt for your agent', '返事を取り込む': 'Paste the answer', '表に反映': 'Fill the table', 'AIBoard からは何も送りません。手元の Claude / Codex に貼って、返ってきた JSON をここに戻します。': 'AIBoard sends nothing. Paste this into your own Claude/Codex and bring the JSON back here.', 'コピーしました。手元の Claude / Codex に貼ってください': 'Copied — paste it into your own Claude or Codex', 'コピーできないので、この文を手で写してください': 'Clipboard blocked — copy this text by hand', 'JSON として読めません': 'Not valid JSON', '表に入れました': 'Filled', '。中身を見てから保存してください': ' — check it, then Save',
   '束ね方（名前・色・顧客）': 'Grouping (name, colour, client)', '自動で決めた持ち場の名前・色・どの顧客か を、ここで上書きできます（空欄なら自動のまま）。': 'Override the name, colour and client of each detected working folder. Leave blank to keep what was detected.', '持ち場': 'Working folder', '件数': 'Sessions', '表示名': 'Name', '色': 'Colour', '顧客': 'Client', '自動': 'auto', '色を使う': 'use this colour', '保存': 'Save', '読み直す': 'Reload', '保存しました': 'Saved', '保存できません': 'Could not save',
   'AI セッションではないので、ここからは送れません（端末で操作します）': 'Not an agent session — use the terminal itself',
@@ -646,6 +659,16 @@ function passes(n) {
 }
 
 // ---------------- 配置 ----------------
+const openFrames = new Set(), shutFrames = new Set();   // 手で開いた枠 / 手で畳んだ枠(自動より強い)
+const COLLAPSED_W = 300, COLLAPSED_H = 64;
+function frameNeeds(f) {   // 畳まれても残したい度合い(大きいほど開いたまま)
+  const s = f.nodes;
+  return (s.some(n => n.live && (n.state === '確認待ち' || n.state === 'codex 停止')) ? 100 : 0)
+       + (s.some(n => n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち')) ? 50 : 0)
+       + (s.some(n => n.live) ? 20 : 0) + (s.some(n => n.id === sel) ? 1000 : 0)
+       + (q && s.some(n => (n.text || '').toLowerCase().includes(q)) ? 200 : 0)
+       + Math.min(10, s.length);
+}
 function layout(nodes) {
   // frame ごとに、生きている→新しい順で並べるが、既に配置済みの sid は動かさない(新規は末尾の空きへ)
   const groups = {};
@@ -673,12 +696,10 @@ function layout(nodes) {
     const maxI = Math.max(...g.map(n => slots[n.id].i));
     const rows = Math.floor(maxI / COLS) + 1;
     const cols = Math.min(COLS, maxI + 1);
-    const w = cols * (CARD_W + GAP) - GAP + FRAME_PAD * 2, h = rows * (CARD_H + GAP) - GAP + FRAME_PAD * 2;
-    if (x + w > ROW_W && x > 0) { x = 0; y += rowH + FRAME_GAP; rowH = 0; }
-    frames.push({key: k, x, y, w, h, nodes: g, sample: g[0], hidden});
-    g.forEach(n => { const i = slots[n.id].i; n.x = x + FRAME_PAD + (i % COLS) * (CARD_W + GAP); n.y = y + FRAME_PAD + Math.floor(i / COLS) * (CARD_H + GAP); });
-    x += w + FRAME_GAP; rowH = Math.max(rowH, h);
+    const fullW = cols * (CARD_W + GAP) - GAP + FRAME_PAD * 2, fullH = rows * (CARD_H + GAP) - GAP + FRAME_PAD * 2;
+    frames.push({key: k, fullW, fullH, nodes: g, sample: g[0], hidden, cols: COLS});
   });
+  placeFrames(frames);
   // macmini フレーム
   const mm = snap?.macmini;
   const jobs = [];
@@ -713,7 +734,7 @@ function render() {
   const vis = all.filter(passes);
   const frames = layout(vis);
   const nodesEl = $('#nodes');
-  const placed = new Set(); frames.forEach(f => f.nodes.forEach(n => placed.add(n.id)));
+  const placed = new Set(); frames.forEach(f => { if (!f.collapsed) f.nodes.forEach(n => placed.add(n.id)); });
   const shown = vis.filter(n => placed.has(n.id));   // ホームの「直近20件」から外れたものは描かない(線も引かない)
   const byId = {}; shown.forEach(n => byId[n.id] = n);
   // エッジ(両端が見えているもの)
@@ -731,7 +752,17 @@ function render() {
     else if (f.key === 'home') { label = T('● 自社・その他（直近）'); sum = frameSummary(f) + (f.hidden ? ` <span class="fmore" data-more="1">${T('さらに表示')} (+${f.hidden})</span>` : homeExpanded ? ` <span class="fmore" data-more="0">${T('直近だけに戻す')}</span>` : ''); }
     else { label = '● ' + f.key.slice(2); sum = frameSummary(f); }
     if (f.w < 420) sum = '';   // 狭い枠では見出しと重なるので要約を出さない
-    items.push(['f:' + f.key, `<div class="frame" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}"><div class="flabel">${color ? `<b style="background:${color}">${esc(label)}</b>` : esc(label)}</div><div class="fsum">${sum}</div>${bigLabel(f, label, color)}</div>`]);
+    if (f.collapsed) {
+      const cnt = {turn: 0, yourturn: 0, work: 0, past: 0};
+      f.nodes.forEach(n => { const k = !n.live ? 'past' : (n.state === '確認待ち' || n.state === 'codex 停止') ? 'turn'
+        : (n.state === '返答待ち' || n.state === 'codex 返答待ち') ? 'yourturn' : 'work'; cnt[k]++; });
+      const dots = ['turn', 'yourturn', 'work'].filter(k => cnt[k]).map(k => `<span class="fd ${k}"></span>${cnt[k]}`).join('');
+      items.push(['f:' + f.key, `<div class="frame fold" data-fold="${esc(f.key)}" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}" title="${esc(T('押すと開く'))}">
+        <div class="fold-l">${color ? `<i style="background:${color}"></i>` : ''}<b>${esc(label.replace(/^[●◇▣]\s*/, ''))}</b></div>
+        <div class="fold-r">${dots}${cnt.past ? `<span class="fd past"></span>${cnt.past}` : ''}<span class="fold-x">▸</span></div></div>`]);
+      return;
+    }
+    items.push(['f:' + f.key, `<div class="frame" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}"><div class="flabel">${color ? `<b style="background:${color}">${esc(label)}</b>` : esc(label)}</div><div class="fsum">${sum}</div>${bigLabel(f, label, color)}${f.auto === false && (openFrames.has(f.key) || shutFrames.size || true) ? `<button class="ffold" data-shut="${esc(f.key)}" title="${esc(T('畳む'))}">▾</button>` : ''}</div>`]);
     (f.jobs || []).forEach((j, ji) => { items.push(['j:' + f.key + ':' + ji, `<div class="card jobcard" style="left:${j.x}px;top:${j.y}px;border-left-color:${j.ok ? 'var(--green)' : 'var(--red)'}" title="${esc(j.note || '')}"><div class="doing">${esc(j.title)}</div><div class="task">${esc(j.sub)}</div></div>`]); });
   });
   shown.forEach(n => {
@@ -945,6 +976,43 @@ stage.addEventListener('touchmove', ev => {
   applyView();
 }, {passive: false});
 stage.addEventListener('touchend', () => { touches = null; });
+function placeFrames(frames) {
+  // 全体を 45% 以上で見せられないときは、急ぎでない枠から畳んで一覧にする(色の塊にはしない)
+  const st = document.getElementById('stage');
+  const vw = Math.max(320, (st ? st.clientWidth : 1400) - 48), vh = Math.max(240, (st ? st.clientHeight : 800) - chromeH() - 48);
+  const order = frames.slice().sort((a, b) => frameNeeds(a) - frameNeeds(b));   // 残したい度の低い順に畳む
+  const isShut = f => shutFrames.has(f.key) || (f.auto && !openFrames.has(f.key));
+  frames.forEach(f => { f.auto = false; });
+  for (let guard = 0; guard < frames.length + 1; guard++) {
+    const place = () => {
+      let x = 0, y = 0, rowH = 0, W = 0;
+      frames.forEach(f => {
+        const shut = isShut(f);
+        f.collapsed = shut;
+        f.w = shut ? COLLAPSED_W : f.fullW;
+        f.h = shut ? COLLAPSED_H : f.fullH;
+        if (x + f.w > ROW_W && x > 0) { x = 0; y += rowH + FRAME_GAP; rowH = 0; }
+        f.x = x; f.y = y;
+        x += f.w + FRAME_GAP; rowH = Math.max(rowH, f.h); W = Math.max(W, x - FRAME_GAP);
+      });
+      return {W, H: y + rowH};
+    };
+    const {W, H} = place();
+    const k = Math.min(vw / Math.max(1, W), vh / Math.max(1, H));
+    if (k >= MIN_FIT) break;
+    const open = frames.filter(f => !isShut(f));
+    if (open.length <= 1) break;   // 全部は畳まない(いちばん急ぎの枠は開いたまま。入らなければスクロールで見る)
+    // 判断待ち・あなたの番がいる枠と、手で開いた枠は自動で畳まない(入らなければスクロールで見る)
+    const next = order.find(f => !isShut(f) && !openFrames.has(f.key) && frameNeeds(f) < 50);
+    if (!next) break;
+    next.auto = true;
+  }
+  frames.forEach(f => {
+    if (f.collapsed) { f.nodes.forEach(n => { n.x = f.x + 12; n.y = f.y + 12; }); return; }
+    f.nodes.forEach(n => { const i = slots[n.id].i; n.x = f.x + FRAME_PAD + (i % f.cols) * (CARD_W + GAP); n.y = f.y + FRAME_PAD + Math.floor(i / f.cols) * (CARD_H + GAP); });
+  });
+}
+
 const MIN_FIT = 0.45;   // これより引くと文字が読めない(色の塊になる)。収まらない時は引かずに左上から見せる
 function fitTo(nodes) {
   if (!nodes.length) return;
@@ -1222,6 +1290,11 @@ $('#nodes').addEventListener('click', ev => { const m = ev.target.closest('.fmor
 // ---------------- 詳細パネル ----------------
 $('#nodes').addEventListener('click', ev => { const c = ev.target.closest('.card[data-id]'); if (!c) return; if (c.dataset.id.startsWith('bundle:')) { sel = sel === c.dataset.id ? null : c.dataset.id; render(); return; } select(c.dataset.id); });
 function select(id) { sel = id; render(); openPanel(id); }
+$('#nodes').addEventListener('click', ev => {
+  const fold = ev.target.closest('[data-fold]'); const shut = ev.target.closest('[data-shut]');
+  if (fold) { openFrames.add(fold.dataset.fold); shutFrames.delete(fold.dataset.fold); render(); ev.stopPropagation(); return; }
+  if (shut) { shutFrames.add(shut.dataset.shut); openFrames.delete(shut.dataset.shut); render(); ev.stopPropagation(); }
+}, true);
 $('#nodes').addEventListener('dblclick', async ev => {
   const c = ev.target.closest('.card[data-id]'); if (!c) return;
   const n = (window._vis || []).find(x => x.id === c.dataset.id); if (!n || !n.live || !n.tab) return;

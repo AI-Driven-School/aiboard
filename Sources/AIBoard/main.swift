@@ -343,6 +343,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window = NSWindow(contentRect: frame, styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "AIBoard"
         window.setFrameAutosaveName("AIBoardMain")
+        // 前回の大きさを覚えるが、盤が読めない大きさ(画面の半分未満)で開いてしまうのは直す
+        if let vis = NSScreen.main?.visibleFrame {
+            let f = window.frame
+            if f.width < max(1100, vis.width * 0.5) || f.height < max(700, vis.height * 0.5) {
+                window.setFrame(vis.insetBy(dx: 40, dy: 30), display: false)
+            }
+        }
         // 盤と端末と同じ「夜空」の地。タイトルバーは透かして内容を上端まで敷く
         window.appearance = NSAppearance(named: .darkAqua)
         window.backgroundColor = NSColor(srgbRed: 0.027, green: 0.039, blue: 0.071, alpha: 1)   // #070A12
@@ -649,6 +656,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     @objc func focusBoard(_ s: Any?) { if boardHidden { toggleBoard(nil) }; window.makeFirstResponder(web) }
     @objc func focusTerminal(_ s: Any?) { if let p = pm.selected { showTerminal(); window.makeFirstResponder(p.view) } }
+    @objc func fitWindow(_ s: Any?) {
+        guard let vis = NSScreen.main?.visibleFrame else { return }
+        window.setFrame(vis.insetBy(dx: 40, dy: 30), display: true, animate: true)
+    }
+
     @objc func restoreLast(_ s: Any?) {
         for st in lastState {
             let kind = st["kind"] as? String ?? "shell", cwd = st["cwd"] as? String ?? HOME, sid = st["sid"] as? String ?? ""
@@ -698,6 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                      (L("New Claude in Git Worktree", "git worktree で Claude を開く"), #selector(newClaudeWorktree(_:)), "w", [.command, .shift]),
                      (L("Claude in Folder…", "フォルダを選んで Claude…"), #selector(newInFolder(_:)), "o", .command), ("-", nil, "", []),
                      (L("Restore Last Terminals", "前回の端末を復元"), #selector(restoreLast(_:)), "r", [.command, .shift]), ("-", nil, "", []),
+                     (L("Fit Window to Screen", "窓を画面に合わせる"), #selector(fitWindow(_:)), "", []),
                      (L("Install Claude Code Hook…", "Claude Code の hook を入れる…"), #selector(installHookMenu(_:)), "", []),
                      (L("Remove Claude Code Hook", "Claude Code の hook を外す"), #selector(uninstallHookMenu(_:)), "", []), ("-", nil, "", []),
                      (L("Close Terminal", "この端末を閉じる"), #selector(closePane(_:)), "w", .command)])
