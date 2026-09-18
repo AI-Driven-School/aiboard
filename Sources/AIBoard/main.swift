@@ -166,6 +166,20 @@ final class PaneContainer: NSView {
 // MARK: - 端末の集合
 
 @MainActor
+final class PaneStripTarget: NSObject {
+    unowned let pm: PaneManager
+    init(pm: PaneManager) { self.pm = pm }
+    @objc func tap(_ b: NSButton) {
+        guard let p = pm.panes.first(where: { $0.id == b.tag }) else { return }
+        pm.select(p)                 // 右で人が選んだ: 入力先も端末へ
+        pm.onUserSelect?(p)          // 左の会話も追従させる
+        // 左の会話を開く処理(盤の JS)が入力先を盤に戻すことがあるので、一拍おいて端末に戻す
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { p.view.window?.makeFirstResponder(p.view) }
+    }
+    @objc func plus(_ b: NSButton) { pm.open(kind: "shell", cwd: HOME, command: nil) }
+}
+
+@MainActor
 final class PaneManager {
     var panes: [Pane] = []
     var selected: Pane?
@@ -183,6 +197,45 @@ final class PaneManager {
     var onChange: (() -> Void)?
     /// 盤と同じ名前と色(「Opus 5 · homepage」)。左の会話と右の端末が同じものだと一目で分かるように、両方に同じ札を出す
     var labels: [Int: (text: String, rgb: [Int])] = [:]
+    var states: [Int: String] = [:]                 // 盤が知っている状態(確認待ち など)。タブにバッジを出す
+    /// 右の端末の一覧(タブ列)。左のカードと同じ名前・色・バッジ。押すとその端末へ(左の会話も追従する)
+    let strip = NSStackView()
+    var onUserSelect: ((Pane) -> Void)?
+
+    func rebuildStrip() {
+        strip.arrangedSubviews.forEach { strip.removeArrangedSubview($0); $0.removeFromSuperview() }
+        for p in panes {
+            let b = NSButton(title: "", target: self, action: #selector(PaneStripTarget.tap(_:)))
+            b.target = stripTarget; b.tag = p.id
+            b.bezelStyle = .accessoryBarAction
+            b.setButtonType(.pushOnPushOff)
+            b.state = (p === selected) ? .on : .off
+            let a = NSMutableAttributedString()
+            let font = NSFont.systemFont(ofSize: 11, weight: p === selected ? .semibold : .regular)
+            if let l = labels[p.id] {
+                let c = NSColor(red: CGFloat(l.rgb[0]) / 255, green: CGFloat(l.rgb[1]) / 255, blue: CGFloat(l.rgb[2]) / 255, alpha: 1)
+                a.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: c, .font: font]))
+                a.append(NSAttributedString(string: String(l.text.prefix(28)), attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+            } else {
+                let mark = p.kind == "claude" ? "◉ " : p.kind == "codex" ? "◉ " : "○ "
+                let name = p.title.isEmpty ? (p.kind == "shell" ? "shell" : p.kind) : String(p.title.prefix(24))
+                a.append(NSAttributedString(string: mark + name, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
+            }
+            if let st = states[p.id] {
+                if st == "確認待ち" { a.append(NSAttributedString(string: "  !", attributes: [.foregroundColor: NSColor.systemRed, .font: NSFont.boldSystemFont(ofSize: 12)])) }
+                else if st == "返答待ち" || st == "codex 返答待ち" { a.append(NSAttributedString(string: "  ●", attributes: [.foregroundColor: NSColor.systemYellow, .font: font])) }
+            }
+            if linkedTab == p.id { a.append(NSAttributedString(string: " ⇄", attributes: [.foregroundColor: NSColor.systemTeal, .font: font])) }
+            b.attributedTitle = a
+            b.toolTip = "\(p.id): \(p.cwd)"
+            strip.addArrangedSubview(b)
+        }
+        let plus = NSButton(title: "＋", target: stripTarget, action: #selector(PaneStripTarget.plus(_:)))
+        plus.bezelStyle = .accessoryBarAction
+        plus.toolTip = L("New shell (⇧⌘T) · ⌘T Claude · ⌥⌘T Codex", "新しいシェル(⇧⌘T)・⌘T Claude・⌥⌘T Codex")
+        strip.addArrangedSubview(plus)
+    }
+    lazy var stripTarget = PaneStripTarget(pm: self)
     /// 左の会話ビューで開いている端末(⇄ の印を出す)。空なら無し
     var linkedTab = 0
 
@@ -208,6 +261,7 @@ final class PaneManager {
         p.view.needsDisplay = true
         if focus { p.view.window?.makeFirstResponder(p.view) }   // 左で読んでいるだけの時は、入力先を奪わない
         titleChanged(p)
+        rebuildStrip()
         onChange?()
     }
 
@@ -239,6 +293,7 @@ final class PaneManager {
             }
             header.attributedStringValue = a
         }
+        rebuildStrip()
         publish()
     }
 
@@ -561,12 +616,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         pm.header.stringValue = L("No terminal — ⌘T Claude · ⌥⌘T Codex · ⇧⌘T shell", "端末なし — ⌘T で Claude、⌥⌘T で Codex、⇧⌘T でシェル")
         pm.header.translatesAutoresizingMaskIntoConstraints = false
         pm.container.translatesAutoresizingMaskIntoConstraints = false
-        right.addSubview(pm.header); right.addSubview(pm.container)
+        pm.strip.orientation = .horizontal; pm.strip.spacing = 4; pm.strip.alignment = .centerY
+        pm.strip.translatesAutoresizingMaskIntoConstraints = false
+        pm.strip.setClippingResistancePriority(.defaultLow, for: .horizontal)   // 端末が多い時は端が切れる(スクロールより単純)
+        right.addSubview(pm.header); right.addSubview(pm.strip); right.addSubview(pm.container)
         NSLayoutConstraint.activate([
             pm.header.topAnchor.constraint(equalTo: right.topAnchor, constant: 34),   // 透かしたタイトルバーの下
             pm.header.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 10),
             pm.header.trailingAnchor.constraint(equalTo: right.trailingAnchor, constant: -10),
-            pm.container.topAnchor.constraint(equalTo: pm.header.bottomAnchor, constant: 6),
+            pm.strip.topAnchor.constraint(equalTo: pm.header.bottomAnchor, constant: 4),
+            pm.strip.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 8),
+            pm.strip.trailingAnchor.constraint(lessThanOrEqualTo: right.trailingAnchor, constant: -8),
+            pm.strip.heightAnchor.constraint(equalToConstant: 24),
+            pm.container.topAnchor.constraint(equalTo: pm.strip.bottomAnchor, constant: 4),
             pm.container.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 6),
             pm.container.trailingAnchor.constraint(equalTo: right.trailingAnchor),
             pm.container.bottomAnchor.constraint(equalTo: right.bottomAnchor),
@@ -598,6 +660,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.offerHookIfNeeded() }
         // 通知と Dock バッジ(判断待ちの数)。通知を押すと、その端末へ
+        pm.onUserSelect = { [weak self] p in
+            self?.web.evaluateJavaScript("window.board && board.openFromRight && board.openFromRight(\(String(reflecting: "0-\(p.id)")))") { _, _ in }
+        }
         let prevChange = pm.onChange
         pm.onChange = { [weak self] in
             prevChange?()
@@ -636,6 +701,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     rep["terminalVisible"] = !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])
                     rep["chimes"] = Chime.log
                     rep["paneHeader"] = self.pm.header.stringValue
+                    rep["firstResponder"] = self.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
+                    rep["strip"] = self.pm.strip.arrangedSubviews.compactMap { ($0 as? NSButton) }.map { ["tag": $0.tag, "title": $0.attributedTitle.string, "on": $0.state == .on] }
                     rep["linkedTab"] = self.pm.linkedTab
                     case .failure(let e): rep["ok"] = false; rep["error"] = String(describing: e)
                     }
@@ -768,6 +835,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if m.name == "log" { webLog.append(String(describing: m.body)); if webLog.count > 200 { webLog.removeFirst(100) }; return }
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
         switch type {
+        case "_test_stripTap":
+            // 自己試験: 右のタブ列を押したのと同じ道(人の操作と同じ処理)
+            guard SELF_TEST, let id = b["id"] as? Int, let btn = pm.strip.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.tag == id }) else { return }
+            pm.stripTarget.tap(btn)
         case "show":
             // 左で会話を開いた: 右の端末も同じセッションにする(入力先は奪わない)。tab が空なら結び付きを外す
             let tab = (b["tab"] as? String) ?? ""
@@ -889,6 +960,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if let text = s["label"] as? String, !text.isEmpty {
                     pm.labels[p.id] = (text, (s["rgb"] as? [Int]) ?? [120, 120, 120])
                 }
+                if let st = s["state"] as? String { pm.states[p.id] = st }
             }
             if let cur = pm.selected { pm.titleChanged(cur) }
             pm.publish()

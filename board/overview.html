@@ -811,7 +811,7 @@ async function loadSnap() {
   if (APP) toApp({type: 'sessions', list: snap.sessions.filter(x => isAppTab(x.tab)).map(x => ({tab: x.tab, sid: x.sid, ai: x.ai, cwd: x.cwd,
     // 右の端末の札を、盤のカードと同じ名前・同じ色にする(左右が同じものだと分かるように)
     label: x.ai ? `${(x.model_style || {}).label || x.ai} · ${x.project_hint || x.project || ''}`.replace(/ · $/, '') : '',
-    rgb: (x.model_style || {}).rgb || null}))});
+    rgb: (x.model_style || {}).rgb || null, state: x.state || ''}))});
   render();
 }
 async function loadIndex() {
@@ -1683,6 +1683,16 @@ function tlHtml(tl) {
 let convWho = '';   // 吹き出しの名前に使う「いま見ている AI」
 let rightTab = '';  // 右の端末でいま見えている端末(アプリが知らせる)。そのカードに ⇄ を出す
 function setRightTab(tab) { if (rightTab === tab) return; rightTab = tab || ''; render(); }
+// 右のタブ列で人が端末を選んだ: その端末の会話を左に出す(AI のセッションのときだけ。素のシェルはカードにならない)
+function openFromRight(tab) {
+  const s = (snap.sessions || []).find(x => x.tab === tab && x.ai && x.sid && !String(x.sid).startsWith('tty:'));
+  if (!s) return false;
+  fromRight = true;                 // 右で打ちたい人の入力先を、左の入力欄が奪わないように
+  if (sel !== s.sid) select(s.sid);
+  setTimeout(() => { fromRight = false; }, 1500);
+  return true;
+}
+let fromRight = false;
 function convHtml(tl) {
   // 連続する「操作」は 1 行に畳む(最後の 1 件を見せ、件数を添える)
   const out = []; let ops = [];
@@ -1785,7 +1795,7 @@ async function renderLive(n) {
   pull(); clearInterval(detailTimer); detailTimer = setInterval(pull, 1500);
   const inp = $('#sendIn');
   if (inp) {
-    inp.focus();
+    if (!fromRight) inp.focus();   // 右のタブから開いた時は端末に入力先を残す
     let composedAt = 0;   // WebKit(Safari/アプリ)は確定の Enter を compositionend の後・isComposing=false・keyCode 229 で送ってくる
     inp.addEventListener('compositionend', () => { composedAt = performance.now(); });
     inp.addEventListener('keydown', async ev => {
@@ -1834,7 +1844,7 @@ setInterval(loadIndex, 300000);
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
 window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
   frames: () => window._frames, vis: () => window._vis, snap: () => snap,
-  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult, setRightTab, rightTab: () => rightTab};   // 試験用: いまの snap で上のバーだけ描き直す
+  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult, setRightTab, rightTab: () => rightTab, openFromRight};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

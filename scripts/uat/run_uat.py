@@ -2649,6 +2649,43 @@ def lk01(ctx):
     return f"左で 0-1 を開く→右も 0-1(入力先は盤のまま)・左「{v['link']}」・右の札「{r.get('paneHeader')}」・カードに ⇄ / 閉じると外れる"
 
 
+@case("LK-02", "右のタブ列: 端末ごとに盤と同じ名前・色・バッジが並び、押すとその端末になり左の会話も追従する")
+def lk02(ctx):
+    js = """
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -f'});   // 2 枚目(右で選ばれる)
+      await nap(2500);
+      const realFetch = window.fetch;
+      const fake = {tab: '0-1', sid: 'uat-strip', ai: 'Claude', state: '確認待ち', mark: '🔴', cwd: '/Users/uat', project: 'uatproj',
+        doing: '⚠ 許可を待っています', task: 'uat', model_style: {label: 'Opus 5', emoji: '🟠', rgb: [200, 120, 60], short: 'o5', vendor: '', id: 'm'},
+        mem_mb: 1, subagents: {}, tools: null, loop: null, limit: null, client: null, state_for: 1, ago: 1, group_label: '', group_rgb: null, transcript: ''};
+      window.fetch = async (u, o) => {
+        const url = String(u);
+        if (url.includes('/api/conv')) return new Response(JSON.stringify(Object.assign({ok: true, etag: 'x', timeline: []}, fake)), {headers: {'Content-Type': 'application/json'}});
+        if (url.includes('/api/snapshot')) { const r = await realFetch(u, o); const d = await r.json();
+          d.sessions = [fake].concat((d.sessions || []).filter(x => x.tab !== '0-1')); return new Response(JSON.stringify(d), {headers: {'Content-Type': 'application/json'}}); }
+        return realFetch(u, o); };
+      await nap(3500);                                   // 盤がアプリに名前・色・状態を渡すまで
+      const before = document.querySelector('#panel').classList.contains('open');
+      P({type: '_test_stripTap', id: 1});               // 右のタブ「0-1」を押す
+      await nap(1200);
+      return {before, panelOpen: document.querySelector('#panel').classList.contains('open'), title: document.querySelector('#pTitle').textContent, rightTab: board.rightTab()};"""
+    r = run_app_js(ctx, js, wait="8")
+    check(r.get("ok"), f"{r}")
+    v, strip = r["value"], r.get("strip") or []
+    tags = [b["tag"] for b in strip]
+    check(tags == [1, 2, -1], f"タブ列の並び {tags}(端末 1・2 と ＋)")
+    t1 = next(b for b in strip if b["tag"] == 1)
+    check("Opus 5" in t1["title"] and "uatproj" in t1["title"], f"盤と同じ名前になっていない {t1['title']!r}")
+    check("!" in t1["title"], f"判断待ちのバッジが無い {t1['title']!r}")
+    check(t1["on"] and r.get("selected") == "0-1", f"押した端末が選ばれていない on={t1['on']} selected={r.get('selected')}")
+    check(r.get("firstResponderIsTerminal"), f"右で押したのに入力先が端末でない(いまの入力先 {r.get('firstResponder')})")
+    check(not v["before"] and v["panelOpen"] and "Opus 5" in v["title"], f"左の会話が追従しない before={v['before']} open={v['panelOpen']} title={v['title']!r}")
+    check(v["rightTab"] == "0-1", f"盤が知る右の端末 {v['rightTab']}")
+    return f"タブ列 {[b['title'] for b in strip]} / 0-1 を押す→右が 0-1・入力先は端末・左に会話「{v['title']}」が開く"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o
