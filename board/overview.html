@@ -572,7 +572,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '右の端末で打つ': 'Type in the right terminal', '右の端末に同じセッションを出しています': 'The right terminal shows this same session', 'この会話は右の端末には出ていません': 'This conversation is not in the right terminal', '右の端末に出ています': 'Shown in the right terminal', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '右の端末で打つ': 'Type in the right terminal', '右の端末に同じセッションを出しています': 'The right terminal shows this same session', 'この会話は右の端末には出ていません': 'This conversation is not in the right terminal', '右の端末に出ています': 'Shown in the right terminal', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
   '遠隔（同じ Wi-Fi の中だけ）': 'Remote (same Wi-Fi only)', 'スマホから判断待ちに答える': 'Answer from your phone',
   '入れています': 'on', '切ってあります': 'off', '切る': 'Turn off', '開く場所': 'Open at',
   'LAN の住所が取れません': 'no LAN address', '切りました': 'Turned off',
@@ -1736,7 +1736,7 @@ async function renderLive(n) {
   if (APP) toApp({type: 'show', tab: isAppTab(s0.tab) ? s0.tab : ''});   // 右の端末も同じセッションへ(入力先は奪わない)
   const link = !APP ? '' : isAppTab(s0.tab)
     ? `<span class="cvlink on" title="${esc(T('右の端末に同じセッションを出しています'))}">⇄ ${T('右の端末')} ${esc(s0.tab.slice(2))}</span>`
-    : `<span class="cvlink off" title="${esc(T('この会話は右の端末には出ていません'))}">⇄ ${T('右の端末には無い')}（${esc(s0.tab.startsWith('a-') ? T('背景') : 'iTerm ' + s0.tab)}）</span>`;
+    : `<span class="cvlink off" title="${esc(T('この会話は右の端末には出ていません'))}">⇄ ${T('右の端末には無い')}（${esc(s0.tab.startsWith('a-') ? T('背景') : T('別の端末') + ' ' + s0.tab)}）</span>`;
   $('#pBody').innerHTML = `
     <div class="convwrap">
       <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
