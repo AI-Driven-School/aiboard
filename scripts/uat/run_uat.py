@@ -4472,11 +4472,11 @@ def cv04(ctx):
           const tx = s => ((L.querySelector(s) || {}).textContent || '');
           const op = L.querySelector('.cv.op');
           return {order: [...L.children].map(e => e.className.trim()), ops: L.querySelectorAll('.cv.op').length,
-                  first: tx('.cv.you .tx'),
+                  first: tx('.cv.you .bub'),   // 吹き出し(.bub)の中の文字。HTML はそのまま文字として見えること
                   imgs: L.querySelectorAll('img').length, pwn: window.__pwn === undefined ? 'none' : String(window.__pwn),
                   pre: L.querySelectorAll('.cv.ai pre.cb').length, code: L.querySelectorAll('.cv.ai code').length,
-                  bolds: [...L.querySelectorAll('.cv.ai b')].map(b => b.textContent),
-                  raw: tx('.cv.ai .tx').includes('<b>raw</b>'),
+                  bolds: [...L.querySelectorAll('.cv.ai .bub b')].map(b => b.textContent),   // 名前欄の <b> は除く
+                  raw: tx('.cv.ai .bub').includes('<b>raw</b>'),
                   opsum: op ? ((op.querySelector('summary') || {}).textContent || '') : '',
                   opn: op ? op.querySelectorAll('.opl').length : -1};
         })()"""), list(errs)
