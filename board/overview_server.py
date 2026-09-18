@@ -324,8 +324,10 @@ class Handler(BaseHTTPRequestHandler):
                                  "instructions": (overview.groups().get(key) or {}).get("instructions", "")})
             elif path == "/api/pick":
                 now = time.time()
-                if not _acct.get("data") or now - _acct.get("t", 0) > 60:
-                    _acct.update(t=now, data=overview.accounts())
+                if not _login.get("data") or now - _login.get("t", 0) > 120:
+                    _login.update(t=now, data=overview.login_status())
+                if not _acct.get("data") or now - _acct.get("t", 0) > 60:   # ログイン状態を合流させた一覧で選ぶ
+                    _acct.update(t=now, data=overview.accounts_full(snapshot_cached()["sessions"], _login["data"]))
                 self._json(200, {"ok": True, **overview.pick_ai(q.get("prefer", ""), _acct["data"])})
             elif path == "/api/groups":
                 # 束ね方の候補(いま動いている分と、索引にある直近 30 日)と、いまの上書き

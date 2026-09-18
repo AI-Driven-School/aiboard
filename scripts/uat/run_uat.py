@@ -4872,6 +4872,7 @@ def dg01(ctx):
         ("Codex が使い切り→Claude", [C("default", "a@b"), X(used=100)], "Codex", ("Claude", "")),
         ("全部上限→投げない", [C("default", "a@b", lim), X(lim)], "", ("", "")),
         ("未ログインは選ばない", [C("default", "a@b", lim), C("empty", ""), X(lim)], "", ("", "")),
+        ("CLI が未ログインと答えたら選ばない", [C("default", "a@b", lim), dict(C("out", "x@y"), logged_in=False), X(lim)], "", ("", "")),
     ]
     bad = []
     for name, acc, prefer, want in cases:
