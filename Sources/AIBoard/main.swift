@@ -525,6 +525,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if text.count == 1, !enter, let ch = text.first, let kp = TerminalKeyPress(typing: ch) { _ = p.view.sendKey(kp) }
                 else { p.enqueue(text: text, enter: enter) }
             }
+        case "newInProject":
+            guard let key = b["key"] as? String, key.count <= 80, !key.contains("/"), !key.contains(".."),
+                  let cwd = b["cwd"] as? String, cwd.hasPrefix("/"), !cwd.contains("..") else { return }
+            openInProject(key: key, cwd: cwd, ai: (b["ai"] as? String) == "Codex" ? "Codex" : "Claude")
+        case "delegate":
+            // 案件に仕事を任せる: 選ばれた AI(と Claude のアカウント)で端末を起こし、共通の指示つきで依頼文を渡す
+            guard let key = b["key"] as? String, key.count <= 80, !key.contains("/"), !key.contains(".."),
+                  let text = b["text"] as? String, !text.isEmpty, text.count <= 4000,
+                  let cwd = b["cwd"] as? String, cwd.hasPrefix("/"), !cwd.contains("..") else { return }
+            let isCodex = (b["ai"] as? String) == "Codex"
+            let profile = (b["profile"] as? String) ?? ""
+            guard profile.range(of: "^[A-Za-z0-9_-]{0,32}$", options: .regularExpression) != nil else { return }
+            let brief = projectInstructions(key)
+            let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
+            var cmd: String
+            if isCodex {
+                let path = writeInstructions(key, (brief.isEmpty ? "" : "これはこの案件の前提です。\n\n" + brief + "\n\n---\n\n") + "依頼: " + text)
+                cmd = "codex \"$(cat \(shellQuote(path)))\""
+            } else {
+                let env = profile.isEmpty ? "env -u CLAUDE_CONFIG_DIR " : "CLAUDE_CONFIG_DIR=\(shellQuote(HOME + "/.claude-profiles/" + profile)) "
+                let sys = brief.isEmpty ? "" : "--append-system-prompt-file \(shellQuote(writeInstructions(key, brief))) "
+                let ask = writeInstructions(key + "-ask", text)
+                cmd = env + "command claude " + sys + "\"$(cat \(shellQuote(ask)))\""
+            }
+            showTerminal()
+            pm.open(kind: isCodex ? "codex" : "claude", cwd: dir, command: cmd)
+            if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
         case "run":
             // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
             guard let cmd = b["command"] as? String, !cmd.isEmpty, cmd.count < 600,
@@ -656,6 +683,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
     @objc func focusBoard(_ s: Any?) { if boardHidden { toggleBoard(nil) }; window.makeFirstResponder(web) }
     @objc func focusTerminal(_ s: Any?) { if let p = pm.selected { showTerminal(); window.makeFirstResponder(p.view) } }
+    /// 案件(枠)ごとの共通の指示。~/.aiboard/groups.json に盤の設定画面から保存されたもの
+    func projectInstructions(_ key: String) -> String {
+        guard let d = FileManager.default.contents(atPath: STATE_DIR + "/groups.json"),
+              let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let g = o["groups"] as? [String: Any], let row = g[key] as? [String: Any],
+              let t = row["instructions"] as? String, !t.isEmpty else { return "" }
+        return t
+    }
+
+    /// 指示を書いたファイルの場所(端末に渡す。盤や他人には渡さない)
+    func writeInstructions(_ key: String, _ text: String) -> String {
+        let dir = STATE_DIR + "/projects"
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let safe = key.map { "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".contains($0) ? $0 : "_" }
+        let path = dir + "/" + String(safe).prefix(64) + ".md"
+        try? text.write(toFile: path, atomically: true, encoding: .utf8)
+        return path
+    }
+
+    /// 案件の指示つきで端末を開く。Claude は --append-system-prompt-file、Codex は最初のメッセージとして渡す
+    /// (Codex には同等の指定が無いため。2026-09-18 に CLI の help と実行で確認)
+    func openInProject(key: String, cwd: String, ai: String) {
+        let text = projectInstructions(key)
+        let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
+        var cmd = ai == "Codex" ? "codex" : "claude"
+        if !text.isEmpty {
+            let path = writeInstructions(key, ai == "Codex"
+                ? "これはこの案件の前提です。読んで把握し、作業は次の指示を待ってください。\n\n" + text
+                : text)
+            cmd = ai == "Codex" ? "codex \"$(cat \(shellQuote(path)))\"" : "claude --append-system-prompt-file \(shellQuote(path))"
+        }
+        showTerminal()
+        pm.open(kind: ai == "Codex" ? "codex" : "claude", cwd: dir, command: cmd)
+        if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
+    }
+
     @objc func fitWindow(_ s: Any?) {
         guard let vis = NSScreen.main?.visibleFrame else { return }
         window.setFrame(vis.insetBy(dx: 40, dy: 30), display: true, animate: true)

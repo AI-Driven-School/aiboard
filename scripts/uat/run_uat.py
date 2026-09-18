@@ -2040,7 +2040,7 @@ def rd02(ctx):
         cs.classify = lambda *a, **k: [dict(tab)]
         cs.processes = lambda: {}
         cs.iterm_sessions = lambda *a, **k: []
-        sess = o.sessions(procs={})
+        sess = o.sessions(procs={}, with_official=False)   # 公式一覧の背景セッションは混ぜない(この試験は合成タブだけを見る)
     finally:
         cs.classify, cs.processes, cs.iterm_sessions = real
     check(len(sess) == 1, f"セッション {len(sess)} 件")
@@ -4740,6 +4740,163 @@ def bd16(ctx):
     check(after > len(got["open"]), f"畳まれた枠を押しても開かない {len(got['open'])}→{after}")
     check(not errs, f"{errs[:1]}")
     return f"900x420・持ち場 12 個 → {got['zoom']*100:.0f}%・畳んだ枠 {got['folded']} 個・判断待ちの枠は開いたまま・押すと {len(got['open'])}→{after} 個"
+
+
+@case("PJ-01", "案件の共通指示: 保存でき、Claude は system prompt・Codex は最初のメッセージとして渡る(実行はしない)")
+def pj01(ctx):
+    import overview as o
+    brief = "本番には触らない。変更は必ず試験を足してから。用語は社内の呼び方に合わせる。"
+    st, d, _ = http("/api/groups", "POST", {"groups": {"uatproj": {"label": "UAT 案件", "instructions": brief}}},
+                    headers={"Origin": BASE.rstrip("/")})
+    check(st == 200 and d["groups"]["uatproj"]["instructions"] == brief, f"保存できない {st} {str(d)[:120]}")
+    stb, db, _ = http("/api/groups", "POST", {"groups": {"uatproj": {"instructions": "あ" * 4001}}}, headers={"Origin": BASE.rstrip("/")})
+    check(stb == 400, f"長すぎる指示を受け取った {stb} {db}")
+    http("/api/groups", "POST", {"groups": {"uatproj": {"label": "UAT 案件", "instructions": brief}}}, headers={"Origin": BASE.rstrip("/")})
+    data = tempfile.mkdtemp(dir=ctx["data"])
+    open(os.path.join(data, "hook-declined"), "w").close()
+    shutil.copy2(os.path.join(ctx["data"], "groups.json"), os.path.join(data, "groups.json"))
+    work = os.path.join(data, "work"); os.makedirs(work, exist_ok=True)
+    js = """board.setToApp(() => {});
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'newInProject', key: 'uatproj', cwd: %s, ai: 'Claude'});
+      await new Promise(r => setTimeout(r, 1500));
+      P({type: 'newInProject', key: 'uatproj', cwd: %s, ai: 'Codex'});
+      P({type: 'newInProject', key: '../../etc', cwd: '/etc', ai: 'Claude'});
+      P({type: 'newInProject', key: 'uatproj', cwd: 'relative/path', ai: 'Claude'});
+      await new Promise(r => setTimeout(r, 2500)); return 1;""" % (json.dumps(work), json.dumps(work))
+    out = os.path.join(data, "js.json")
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
+               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+    subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                   env=env, capture_output=True, text=True, timeout=150)
+    check(os.path.exists(out) and json.load(open(out)).get("ok"), "盤の中で JS が動かなかった")
+    scripts = sorted(glob.glob(os.path.join(data, "launch", "pane-*.sh")))
+    bodies = [open(p).read() for p in scripts]
+    cl = [b for b in bodies if "claude" in b]
+    cx = [b for b in bodies if "codex" in b]
+    check(len(cl) == 1 and len(cx) == 1, f"端末の数が違う claude={len(cl)} codex={len(cx)}(不正な指示で開いていないか)")
+    ins = os.path.join(data, "projects", "uatproj.md")
+    check(os.path.exists(ins), f"指示のファイルが無い {os.listdir(os.path.join(data, 'projects')) if os.path.isdir(os.path.join(data, 'projects')) else '(フォルダ無し)'}")
+    body = open(ins).read()
+    check(brief in body, f"指示の中身が違う {body[:60]!r}")
+    check("--append-system-prompt-file" in cl[0] and ins in cl[0], f"Claude の渡し方 {cl[0][-160:]!r}")
+    check("cat" in cx[0] and ins in cx[0], f"Codex の渡し方 {cx[0][-160:]!r}")
+    check("作業は次の指示を待って" in body or "作業は次の指示を待ってください" in open(ins).read(), "Codex 向けの前置きが無い")
+    check(work in cl[0] and work in cx[0], "作業フォルダが渡っていない")
+    return f"指示 {len(brief)} 字を保存 / Claude=--append-system-prompt-file・Codex=最初のメッセージ / 不正な key と相対パスは開かない(端末 {len(bodies)} 枚)"
+
+
+@case("OF-01", "公式の状態源(claude agents --json): 状態の言い換えと、hook が無い時だけ補うこと")
+def of01(ctx):
+    import overview as o
+    fake = [
+        {"pid": 111, "kind": "interactive", "status": "busy", "waitingFor": None, "name": "仕事A", "cwd": HOME},
+        {"pid": 222, "kind": "interactive", "status": "waiting", "waitingFor": "permission prompt", "name": "仕事B", "cwd": HOME},
+        {"pid": 333, "kind": "interactive", "status": "waiting", "waitingFor": "input needed", "name": "仕事C", "cwd": HOME},
+        {"pid": 444, "kind": "interactive", "status": "idle", "waitingFor": None, "name": "仕事D", "cwd": HOME},
+    ]
+    want = {111: "作業中", 222: "確認待ち", 333: "返答待ち", 444: "返答待ち"}
+    got = {p: (o.official_for_pid(p, fake) or {}).get("state") for p in want}
+    check(got == want, f"言い換えが違う {got} != {want}")
+    check(o.official_for_pid(999, fake) is None and o.official_for_pid(None, fake) is None, "知らない pid に状態を付けた")
+    # hook が生きているセッションの状態は、公式で上書きしない
+    procs_now = None
+    with patched(o, "official_agents", lambda max_age=5: fake):
+        base = {"tab": "1-1", "pid": 111, "state": "確認待ち", "mark": "🔴", "sid": "s1", "ai": "Claude", "task": "元の題",
+                "cwd": HOME, "project": "", "client": None, "doing": "", "topic": "", "transcript": ""}
+        keep = dict(base)
+        rows = [keep, dict(base, tab="1-2", pid=222, state="起動中?", mark="🔵", sid="s2", task="")]
+        with patched(o, "sessions", None):
+            pass
+        # sessions() の合流部分だけを真似る(本物の ps を使わない)
+        agents = fake
+        for x in rows:
+            off = o.official_for_pid(x["pid"], agents)
+            if off and off["state"] and x["state"] in ("起動中?", "終了(古い題名)", ""):
+                x["state"] = off["state"]
+                x["mark"] = {"確認待ち": "🔴", "返答待ち": "🟡", "作業中": "🟢"}.get(off["state"], x["mark"])
+                if not x.get("task") and off["name"]:
+                    x["task"] = off["name"]
+        check(rows[0]["state"] == "確認待ち" and rows[0]["task"] == "元の題", f"hook の状態を上書きした {rows[0]}")
+        check(rows[1]["state"] == "確認待ち" and rows[1]["task"] == "仕事B", f"起動中? を補えていない {rows[1]}")
+    # 背景セッション(端末が無い)はカードとして出る。終わったものは出さない
+    bg = [{"id": "aa11bb22", "sessionId": "11111111-2222-3333-4444-555555555555", "kind": "background", "state": "blocked",
+           "name": "背景の仕事", "cwd": HOME, "startedAt": int((time.time() - 300) * 1000)},
+          {"id": "cc33dd44", "sessionId": "66666666-7777-8888-9999-000000000000", "kind": "background", "state": "done",
+           "name": "終わった仕事", "cwd": HOME, "startedAt": int((time.time() - 900) * 1000)}]
+    out = o.background_sessions(bg)
+    check(len(out) == 1 and out[0]["tab"] == "a-aa11bb22" and out[0]["state"] == "確認待ち", f"背景セッション {out}")
+    check(out[0]["tty"] == "" and out[0]["pid"] is None and out[0]["background"] is True, f"端末を持たない印が無い {out[0]}")
+    check(out[0]["ago"] and 250 < out[0]["ago"] < 400, f"開始からの時間 {out[0]['ago']}")
+    real = o.official_agents()
+    return f"言い換え 4 通り一致 / hook 優先・起動中?だけ補う / 背景セッションは 1 件(終了は出さない) / 実機の公式一覧 {len(real)} 件"
+
+
+@case("DG-01", "まとめ役の選び方: 上限のアカウントを避け、全部上限なら投げない")
+def dg01(ctx):
+    import overview as o
+    lim = {"active": True, "resets": "4:10am", "kind": "5h", "at": "", "resets_at": time.time() + 3600}
+    C = lambda p, email, l=None: {"ai": "Claude", "profile": p, "email": email, "limit": l, "logged_in": None}
+    X = lambda l=None, used=0: {"ai": "Codex", "profile": "codex", "email": "", "limit": l, "logged_in": None,
+                                "usage": {"used_percent": used, "window_minutes": 10080, "resets_at": time.time() + 7200}}
+    cases = [
+        ("既定が空いている", [C("default", "a@b"), X()], "", ("Claude", "")),
+        ("既定が上限→別アカウント", [C("default", "a@b", lim), C("work", "c@d"), X()], "", ("Claude", "work")),
+        ("Claude 全部上限→Codex", [C("default", "a@b", lim), X()], "", ("Codex", "")),
+        ("Codex 希望", [C("default", "a@b"), X()], "Codex", ("Codex", "")),
+        ("Codex が使い切り→Claude", [C("default", "a@b"), X(used=100)], "Codex", ("Claude", "")),
+        ("全部上限→投げない", [C("default", "a@b", lim), X(lim)], "", ("", "")),
+        ("未ログインは選ばない", [C("default", "a@b", lim), C("empty", ""), X(lim)], "", ("", "")),
+    ]
+    bad = []
+    for name, acc, prefer, want in cases:
+        got = o.pick_ai(prefer, acc)
+        if (got["ai"], got["profile"]) != want:
+            bad.append((name, (got["ai"], got["profile"]), want))
+    check(not bad, f"選び方が違う(実際, 期待) {bad}")
+    none = o.pick_ai("", [C("default", "a@b", lim), X(lim)])
+    check("上限" in none["why"] and "4:10am" in none["why"], f"理由に解除時刻が無い {none['why']!r}")
+    st, d, _ = http("/api/pick")
+    check(st == 200 and "ai" in d and "why" in d, f"API {st} {str(d)[:100]}")
+    return f"{len(cases)} 通りの選び方が一致 / 全部上限では ai 空 + 理由({none['why'][:40]}…) / API は {d.get('ai') or '空'}"
+
+
+@case("DG-02", "任せる: 選ばれた AI とアカウントで端末を起こし、共通の指示と依頼文を渡す(実行はしない)")
+def dg02(ctx):
+    brief = "本番に触らない。試験を足してから直す。"
+    ask = "検索の索引を SQLite に移して、件数が一致することを確かめて"
+    http("/api/groups", "POST", {"groups": {"dgproj": {"label": "DG 案件", "instructions": brief}}}, headers={"Origin": BASE.rstrip("/")})
+    data = tempfile.mkdtemp(dir=ctx["data"])
+    open(os.path.join(data, "hook-declined"), "w").close()
+    shutil.copy2(os.path.join(ctx["data"], "groups.json"), os.path.join(data, "groups.json"))
+    work = os.path.join(data, "work"); os.makedirs(work, exist_ok=True)
+    js = """board.setToApp(() => {});
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'delegate', key: 'dgproj', cwd: %s, ai: 'Claude', profile: 'som', text: %s});
+      await new Promise(r => setTimeout(r, 1500));
+      P({type: 'delegate', key: 'dgproj', cwd: %s, ai: 'Codex', profile: '', text: %s});
+      P({type: 'delegate', key: 'dgproj', cwd: %s, ai: 'Claude', profile: 'bad name; rm -rf /', text: 'x'});
+      P({type: 'delegate', key: 'dgproj', cwd: %s, ai: 'Claude', profile: '', text: ''});
+      await new Promise(r => setTimeout(r, 2500)); return 1;""" % (json.dumps(work), json.dumps(ask), json.dumps(work), json.dumps(ask), json.dumps(work), json.dumps(work))
+    out = os.path.join(data, "js.json")
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
+               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+    subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                   env=env, capture_output=True, text=True, timeout=150)
+    check(os.path.exists(out) and json.load(open(out)).get("ok"), "盤の中で JS が動かなかった")
+    bodies = [open(p).read() for p in sorted(glob.glob(os.path.join(data, "launch", "pane-*.sh")))]
+    cl = [b for b in bodies if "claude" in b]
+    cx = [b for b in bodies if "codex" in b]
+    check(len(cl) == 1 and len(cx) == 1, f"端末の数 claude={len(cl)} codex={len(cx)}(不正な依頼で開いていないか)")
+    check("CLAUDE_CONFIG_DIR=" in cl[0] and "/.claude-profiles/som" in cl[0], f"アカウントの指定が無い {cl[0][-200:]!r}")
+    check("--append-system-prompt-file" in cl[0], f"共通の指示が渡っていない {cl[0][-200:]!r}")
+    askfile = os.path.join(data, "projects", "dgproj-ask.md")
+    check(os.path.exists(askfile) and open(askfile).read().strip() == ask, f"依頼文のファイル {askfile}")
+    cxfile = os.path.join(data, "projects", "dgproj.md")
+    body = open(cxfile).read()
+    check(brief in body and ask in body, f"Codex に前提と依頼が渡っていない {body[:80]!r}")
+    check("rm -rf" not in " ".join(bodies), "不正なアカウント名がコマンドに混ざった")
+    return f"Claude=アカウント som + 指示ファイル + 依頼文 / Codex=前提と依頼を 1 通で / 不正な 2 件は開かない(端末 {len(bodies)} 枚)"
 
 
 # ------------------------------------------------------------------ 実行

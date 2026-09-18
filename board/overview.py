@@ -393,6 +393,11 @@ def save_groups(groups_in, clients_known=None):
                     or not all(isinstance(x, int) and 0 <= x <= 255 for x in rgb)):
                 raise ValueError(f"色が不正: {rgb}")
             row["rgb"] = list(rgb)
+        ins = v.get("instructions")
+        if ins:
+            if not isinstance(ins, str) or len(ins) > 4000:
+                raise ValueError("指示が長すぎる(4000 字まで)")
+            row["instructions"] = ins
         cid = v.get("client")
         if cid:
             if not isinstance(cid, str) or (clients_known is not None and cid not in clients_known):
@@ -555,6 +560,113 @@ def extensions_info(refresh=False):
     return {"skills": skills, "plugins": plugins, "servers": servers, "health": _EXT["health"], "checked_at": _EXT["t"]}
 
 
+_AGENTS = {"t": 0, "val": []}
+
+
+def official_agents(max_age=5):
+    """`claude agents --json` の一覧(公式の状態源)。hook が無くても状態が分かる。
+
+    返す項目: pid(対話セッション)・id(背景セッション)・status(busy/waiting/idle)・waitingFor・state・cwd・name。
+    0.5 秒ほどかかるので 5 秒使い回す。CLI が無い/失敗しても盤は止めない(空で返す)。
+    """
+    now = time.time()
+    if now - _AGENTS["t"] < max_age:
+        return _AGENTS["val"]
+    out = []
+    try:
+        r = subprocess.run(["zsh", "-l", "-c", "command claude agents --json"], capture_output=True, text=True, timeout=15, cwd=HOME)
+        if r.returncode == 0 and r.stdout.strip().startswith("["):
+            out = [x for x in json.loads(r.stdout) if isinstance(x, dict)]
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        out = _AGENTS["val"]   # 取れなかった時は前の値(古いと分かるように t は進めない)
+        _AGENTS["val"] = out
+        return out
+    _AGENTS.update(t=now, val=out)
+    return out
+
+
+OFFICIAL_STATE = {   # 公式の言い方 → 盤の言い方
+    ("waiting", "permission prompt"): "確認待ち", ("waiting", "sandbox request"): "確認待ち",
+    ("waiting", "worker request"): "確認待ち", ("waiting", "dialog open"): "確認待ち",
+    ("waiting", "input needed"): "返答待ち", ("waiting", None): "返答待ち",
+    ("busy", None): "作業中", ("idle", None): "返答待ち",
+}
+
+
+def official_for_pid(pid, agents=None):
+    """その pid の公式の状態。見つからなければ None。"""
+    if not pid:
+        return None
+    for a in (agents if agents is not None else official_agents()):
+        if a.get("pid") == pid:
+            st = OFFICIAL_STATE.get((a.get("status"), a.get("waitingFor"))) or OFFICIAL_STATE.get((a.get("status"), None))
+            return {"status": a.get("status"), "waiting_for": a.get("waitingFor"), "name": a.get("name") or "", "state": st}
+    return None
+
+
+BACKGROUND_STATE = {"blocked": ("確認待ち", "🔴"), "running": ("作業中", "🟢"), "queued": ("起動中?", "🔵"),
+                    "done": ("終了", "⚪"), "failed": ("⛔ エラーで停止", "🔴"), "stopped": ("終了", "⚪")}
+
+
+def background_sessions(agents=None):
+    """agent view(claude agents)で動いている背景セッション。端末を持たないので tty では見つからない。"""
+    out = []
+    for a in (agents if agents is not None else official_agents()):
+        if a.get("kind") != "background" or not a.get("id"):
+            continue
+        state, mark = BACKGROUND_STATE.get(a.get("state") or "", ("起動中?", "🔵"))
+        if state == "終了":
+            continue   # 終わったものは「いま」には出さない(過去は索引から出る)
+        started = (a.get("startedAt") or 0) / 1000 or None
+        out.append({
+            "tab": "a-" + str(a["id"])[:8], "tty": "", "sid": a.get("sessionId") or ("agent:" + str(a["id"])),
+            "state": state, "mark": mark, "ai": "Claude", "model": "", "account": "", "model_id": "",
+            "model_style": cs.model_style(""), "cwd": a.get("cwd") or "", "project": project_name(a.get("cwd") or ""),
+            "doing": redact(a.get("name") or ""), "task": redact(a.get("name") or ""), "topic": "",
+            "client": (cs._clients.classify(cwd=a.get("cwd") or "", texts=(a.get("name") or "",)) if cs._clients else None),
+            "state_for": None, "ago": (time.time() - started) if started else None, "started": started,
+            "mem_mb": 0, "pid": None, "transcript": "", "today_requests": 0, "today_requests_partial": False,
+            "subagents": {}, "tools": None, "loop": None, "limit": None, "group_label": "", "group_rgb": None,
+            "background": True, "project_hint": "",
+        })
+    return out
+
+
+def pick_ai(prefer="", accounts_now=None):
+    """まとめ役が使う「いま空いている AI」の決め方。上限に当たっていない方を選ぶ。
+
+    返り値: {"ai": "Claude"|"Codex", "profile": <Claude のアカウント名 or "">, "why": 理由}
+    どちらも上限なら ai="" と理由を返す(勝手に投げない)。
+    """
+    acc = accounts_now if accounts_now is not None else accounts()
+    # ログイン済みの目印: 設定にメールがある(logged_in は accounts() では引かない。CLI を呼ぶと遅いため)
+    claude = [a for a in acc if a.get("ai") == "Claude" and a.get("logged_in") is not False and (a.get("email") or a.get("profile") == "default")]
+    codex = next((a for a in acc if a.get("ai") == "Codex"), None)
+    free_claude = [a for a in claude if not ((a.get("limit") or {}).get("active"))]
+    cx_usage = (codex or {}).get("usage") or {}
+    codex_free = (codex is not None and not ((codex.get("limit") or {}).get("active"))
+                  and codex.get("logged_in") is not False and (cx_usage.get("used_percent") or 0) < 100)
+    order = [("Codex", None), ("Claude", None)] if prefer == "Codex" else [("Claude", None), ("Codex", None)]
+    for ai, _ in order:
+        if ai == "Claude" and free_claude:
+            a = free_claude[0]
+            return {"ai": "Claude", "profile": "" if a.get("profile") == "default" else (a.get("profile") or ""),
+                    "why": "Claude が空いている" + (f"(アカウント {a.get('profile')})" if a.get("profile") not in ("default", None) else "")}
+        if ai == "Codex" and codex_free:
+            return {"ai": "Codex", "profile": "", "why": "Claude が上限なので Codex に回す" if prefer != "Codex" else "Codex が空いている"}
+    busy = []
+    for a in claude:
+        lim = a.get("limit") or {}
+        if lim.get("active"):
+            busy.append(f"Claude({a.get('profile')}) は {lim.get('resets') or '時刻不明'} まで上限")
+    if codex and (((codex.get("limit") or {}).get("active")) or (cx_usage.get("used_percent") or 0) >= 100):
+        when = (codex.get("limit") or {}).get("resets")
+        if not when and cx_usage.get("resets_at"):
+            when = time.strftime("%m/%d %H:%M", time.localtime(cx_usage["resets_at"]))
+        busy.append(f"Codex は {when or '時刻不明'} まで上限")
+    return {"ai": "", "profile": "", "why": "・".join(busy) or "使えるアカウントが無い"}
+
+
 # ---------------------------------------------------------------- セッション ----
 def _tools_of(t):
     return session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None
@@ -568,7 +680,7 @@ def _tools_brief(t):
     return {"skills": top(tl["skills"]), "mcp": top(tl["mcp"])} if (tl["skills"] or tl["mcp"]) else None
 
 
-def sessions(procs=None):
+def sessions(procs=None, with_official=True):
     """cs.classify() の結果を JSON 化できる形に整える(件数は cs と同じ)。"""
     now = time.time()
     tabs = cs.classify(cs.iterm_sessions(), procs or cs.processes())
@@ -603,6 +715,21 @@ def sessions(procs=None):
             "limit": with_active(codex_limit(t.get("doing")) if (t.get("ai") or "").startswith("Codex")
                                  else claude_limit(t["transcript"]) if t.get("transcript") else None),
         })
+    if with_official:
+        agents = official_agents()
+        for x in out:   # hook が無い/まだ書かれていないセッションは、公式の状態で補う
+            off = official_for_pid(x.get("pid"), agents)
+            if off:
+                x["official"] = off
+                if off["state"] and x["state"] in ("起動中?", "終了(古い題名)", ""):
+                    x["state"] = off["state"]
+                    x["mark"] = {"確認待ち": "🔴", "返答待ち": "🟡", "作業中": "🟢"}.get(off["state"], x["mark"])
+                    if not x.get("task") and off["name"]:
+                        x["task"] = redact(off["name"])
+        seen_tty = {x.get("tty") for x in out}
+        for b in background_sessions(agents):
+            if b["sid"] not in {x.get("sid") for x in out}:
+                out.append(b)
     return [apply_group(x) for x in out]
 
 
