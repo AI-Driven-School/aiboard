@@ -1,0 +1,16 @@
+# Homebrew cask。scripts/publish-release.sh が版と SHA を埋めて tap に置く
+cask "aiboard" do
+  version "__VERSION__"
+  sha256 "__SHA256__"
+
+  url "https://github.com/AI-Driven-School/aiboard/releases/download/v#{version}/AIBoard-#{version}.dmg"
+  name "AIBoard"
+  desc "Whiteboard for your Claude Code and Codex sessions, with real terminals"
+  homepage "https://github.com/AI-Driven-School/aiboard"
+
+  depends_on macos: ">= :ventura"
+
+  app "AIBoard.app"
+
+  zap trash: ["~/.aiboard"]
+end

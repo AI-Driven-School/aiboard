@@ -5144,6 +5144,72 @@ def ac04(ctx):
     return "6 通りの判定一致・Gemini の端末が pid 702・メモリ 150000 で 1 枚のカードになる"
 
 
+@case("RL-02", "配布物: dmg と zip から取り出した .app が動く形で、チェックサムが一致する")
+def rl02(ctx):
+    import plistlib
+    ver = json.load(open(os.path.join(ROOT, "Package.resolved")))["version"] if False else None
+    outs = sorted(glob.glob(os.path.join(ROOT, "dist", "*")))
+    if not outs:
+        return "SKIP: dist/ が無い(scripts/release.sh を流していない)"
+    d = outs[-1]
+    zips = glob.glob(os.path.join(d, "*.zip")); dmgs = glob.glob(os.path.join(d, "*.dmg"))
+    sums = os.path.join(d, "SHA256SUMS.txt")
+    check(zips and dmgs and os.path.exists(sums), f"配布物が足りない {os.listdir(d)}")
+    want = {}
+    for line in open(sums):
+        h, n = line.split()
+        want[n] = h
+    import hashlib
+    for p in zips + dmgs:
+        h = hashlib.sha256(open(p, "rb").read()).hexdigest()
+        check(want.get(os.path.basename(p)) == h, f"{os.path.basename(p)} のチェックサムが違う")
+    work = tempfile.mkdtemp(dir=ctx["data"])
+    r = subprocess.run(["ditto", "-x", "-k", zips[0], work], capture_output=True, text=True, timeout=120)
+    check(r.returncode == 0, f"zip を展開できない {r.stderr[:120]}")
+    app = os.path.join(work, "AIBoard.app")
+    check(os.path.isdir(app), f"展開物に .app が無い {os.listdir(work)}")
+    pl = plistlib.load(open(os.path.join(app, "Contents", "Info.plist"), "rb"))
+    ver = pl.get("CFBundleShortVersionString")
+    check(os.path.basename(d) == ver, f"版が違う: フォルダ {os.path.basename(d)} / Info.plist {ver}")
+    exe = os.path.join(app, "Contents", "MacOS", "AIBoard")
+    check(os.access(exe, os.X_OK) and open(exe, "rb").read(4) in (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe"), "実行ファイルが壊れている")
+    for need in ("Resources/board/overview.html", "Resources/board/cs.py", "Resources/AppIcon.icns"):
+        check(os.path.exists(os.path.join(app, "Contents", need)), f"同梱物が無い: {need}")
+    junk = [p for p in glob.glob(os.path.join(app, "Contents", "Resources", "board", "**", "*"), recursive=True) if p.endswith(".pyc")]
+    check(not junk, f"中間ファイルが入っている {len(junk)} 件")
+    sig = subprocess.run(["/usr/bin/codesign", "-dv", app], capture_output=True, text=True)
+    signed = "Signature=adhoc" not in (sig.stdout + sig.stderr)
+    mount = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", dmgs[0]], capture_output=True, text=True, timeout=120)
+    check(mount.returncode == 0, f"dmg を開けない {mount.stderr[:120]}")
+    vol = [l.split("\t")[-1].strip() for l in mount.stdout.splitlines() if "/Volumes/" in l][-1]
+    try:
+        check(os.path.isdir(os.path.join(vol, "AIBoard.app")), f"dmg に .app が無い {os.listdir(vol)}")
+        check(os.path.islink(os.path.join(vol, "Applications")), "dmg に Applications への近道が無い(ドラッグして入れられない)")
+    finally:
+        subprocess.run(["/usr/bin/hdiutil", "detach", vol, "-quiet"], capture_output=True, timeout=120)
+    return f"版 {ver}・zip と dmg のチェックサム一致・同梱 3 種あり・pyc 0 件・署名 {'あり' if signed else 'ad-hoc(未署名)'}"
+
+
+@case("RL-03", "配る手順: 署名が無いときは Releases も brew も未署名を配らない形になっている(静的検査)")
+def rl03(ctx):
+    rel = open(os.path.join(ROOT, "scripts", "release.sh"), encoding="utf-8").read()
+    pub = open(os.path.join(ROOT, "scripts", "publish-release.sh"), encoding="utf-8").read()
+    cask = open(os.path.join(ROOT, "packaging", "aiboard.rb.tmpl"), encoding="utf-8").read()
+    check("--options runtime" in rel and "--timestamp" in rel, "公証に要る hardened runtime / timestamp が無い")
+    check("notarytool submit" in rel and "stapler staple" in rel, "公証と staple の手順が無い")
+    check("exit 2" in rel and "Developer ID Application" in rel, "証明書が無いときに止まらない")
+    check('SIGNED=no' in pub and 'if [ "$SIGNED" = yes ]' in pub, "署名の有無で分岐していない")
+    check("未署名なので tap は更新しない" in pub, "未署名でも brew に流してしまう")
+    check("quarantine" in pub, "未署名版の回避手順を Releases に書いていない")
+    check("__VERSION__" in cask and "__SHA256__" in cask and "AI-Driven-School/aiboard" in cask, f"cask の雛形が不完全")
+    ent = open(os.path.join(ROOT, "Resources", "AIBoard.entitlements"), encoding="utf-8").read()
+    check("app-sandbox" not in ent, "サンドボックスを入れている(端末が動かない)")
+    check("apple-events" in ent, "iTerm への問い合わせ権限が無い")
+    doc = open(os.path.join(ROOT, "docs", "release.md"), encoding="utf-8").read()
+    check("Manage Certificates" in doc and "K7CD7UAWWC" in doc, "証明書の作り方が手順書に無い")
+    return "署名・公証・staple・証明書が無いときの停止・未署名を brew に流さない・sandbox 無し・手順書あり"
+
+
 # ------------------------------------------------------------------ 実行
 MANUAL = [
     ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない。もう一度 Enter で送られる"),
