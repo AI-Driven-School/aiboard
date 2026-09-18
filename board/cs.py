@@ -198,6 +198,21 @@ def app_panes():
             for p in d.get("panes", []) if p.get("tty")]
 
 
+def app_notify_auth():
+    """アプリが記録した通知の許可の状態(authorized / denied / notDetermined …)。アプリが動いていなければ空。
+
+    止められていると「あなたを待っている」を知らせる手段が無くなるのに、これまで誰も気づけなかった
+    (この Mac も denied だった。2026-09-18 実測)。
+    """
+    try:
+        with open(APP_PANES, encoding="utf-8") as f:
+            d = json.load(f)
+        os.kill(int(d["app_pid"]), 0)
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    return str(d.get("notify_auth") or "")
+
+
 def processes():
     out = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,rss=,tty=,command="],
                          capture_output=True, text=True).stdout

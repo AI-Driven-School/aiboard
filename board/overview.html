@@ -427,6 +427,7 @@ table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6
     <div class="search"><input id="q" placeholder="検索: 依頼文・フォルダ・ファイル" /></div>
     <span class="grow"></span>
     <span id="itermWarn" class="warn tbwarn" hidden></span>
+    <button id="notifyWarn" class="warn tbwarn" hidden></button>
     <button class="stat turn" id="btnTurn" title="該当カードへズーム"><i></i><span class="lbl">あなたの番</span><b id="nTurn">0</b></button>
     <button class="stat work" id="btnWork" title="作業中へズーム"><i></i><span class="lbl">作業中</span><b id="nWork">0</b></button>
     <button class="stat mem" id="btnMem" title="AI セッションのメモリ（多い順・止める）"><svg viewBox="0 0 16 16"><rect x="2.5" y="4.5" width="11" height="7" rx="1"/><path d="M5 4.5v-2M8 4.5v-2M11 4.5v-2M5 11.5v2M8 11.5v2M11 11.5v2"/></svg><span id="nMem">-</span></button>
@@ -520,7 +521,7 @@ const EN = {
   'AI セッションではないので、ここからは送れません（端末で操作します）': 'Not an agent session — use the terminal itself',
   '右の端末で開く': 'Open in terminal', '右の端末で再開': 'Resume in terminal', 'AI セッションではないので右の端末には開けません': 'Not an agent session — cannot open it here', 'このセッションは別の端末で作業中です。作業を中断（Esc）して、同じ会話を右の端末で続けますか？ 中断した作業は途中で止まります。': 'This session is working in another terminal. Interrupt it (Esc) and continue the same conversation here? The current step stops midway.', 'このセッションは別の端末で動いています。そちらの AI を終了し、同じ会話を右の端末で続けます。': 'This session is running in another terminal. Quit the agent there and continue the same conversation here?', '中断できなかったので移していません': 'Could not interrupt it, so it was not moved', '右の端末で開きました': 'Opened in terminal',
   '移せませんでした': 'Could not move', 
-  "使用": "Used", "窓": "window", "リセット": "Resets", "使える": "Available", "最後に上限": "Last limit", "上限はセッションの記録から読んでいます（Claude は当たった時だけ分かる。Codex は使用率も分かる）。": "Limits are read from session logs (Claude: only once a limit is hit. Codex: usage % too).", "ターミナルで実行してください:": "Run this in a terminal:", "このファイルを開いてください:": "Open this file:", "再確認": "Check again", "設定": "Settings", "既定": "default", "ログイン中": "Signed in", "確認できない": "Unknown", "未ログイン": "Signed out", "プロファイル": "Profile", "ログアウト": "Sign out", "ログイン": "Sign in", "設定ファイル": "Config file", "AI アカウント": "AI accounts", "Claude アカウントを追加": "Add Claude account", "状態の通知": "Status reporting", "入っている": "Installed", "入っていない": "Not installed", "無いと Claude の「作業中 / 判断待ち」が出ません。既存の設定は残し、控えを取ってから足します。": "Without it, Claude sessions can't show “working / needs you”. Existing settings are kept and backed up first.", "外す": "Remove", "入れる": "Install", "盤": "Board", "言語": "Language", "見た目": "Look", "顧客の色分け": "Client colors", "社": "clients", "遠隔の無人ジョブ": "Remote unattended jobs", "なし": "none", "データの置き場": "Data folder", "もう一度見る": "Replay", "ログアウトします。このアカウントで動いているセッションは次の操作から失敗します。": "Sign out? Sessions running on this account will fail on their next request.", "新しいアカウントの名前（英数字）": "Name for the new account (letters and digits)", "まだ会話がありません": "No messages yet", "メッセージを送る（Enter）": "Send a message (Enter)", "上限に当たっています": "Usage limit reached", "別アカウントで続ける": "Continue on another account", "この会話の記録を別アカウントにコピーし、そのアカウントで続きを開きます。元のセッションはそのまま残ります。": "Copy this conversation to another account and continue there? The original session is left as is.", "判断を待っています": "Waiting for your decision", "このフォルダを信頼しますか（claude の最初の確認）": "Trust this folder? (claude asks this first)", "端末で ↓ と Enter": "press \u2193 then Enter in the terminal", "はい、信頼する": "Yes, I trust this folder", "いいえ（終了）": "No, exit", "はい": "Yes", "はい、今後も": "Yes, don't ask again", "いいえ": "No",
+  "使用": "Used", "窓": "window", "リセット": "Resets", "使える": "Available", "最後に上限": "Last limit", "上限はセッションの記録から読んでいます（Claude は当たった時だけ分かる。Codex は使用率も分かる）。": "Limits are read from session logs (Claude: only once a limit is hit. Codex: usage % too).", "ターミナルで実行してください:": "Run this in a terminal:", "このファイルを開いてください:": "Open this file:", "再確認": "Check again", "設定": "Settings", "既定": "default", "ログイン中": "Signed in", "確認できない": "Unknown", "未ログイン": "Signed out", "プロファイル": "Profile", "ログアウト": "Sign out", "ログイン": "Sign in", "設定ファイル": "Config file", "AI アカウント": "AI accounts", "Claude アカウントを追加": "Add Claude account", "状態の通知": "Status reporting", "入っている": "Installed", "入っていない": "Not installed", "無いと Claude の「作業中 / 判断待ち」が出ません。既存の設定は残し、控えを取ってから足します。": "Without it, Claude sessions can't show “working / needs you”. Existing settings are kept and backed up first.", "外す": "Remove", "入れる": "Install", "盤": "Board", "言語": "Language", "見た目": "Look", "顧客の色分け": "Client colors", "社": "clients", "遠隔の無人ジョブ": "Remote unattended jobs", "なし": "none", "データの置き場": "Data folder", "もう一度見る": "Replay", "ログアウトします。このアカウントで動いているセッションは次の操作から失敗します。": "Sign out? Sessions running on this account will fail on their next request.", "新しいアカウントの名前（英数字）": "Name for the new account (letters and digits)", "まだ会話がありません": "No messages yet", "メッセージを送る（Enter）": "Send a message (Enter)", "上限に当たっています": "Usage limit reached", "別アカウントで続ける": "Continue on another account", "この会話の記録を別アカウントにコピーし、そのアカウントで続きを開きます。元のセッションはそのまま残ります。": "Copy this conversation to another account and continue there? The original session is left as is.", "判断を待っています": "Waiting for your decision", "通知が止められています": "Notifications are turned off", "通知がまだ許可されていません": "Notifications are not allowed yet", "設定を開く": "open settings", "システム設定 > 通知 > AIBoard": "System Settings > Notifications > AIBoard", "このフォルダを信頼しますか（claude の最初の確認）": "Trust this folder? (claude asks this first)", "端末で ↓ と Enter": "press \u2193 then Enter in the terminal", "はい、信頼する": "Yes, I trust this folder", "いいえ（終了）": "No, exit", "はい": "Yes", "はい、今後も": "Yes, don't ask again", "いいえ": "No",
   '設定 (⌘,)': 'Settings (⌘,)',
   'メモリ': 'Memory', '中断': 'Interrupt', '終了': 'Quit', 'もう一度押すと終了': 'Click again to quit', 'AI セッション合計': 'AI sessions total', 'このMac': 'this Mac', '中断 = Esc を送り、いまの作業だけ止める（会話は残る）。終了 = そのセッションの AI を終わらせる（端末は残る。会話は「過去」から再開できる）。': 'Interrupt sends Esc and stops the current turn. Quit ends the agent in that session; the terminal stays and you can resume it from History.', '動いている AI セッションはありません': 'No agent sessions running', 'Esc を送った': 'Sent Esc', 'デモでは止めません': 'Demo mode: nothing was stopped', '作業中ではないので中断するものがない': 'Not working, nothing to interrupt', 'AI セッションのメモリ（多い順・止める）': 'Agent memory (largest first, stop)',
   'ループ待機': 'Looping', '次': 'next', 'ループ': 'Loop', '次に起きる': 'wakes at', 'skill と MCP': 'Skills & MCP', '確認中…（MCP の接続を試すので数秒かかります）': 'Checking… (connects to each MCP server, takes a few seconds)', '接続': 'connected', '要認証': 'needs auth', '失敗': 'failed', '無効': 'disabled', '未確認': 'not checked', 'フォルダ': 'folder', '全体': 'global', '個': '', '個が要対応': 'need attention', '要認証のものは Claude Code で /mcp を開いて認証します。': 'To fix “needs auth”, run /mcp inside Claude Code.',
@@ -934,6 +935,7 @@ function renderRail(all) {
   if (!live.length) { empty.hidden = false; empty.innerHTML = `<b>${T('動いている AI はありません')}</b>${T('Claude Code か Codex を端末で起動すると、ここにカードとして現れます。')}${APP ? `<br><span class="kbd">⌘T</span> ${T('で Claude を開く')}` : ''}`; }
   else empty.hidden = true;
 }
+{ const nw = $('#notifyWarn'); if (nw) nw.onclick = () => toApp({type: 'notifySettings'}); }
 $('#rail').addEventListener('click', ev => { const c = ev.target.closest('.rl[data-id]'); if (!c) return; select(c.dataset.id); const n = (window._vis || []).find(x => x.id === c.dataset.id); if (n) fitTo([n]); });
 function renderToolbar(all, vis) {
   $('#nTurn').textContent = snap.attention.length;
@@ -947,6 +949,12 @@ function renderToolbar(all, vis) {
         w.textContent = `⚠ ${T('iTerm が応答しません')}: ${why}${it.stale_for ? ` / ${fmtDur(it.stale_for)}${T('前の一覧を表示中')}` : ''}`;
         w.title = e;
       } } }
+  { // 通知が止められていると「あなたを待っている」を知らせる術が無い。気づけるように出す
+    const nw = $('#notifyWarn'), auth = (snap.notify || {}).auth || '';
+    if (nw) { const bad = auth === 'denied' || auth === 'notDetermined';
+      nw.hidden = !bad;
+      if (bad) { nw.textContent = `🔔 ${auth === 'denied' ? T('通知が止められています') : T('通知がまだ許可されていません')} — ${T('設定を開く')}`;
+        nw.title = T('システム設定 > 通知 > AIBoard'); } } }
   { const mb = snap.sessions.filter(x => x.ai).reduce((a, x) => a + (x.mem_mb || 0), 0); $('#nMem').textContent = mb >= 1024 ? (mb / 1024).toFixed(1) + 'GB' : mb + 'MB';
     const m0 = snap.machine; $('#btnMem').classList.toggle('hot', !!(m0 && m0.ok && m0.used_pct >= 85)); if ($('#pTitle').dataset.kind === 'memory' && $('#panel').classList.contains('open')) renderMemory(); }
   const m = snap.machine;
@@ -1626,7 +1634,9 @@ setInterval(loadSnap, 3000);
 setInterval(loadIndex, 300000);
 // 自動操作(デモ録画・試験)用の口
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
-window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy, frames: () => window._frames, vis: () => window._vis, snap: () => snap};
+window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
+  frames: () => window._frames, vis: () => window._vis, snap: () => snap,
+  toolbar: () => renderToolbar(window._frames || [], window._vis || [])};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

@@ -1944,6 +1944,111 @@ def tu02(ctx):
     return f"ボタン {v['labels']} / はい=↓+Enter・いいえ=Enter を端末へ(実セッションには送っていない)"
 
 
+@case("NT-02", "通知が本当に macOS に届く: 許可の状態を見て 1 通出し、配信を確認して取り下げ、押した先(端末)まで進む")
+def nt02(ctx):
+    out = os.path.join(ctx["data"], "notify.json")
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=ctx["data"], OVERVIEW_NO_INDEX="1",
+               AIBOARD_BOARD=BOARD, AIBOARD_NOTIFY_TEST=out)
+    subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                   env=env, capture_output=True, text=True, timeout=90)
+    check(os.path.exists(out), "アプリが結果を書かなかった(通知の口に入っていない)")
+    r = json.load(open(out))
+    if r.get("auth") in ("denied", "notDetermined"):
+        return f"SKIP: この Mac では通知が許可されていない(状態 {r['auth']}。システム設定 > 通知 > AIBoard)"
+    check(not r.get("add_error"), f"通知を出せない: {r['add_error']}")
+    check(r.get("delivered"), f"出した通知が通知センターに無い(id {r.get('id')})")
+    check(r.get("selected") == "0-1" and r.get("terminal_visible"),
+          f"通知を押した先: 選択 {r.get('selected')!r} / 端末の表示 {r.get('terminal_visible')}")
+    return f"許可 {r['auth']} ・1 通配信を確認して取り下げ・押すと端末 0-1 が前に出る(押す操作だけは人の手)"
+
+
+@case("NT-03", "通知が止められていたら盤が知らせる: 許可の状態を snapshot に出し、押すと設定画面を開くよう頼む")
+def nt03(ctx):
+    st, d, _ = http("/api/snapshot")
+    check(st == 200 and "notify" in d, f"snapshot に通知の状態が無い {list(d)[:8]}")
+    check("auth" in (d.get("notify") or {}), f"通知の状態の形 {d.get('notify')}")
+
+    def fn(pg, errs, bl):
+        out = {}
+        for auth, shown in (("denied", True), ("notDetermined", True), ("authorized", False), ("", False)):
+            pg.evaluate("""(a) => { board.snap().notify = {auth: a}; board.toolbar(); }""", auth)
+            pg.wait_for_timeout(250)
+            w = pg.query_selector("#notifyWarn")
+            out[auth or "(空)"] = {"shown": bool(w and not w.get_attribute("hidden") and w.is_visible()),
+                                   "text": (w.inner_text() if w else ""), "expect": shown}
+        pg.evaluate("board.setToApp(m => { window.__sent = (window.__sent || []).concat([m]); })")
+        pg.evaluate("""() => { board.snap().notify = {auth: 'denied'}; board.toolbar(); }""")
+        pg.wait_for_timeout(200)
+        pg.click("#notifyWarn")
+        pg.wait_for_timeout(200)
+        return out, pg.evaluate("window.__sent || []"), errs
+    out, sent, errs = with_page(ctx, fn, "?lang=ja")
+    bad = {k: v for k, v in out.items() if v["shown"] != v["expect"]}
+    check(not bad, f"出る/出ないが期待と違う: {bad}")
+    check("通知" in out["denied"]["text"], f"文面 {out['denied']['text']!r}")
+    check([m.get("type") for m in sent] == ["notifySettings"], f"押した時にアプリへ送るもの {sent}")
+    check(not errs, f"ページエラー {errs[:2]}")
+    return f"denied/notDetermined で警告・authorized と不明では出さない / 押すと設定を開くよう頼む(本当に開くかは人の手)"
+
+
+@case("AP-16", "起動直後にそのまま打てる(入力先が端末)。カードの「右の端末で開く」でその端末に移る")
+def ap16(ctx):
+    # 何もせずに起動直後の状態を見る(押す・クリックするをしない)
+    r0 = run_app_js(ctx, "return 1", wait="7")
+    check(r0.get("ok"), f"{r0}")
+    panes = r0.get("panes") or []
+    check(len(panes) == 1 and panes[0]["kind"] == "shell", f"起動時の端末 {panes}")
+    check(r0.get("terminalVisible"), "起動時に端末が隠れている")
+    check(r0.get("firstResponderIsTerminal"), "起動直後にキー入力が端末に入らない(クリックが要る)")
+    # 盤のカードから自分の端末を選び直す(別の端末を選んでおいてから戻す)
+    js = """
+      const S = (board.snap().sessions || []).filter(x => x.tab && x.tab.startsWith('0-'));
+      if (!S.length) return {why: 'アプリの端末が盤に出ていない'};
+      window.webkit.messageHandlers.aiboard.postMessage({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -il'});
+      await new Promise(r => setTimeout(r, 3000));
+      document.querySelector('#q') && document.querySelector('#q').focus();
+      await new Promise(r => setTimeout(r, 300));
+      const before = document.activeElement && document.activeElement.id;
+      await board.openInApp(S[0]);
+      await new Promise(r => setTimeout(r, 600));
+      return {tab: S[0].tab, focusedBefore: before};"""
+    r = run_app_js(ctx, js, wait="8")
+    check(r.get("ok"), f"{r}")
+    v = r["value"]
+    check(not v.get("why"), f"{v.get('why')}")
+    check(v.get("focusedBefore") == "q", f"先に盤へ入力先を移せていない {v.get('focusedBefore')!r}")
+    check(r.get("selected") == v["tab"], f"選ばれた端末 {r.get('selected')} != {v['tab']}")
+    check(r.get("firstResponderIsTerminal"), "カードから開いたのに、キー入力が端末に入らない")
+    return f"起動直後: 端末 1 枚・入力先は端末 / カードから {v['tab']} を選ぶと入力先もその端末へ"
+
+
+@case("SV-19", "アプリを入れ直したら、アプリの起動で古い盤サーバが新しい版に入れ替わる")
+def sv19(ctx):
+    # 別の場所に置いた「古い版」のサーバを先に立てておく(中身が違うので stamp も違う)
+    old = os.path.join(tempfile.mkdtemp(dir=ctx["data"]), "board")
+    shutil.copytree(BOARD, old, ignore=shutil.ignore_patterns("__pycache__"))
+    with open(os.path.join(old, "aiboard_paths.py"), "a", encoding="utf-8") as f:
+        f.write("\n# uat: 古い版\n")
+    env = env_for_test(ctx["data"])
+    subprocess.run([sys.executable, os.path.join(old, "overview_server.py"), "stop"], env=env,
+                   capture_output=True, text=True, timeout=30)
+    subprocess.run([sys.executable, os.path.join(old, "overview_server.py"), "--no-open"], env=env,
+                   capture_output=True, text=True, timeout=120, cwd=old)
+    st, v1, _ = http("/api/version")
+    check(st == 200, f"古い版のサーバが立たない {v1}")
+    # アプリを起動する。アプリは同梱の board で盤サーバを起こすので、ここで入れ替わるはず
+    r = run_app_js(ctx, "return await fetch('/api/version', {headers: {'X-Overview': '1'}}).then(x => x.json())", wait="8")
+    check(r.get("ok"), f"{r}")
+    v2 = r["value"]
+    sys.path.insert(0, BOARD)
+    import overview_server as osv
+    check(v2["stamp"] != v1["stamp"], f"古い版のまま動いている stamp {v1['stamp']}")
+    check(v2["stamp"] == osv.code_stamp(), f"入れ替わった先が手元のコードでない {v2['stamp']} != {osv.code_stamp()}")
+    check(v2["pid"] != v1["pid"], f"pid が同じ {v1['pid']}")
+    check(not _pid_alive(v1["pid"]), f"古いサーバ(pid {v1['pid']})が生き残っている")
+    return f"古い版 pid {v1['pid']}/{v1['stamp']} → アプリ起動で pid {v2['pid']}/{v2['stamp']}(手元のコードと一致・古い方は終了)"
+
+
 @case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
 def tu01(ctx):
     import cs
@@ -5438,16 +5543,13 @@ def _re01_run(ctx, data, work, cfg, prof):
 # ------------------------------------------------------------------ 実行
 MANUAL = [
     ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない。もう一度 Enter で送られる"),
-    ("MA-02", "通知: 別アプリを前面にして、Claude が判断待ちになったら macOS 通知が出る。通知を押すとその端末が前に出る"),
-    ("MA-03", "判断待ちのボタン: 実セッションが許可を求めた時、会話ビューの 1 / 2 / Esc が効く"),
-    ("MA-04", "送信: 会話ビューから送った文が実セッションに届き、返答が会話に出る"),
+    ("MA-02", "通知を押す: 出た通知をクリックすると、その端末が前に出る(出す・届く・押した先の処理は NT-02 で自動)"),
+    ("MA-03", "判断待ちのボタン: 実セッションが許可を求めた時、会話ビューの 1 / 2 / Esc が効く(RE-02 待ち)"),
     ("MA-05", "終了: 不要なセッションをメモリ一覧で 2 回押しして終了。端末は残り、盤から消え、「過去」から再開できる"),
     ("MA-06", "別アカウントで続き: 上限に当たったセッションで他アカウントのボタンを押し、続きが開く(ログイン済みアカウントで)"),
-    ("MA-08", "端末へ移る: アプリの端末のカードで「右の端末で開く」を押した直後に、キー入力がそのまま右の端末に入る"),
     ("MA-09", "右の端末で開く(別の端末で動いていた会話): 押すと元の端末の AI が終わり、右の端末で同じ会話が続きから開いて、そのまま打てる"),
-    ("MA-10", "起動: アプリを開くと右の端末にシェルが 1 枚あり、クリックせずにそのまま打てる(盤をクリックした後は、端末をクリックすれば打てる)"),
-    ("MA-07", "アプリの更新: make_app.sh 後にアプリを再起動すると、盤サーバが新しい版に入れ替わる(/api/version の stamp が変わる)"),
 ]
+# 自動になったもの: MA-04→RE-01 / MA-07→SV-19 / MA-08・MA-10→AP-16 / MA-02 の配信→NT-02・NT-03
 
 
 def main():

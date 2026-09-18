@@ -1314,6 +1314,7 @@ def snapshot(with_macmini=True):
         "projects": pr,
         "machine": machine(procs),
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
+        "notify": {"auth": cs.app_notify_auth()},
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
         "counts": {

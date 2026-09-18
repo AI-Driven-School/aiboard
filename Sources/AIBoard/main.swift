@@ -23,7 +23,8 @@ let BOARD_DIR: String = {
     return HOME + "/aiboard/board"
 }()
 /// 自己試験(UAT)で動かしているか。試験中はダイアログを出さない(出すとアプリが終わらず、試験が時間切れになる)
-let SELF_TEST: Bool = ["AIBOARD_SELFTEST", "AIBOARD_RESTORE_TEST", "AIBOARD_SWITCH_TEST", "AIBOARD_JS_TEST", "AIBOARD_SHOT"]
+let SELF_TEST: Bool = ["AIBOARD_SELFTEST", "AIBOARD_RESTORE_TEST", "AIBOARD_SWITCH_TEST", "AIBOARD_JS_TEST", "AIBOARD_SHOT",
+     "AIBOARD_NOTIFY_TEST"]
     .contains { ProcessInfo.processInfo.environment[$0] != nil }
 
 let BOARD_URL = URL(string: "http://127.0.0.1:\(ProcessInfo.processInfo.environment["OVERVIEW_PORT"] ?? "8791")/")!   // 試験では別ポート
@@ -241,7 +242,8 @@ final class PaneManager {
     func publish() {
         let list: [[String: Any]] = panes.filter { !$0.tty.isEmpty }.map {
             ["pane": $0.id, "tty": $0.tty, "title": $0.title, "kind": $0.kind, "cwd": $0.cwd, "pid": $0.pid] }
-        write(["updated": Date().timeIntervalSince1970, "app_pid": Int(ProcessInfo.processInfo.processIdentifier), "panes": list], to: PANES_FILE)
+        write(["updated": Date().timeIntervalSince1970, "app_pid": Int(ProcessInfo.processInfo.processIdentifier),
+               "panes": list, "notify_auth": NotifyAuth.status], to: PANES_FILE)
         if terminating { return }   // 終了時に端末が 1 枚ずつ閉じるたびに書き直すと、保存した一覧が空になる
         let st: [[String: Any]] = panes.map { ["kind": $0.kind, "cwd": $0.cwd, "sid": $0.sid] }
         try? FileManager.default.createDirectory(atPath: STATE_DIR, withIntermediateDirectories: true)
@@ -269,6 +271,17 @@ final class PaneManager {
 /// 返答済みは、このアプリの中で動いている端末だけ通知する(iTerm 側のまで鳴ると多すぎる)。
 /// 通知の本文はサーバ側で秘密を伏せたもの(redact 済み)。外部には何も送らない。
 @MainActor
+/// 通知の許可の状態。止められていると「あなたを待っている」を知らせる術が無くなるので、盤に出して気づけるようにする
+enum NotifyAuth {
+    nonisolated(unsafe) static var status = "unknown"
+    nonisolated static func refresh() {
+        UNUserNotificationCenter.current().getNotificationSettings { st in
+            status = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"][min(st.authorizationStatus.rawValue, 4)]
+        }
+    }
+}
+
+
 final class Watcher {
     private var timer: Timer?
     private var known: [String: String] = [:]     // sid → state
@@ -281,7 +294,8 @@ final class Watcher {
     func feed(_ sessions: [[String: Any]]) { update(sessions) }   // 自己試験用
 
     func start() {
-        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in NotifyAuth.refresh() }
+        NotifyAuth.refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.poll() }
     }
 
@@ -450,6 +464,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 }
             }
         }
+        if let out = ProcessInfo.processInfo.environment["AIBOARD_NOTIFY_TEST"] {
+            // UAT 用: 通知が本当に macOS に届くかを確かめる(許可の状態・配信された ID・押した時の動き)。
+            // 出した通知はすぐ取り下げるので、通知センターには残らない。
+            let center = UNUserNotificationCenter.current()
+            let id = "aiboard-uat-" + String(Int(Date().timeIntervalSince1970))
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in
+                center.getNotificationSettings { st in
+                    let auth = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"][min(st.authorizationStatus.rawValue, 4)]
+                    let c = UNMutableNotificationContent()
+                    c.title = L("AIBoard self-test", "AIBoard 自己試験")
+                    c.body = L("checking notification delivery", "通知が届くかの確認")
+                    c.userInfo = ["tab": "0-1", "sid": "uat"]
+                    center.add(UNNotificationRequest(identifier: id, content: c, trigger: nil)) { addErr in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            center.getDeliveredNotifications { ns in
+                                let ids = ns.map { $0.request.identifier }
+                                center.removeDeliveredNotifications(withIdentifiers: [id])
+                                DispatchQueue.main.async {
+                                    self.open(tab: "0-1")   // 通知を押した時と同じ道(押す操作だけは人の手)
+                                    let rep: [String: Any] = ["auth": auth, "id": id, "delivered": ids.contains(id),
+                                                              "add_error": addErr.map { String(describing: $0) } ?? "",
+                                                              "selected": self.pm.selected.map { "0-\($0.id)" } ?? "",
+                                                              "terminal_visible": !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])]
+                                    if let d = try? JSONSerialization.data(withJSONObject: rep, options: [.prettyPrinted]) {
+                                        try? d.write(to: URL(fileURLWithPath: out))
+                                    }
+                                    NSApp.terminate(nil)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_SWITCH_TEST"] {
             // 盤から switchAccount を送ったのと同じ経路で動かし、コピー先と起動コマンドを書き出す(AIBOARD_DRY と併用)
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
@@ -590,6 +638,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if path.hasSuffix(".json") { try? "{}\n".write(toFile: path, atomically: true, encoding: .utf8) }
             }
             NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        case "notifySettings":
+            // 通知の許可はアプリからは変えられない。設定の該当画面を開くところまで
+            if let u = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") { NSWorkspace.shared.open(u) }
         case "hook":
             let op = (b["op"] as? String) == "uninstall" ? "--uninstall" : "--install"
             runHook(op) { [weak self] _, out in
