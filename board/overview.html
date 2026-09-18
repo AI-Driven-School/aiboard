@@ -404,6 +404,15 @@ table.grp .gk{background:#262626;border:1px solid var(--f-line2);border-radius:6
 table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink2);padding:3px 8px;cursor:pointer}
 #insEdit{margin:8px 0;padding:8px;border:1px solid var(--f-line2);border-radius:8px;background:#242424}
 #insEdit textarea{width:100%;background:#1E1E1E;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:8px;font:12px/1.5 inherit;margin-top:6px}
+#pjNotes{width:100%;background:#1E1E1E;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:8px;font:12px/1.6 inherit;margin:6px 0}
+.pjlist{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.pjrow{display:grid;grid-template-columns:96px 1fr auto;gap:10px;align-items:baseline;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12px}
+.pjrow:hover{background:#2E2E2E}
+.pjrow.live{background:rgba(20,174,92,.08)}
+.pjrow .pjw{color:var(--f-ink3);font-variant-numeric:tabular-nums}
+.pjrow .pjt{color:var(--f-ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pjrow .pjs{color:var(--f-ink3);white-space:nowrap}
+#toolbar .tbwarn{font-size:11.5px;color:#FF7A59;max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #zoomctl{background:#2C2C2C !important;border-color:var(--f-line) !important}
 </style>
 </head>
@@ -413,6 +422,7 @@ table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6
     <span class="seg" id="modeSeg"><button class="chip on" data-mode="now">いま</button><button class="chip" data-mode="history">過去</button></span>
     <div class="search"><input id="q" placeholder="検索: 依頼文・フォルダ・ファイル" /></div>
     <span class="grow"></span>
+    <span id="itermWarn" class="warn tbwarn" hidden></span>
     <button class="stat turn" id="btnTurn" title="該当カードへズーム"><i></i><span class="lbl">あなたの番</span><b id="nTurn">0</b></button>
     <button class="stat work" id="btnWork" title="作業中へズーム"><i></i><span class="lbl">作業中</span><b id="nWork">0</b></button>
     <button class="stat mem" id="btnMem" title="AI セッションのメモリ（多い順・止める）"><svg viewBox="0 0 16 16"><rect x="2.5" y="4.5" width="11" height="7" rx="1"/><path d="M5 4.5v-2M8 4.5v-2M11 4.5v-2M5 11.5v2M8 11.5v2M11 11.5v2"/></svg><span id="nMem">-</span></button>
@@ -494,6 +504,9 @@ const JA = {
   'tour.next': '次へ', 'tour.done': 'わかった', 'tour.skip': 'とばす',
 };
 const EN = {
+  '秒で返事がない': 's with no answer', 'osascript を動かせない': 'cannot run osascript',
+  'iTerm が応答しません': 'iTerm is not responding', '前の一覧を表示中': ' ago list shown',
+  '案件': 'Project', 'この案件の指示・申し送り・経過を見る': 'Open this project: brief, handover, history', '共通の指示': 'Brief', 'まだありません（設定 → 束ね方 → 指示 で書けます）': 'None yet (Settings → Grouping → Brief)', '設定を開く': 'Open settings', '申し送り': 'Handover', '次にこの案件に入る人と AI に渡す引き継ぎ。端末を開くときに一緒に渡します。': 'What the next person or agent on this project needs to know. Handed to every terminal you open for it.', '例: 本番の切替は 9/25 まで凍結。索引の再作成は 20 分かかる。失敗したら logs/index.log を先に見る。': 'e.g. Production switch is frozen until the 25th. Rebuilding the index takes 20 minutes. If it fails, read logs/index.log first.', '予約': 'Scheduled', 'この案件の経過': 'History', 'まだ記録がありません': 'Nothing recorded yet', '字': ' chars',
   '任せる': 'Delegate', 'この案件に仕事を任せる(空いている AI を選ぶ)': 'Delegate work to this project (picks a free agent)', 'いま任せられる AI がありません': 'No agent is free right now', 'に任せる仕事': '— what should it do?',
   '指示': 'Brief', 'この案件で開く端末すべてに渡す共通の指示': 'A brief every terminal opened for this project receives', '例: 本番には触らない。変更は必ず試験を足してから。用語は社内の呼び方に合わせる。': 'e.g. Never touch production. Add a test with every change. Use our own words for the domain.', 'この内容で使う': 'Use this', 'やめる': 'Cancel', 'Claude には system prompt として、Codex には最初のメッセージとして渡します': 'Claude receives it as a system prompt, Codex as the first message', '「保存」を押すと有効になります': 'Press Save to apply', 'この案件で Claude を開く(共通の指示つき)': 'Open Claude in this project (with the brief)', 'この案件で Codex を開く(共通の指示つき)': 'Open Codex in this project (with the brief)',
   '押すと開く': 'Click to expand', '畳む': 'Collapse',
@@ -598,6 +611,47 @@ async function openInApp(s) {
   toApp({type: 'resume', ai: (s.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', id: s.sid, cwd: s.cwd});
   say(T('右の端末で開きました'));
   return {ok: true};
+}
+async function renderProject(frameKey) {
+  const key = frameKey.slice(2);
+  $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
+  const f = (window._frames || []).find(x => x.key === frameKey);
+  const label = (f ? f.nodes.map(n => (n.s || n.r || {}).group_label).find(Boolean) : '') || key;
+  $('#pTitle').textContent = `${T('案件')}: ${DEMO ? pick(DEMO_PROJECTS, 'w:' + key) : label}`; $('#pTitle').dataset.kind = 'project';
+  $('#pBody').innerHTML = T('読込中…');
+  let d; try { d = await getJSON('/api/notes?key=' + encodeURIComponent(key)); } catch (e) { $('#pBody').textContent = String(e); return; }
+  if (mode !== 'history' && !(index.records || []).length) loadIndex();
+  const live = (snap.sessions || []).filter(x => (x.project_hint || x.project) === key).map(liveNode);
+  const past = (index.records || []).filter(r => (r.project_hint || r.project) === key && !live.some(l => l.id === r.id)).map(pastNode);
+  const rows = [...live, ...past].sort((a, b) => (b.t || 0) - (a.t || 0)).slice(0, 40);
+  const crons = (snap.sessions || []).filter(x => (x.project_hint || x.project) === key && x.loop && x.loop.crons)
+    .flatMap(x => x.loop.crons);
+  $('#pBody').innerHTML = `
+    <h3>${T('共通の指示')}</h3>
+    <div class="acct"><div class="sub">${d.instructions ? esc(d.instructions).replace(/\n/g, '<br>') : T('まだありません（設定 → 束ね方 → 指示 で書けます）')}</div>
+      <div class="opts"><button id="pjIns">${T('設定を開く')}</button>${APP ? `<button id="pjC">＋Claude</button><button id="pjX">＋Codex</button><button class="primary" id="pjAsk">${T('任せる')}</button>` : ''}</div></div>
+    <h3>${T('申し送り')}</h3>
+    <div class="acct"><div class="sub">${T('次にこの案件に入る人と AI に渡す引き継ぎ。端末を開くときに一緒に渡します。')}</div>
+      <textarea id="pjNotes" rows="8" placeholder="${esc(T('例: 本番の切替は 9/25 まで凍結。索引の再作成は 20 分かかる。失敗したら logs/index.log を先に見る。'))}">${esc(d.text || '')}</textarea>
+      <div class="opts"><button class="primary" id="pjSave">${T('保存')}</button><span id="pjMsg" class="legend"></span></div></div>
+    ${crons.length ? `<h3>${T('予約')}</h3><div class="acct">${crons.map(c => `<div class="kvrow"><span>${esc(hhmm(c.next_at))} <code>${esc(c.cron)}</code>${c.recurring ? ' ↻' : ''}</span><span>${esc(c.prompt)}</span></div>`).join('')}</div>` : ''}
+    <h3>${T('この案件の経過')} <span class="legend">${rows.length}${T('件')}</span></h3>
+    <div class="pjlist">${rows.map(n => {
+      const s0 = n.s || n.r || {}, when = n.live ? T('いま') : fmtT(n.t);
+      const st = n.live ? TS(s0.state || '') : (n.role === 'subagent' ? T('サブエージェント') : T('終了'));
+      return `<div class="pjrow ${n.live ? 'live' : ''}" data-open="${esc(n.id)}"><div class="pjw">${esc(when)}</div>
+        <div class="pjt">${esc((n.task || n.title || s0.first_prompt || '').slice(0, 90))}</div>
+        <div class="pjs">${esc(st)}${s0.model_style ? ' · ' + esc(s0.model_style.label) : ''}</div></div>`; }).join('') || `<div class="sub">${T('まだ記録がありません')}</div>`}</div>`;
+  $('#pjSave').onclick = async () => {
+    let r; try { r = await getJSON('/api/notes', {method: 'POST', body: JSON.stringify({key, text: $('#pjNotes').value})}); } catch (e) { r = {ok: false, reason: String(e)}; }
+    $('#pjMsg').textContent = r.ok ? `${T('保存しました')}（${r.chars}${T('字')}）` : `${T('保存できません')}: ${r.reason}`;
+    $('#pjMsg').className = r.ok ? 'legend' : 'warn';
+  };
+  $('#pjIns').onclick = () => renderSettings(false);
+  if ($('#pjC')) $('#pjC').onclick = () => { const cwd = (live[0] && live[0].s.cwd) || (past[0] && past[0].r.cwd) || ''; toApp({type: 'newInProject', key, cwd, ai: 'Claude'}); };
+  if ($('#pjX')) $('#pjX').onclick = () => { const cwd = (live[0] && live[0].s.cwd) || (past[0] && past[0].r.cwd) || ''; toApp({type: 'newInProject', key, cwd, ai: 'Codex'}); };
+  if ($('#pjAsk')) $('#pjAsk').onclick = () => openDelegate(frameKey);
+  $('#pBody').querySelectorAll('.pjrow[data-open]').forEach(el => el.onclick = () => select(el.dataset.open));
 }
 async function openDelegate(frameKey) {
   // 案件に仕事を任せる: 空いている AI を選び、共通の指示つきで新しい端末を起こして依頼文を渡す
@@ -783,7 +837,7 @@ function render() {
         <div class="fold-r">${dots}${cnt.past ? `<span class="fd past"></span>${cnt.past}` : ''}<span class="fold-x">▸</span></div></div>`]);
       return;
     }
-    items.push(['f:' + f.key, `<div class="frame" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}"><div class="flabel">${color ? `<b style="background:${color}">${esc(label)}</b>` : esc(label)}</div><div class="fsum">${sum}</div>${bigLabel(f, label, color)}<button class="ffold" data-shut="${esc(f.key)}" title="${esc(T('畳む'))}">▾</button>${APP && f.key.startsWith('p:') ? `<span class="fnew"><button data-ask="${esc(f.key)}" title="${esc(T('この案件に仕事を任せる(空いている AI を選ぶ)'))}">${T('任せる')}</button><button data-new="${esc(f.key)}" data-ai="Claude" title="${esc(T('この案件で Claude を開く(共通の指示つき)'))}">＋C</button><button data-new="${esc(f.key)}" data-ai="Codex" title="${esc(T('この案件で Codex を開く(共通の指示つき)'))}">＋X</button></span>` : ''}</div>`]);
+    items.push(['f:' + f.key, `<div class="frame" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}"><div class="flabel">${color ? `<b style="background:${color}">${esc(label)}</b>` : esc(label)}</div><div class="fsum">${sum}</div>${bigLabel(f, label, color)}<button class="ffold" data-shut="${esc(f.key)}" title="${esc(T('畳む'))}">▾</button>${APP && f.key.startsWith('p:') ? `<span class="fnew"><button data-proj="${esc(f.key)}" title="${esc(T('この案件の指示・申し送り・経過を見る'))}">${T('案件')}</button><button data-ask="${esc(f.key)}" title="${esc(T('この案件に仕事を任せる(空いている AI を選ぶ)'))}">${T('任せる')}</button><button data-new="${esc(f.key)}" data-ai="Claude" title="${esc(T('この案件で Claude を開く(共通の指示つき)'))}">＋C</button><button data-new="${esc(f.key)}" data-ai="Codex" title="${esc(T('この案件で Codex を開く(共通の指示つき)'))}">＋X</button></span>` : ''}</div>`]);
     (f.jobs || []).forEach((j, ji) => { items.push(['j:' + f.key + ':' + ji, `<div class="card jobcard" style="left:${j.x}px;top:${j.y}px;border-left-color:${j.ok ? 'var(--green)' : 'var(--red)'}" title="${esc(j.note || '')}"><div class="doing">${esc(j.title)}</div><div class="task">${esc(j.sub)}</div></div>`]); });
   });
   shown.forEach(n => {
@@ -879,6 +933,15 @@ $('#rail').addEventListener('click', ev => { const c = ev.target.closest('.rl[da
 function renderToolbar(all, vis) {
   $('#nTurn').textContent = snap.attention.length;
   $('#nWork').textContent = snap.counts.working;
+  { const it = snap.iterm || {ok: true};
+    const w = $('#itermWarn');
+    if (w) { w.hidden = !!it.ok;
+      if (!it.ok) {
+        const e = String(it.error || ''), sec = (e.match(/^timeout:(\d+)/) || [])[1];
+        const why = sec ? `${sec}${T('秒で返事がない')}` : e.startsWith('nocmd:') ? T('osascript を動かせない') : e.replace(/^error:/, '');
+        w.textContent = `⚠ ${T('iTerm が応答しません')}: ${why}${it.stale_for ? ` / ${fmtDur(it.stale_for)}${T('前の一覧を表示中')}` : ''}`;
+        w.title = e;
+      } } }
   { const mb = snap.sessions.filter(x => x.ai).reduce((a, x) => a + (x.mem_mb || 0), 0); $('#nMem').textContent = mb >= 1024 ? (mb / 1024).toFixed(1) + 'GB' : mb + 'MB';
     const m0 = snap.machine; $('#btnMem').classList.toggle('hot', !!(m0 && m0.ok && m0.used_pct >= 85)); if ($('#pTitle').dataset.kind === 'memory' && $('#panel').classList.contains('open')) renderMemory(); }
   const m = snap.machine;
@@ -1332,6 +1395,8 @@ $('#nodes').addEventListener('click', ev => {
   const fold = ev.target.closest('[data-fold]'); const shut = ev.target.closest('[data-shut]');
   if (fold) { openFrames.add(fold.dataset.fold); shutFrames.delete(fold.dataset.fold); render(); ev.stopPropagation(); return; }
   if (shut) { shutFrames.add(shut.dataset.shut); openFrames.delete(shut.dataset.shut); render(); ev.stopPropagation(); return; }
+  const pj = ev.target.closest('[data-proj]');
+  if (pj) { ev.stopPropagation(); renderProject(pj.dataset.proj); return; }
   const ask = ev.target.closest('[data-ask]');
   if (ask) { ev.stopPropagation(); openDelegate(ask.dataset.ask); return; }
   const mk = ev.target.closest('[data-new]');
@@ -1402,7 +1467,7 @@ function loopLine(s0) {
 }
 async function renderLive(n) {
   const s0 = n.s, m = s0.model_style || {};
-  $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`;
+  $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`; $('#pTitle').dataset.kind = 'live';
   $('#pBody').innerHTML = `
     <div class="convwrap">
       <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span><button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? T('右の端末で開く') : T('iTerm で開く')}</button></div>
@@ -1464,6 +1529,7 @@ async function renderLive(n) {
 }
 async function renderPast(n) {
   const r0 = n.r;
+  $('#pTitle').dataset.kind = 'past';
   $('#pTitle').textContent = `${r0.ai} ${r0.kind === 'subagent' ? T('サブエージェント') : T('過去セッション')} · ${fmtT(r0.start)}〜${fmtT(r0.end)}`;
   $('#pBody').innerHTML = T('読込中…');
   let d; try { d = await getJSON('/api/session?id=' + encodeURIComponent(n.id)); } catch (e) { $('#pBody').innerHTML = `<span class="warn">${esc(e)}</span>`; return; }
@@ -1497,7 +1563,7 @@ setInterval(loadSnap, 3000);
 setInterval(loadIndex, 300000);
 // 自動操作(デモ録画・試験)用の口
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
-window.board = {openInApp, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy, frames: () => window._frames, vis: () => window._vis, snap: () => snap};
+window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy, frames: () => window._frames, vis: () => window._vis, snap: () => snap};
 })();
 </script>
 </body>

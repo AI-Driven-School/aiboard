@@ -70,10 +70,28 @@ PROJECT_ROOTS = [os.path.join(HOME, ".claude", "projects")] + glob.glob(
 
 
 # ---------------------------------------------------------------- 取得 ----
-def osa(script):
-    r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+OSA_ERROR = ""   # 直前の問い合わせが失敗した理由(盤に出すため。空なら正常)
+
+
+def osa(script, timeout=8):
+    """iTerm への問い合わせ。返事が無ければあきらめる。
+
+    iTerm が固まっていると AppleEvent は 2 分近く返らない。以前はここで待ち続け、
+    しかも失敗すると sys.exit していたので、盤サーバごと巻き添えで止まっていた(2026-09-18 実測)。
+    """
+    global OSA_ERROR
+    try:
+        r = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        OSA_ERROR = f"timeout:{timeout}"
+        return ""
+    except OSError as e:
+        OSA_ERROR = f"nocmd:{e}"
+        return ""
     if r.returncode != 0:
-        sys.exit(f"iTerm に問い合わせできない: {r.stderr.strip()}")
+        OSA_ERROR = "error:" + r.stderr.strip()[:160]
+        return ""
+    OSA_ERROR = ""
     return r.stdout
 
 
@@ -121,6 +139,9 @@ def go_tty(tty):
     return on_tty(tty, 'select w\n tell w to select t\n tell t to select s\n activate\n return "OK"')
 
 
+_LAST_ITERM = {"rows": [], "t": 0, "fail_t": 0}
+
+
 def iterm_sessions():
     # iTerm の tell ブロック内では `tab` がタブ文字でなく「タブ」オブジェクトになるので、区切りは外で作る
     script = '''
@@ -140,11 +161,20 @@ def iterm_sessions():
       return out
     end tell'''
     rows = []
-    for line in osa(script).splitlines():
+    # 失敗した直後は間を空ける(固まった iTerm に 2.5 秒ごとに 8 秒待たされると、盤の更新が止まる)
+    if _LAST_ITERM["fail_t"] and time.time() - _LAST_ITERM["fail_t"] < 30:
+        return list(_LAST_ITERM["rows"])
+    out = osa(script)
+    if not out and OSA_ERROR:
+        _LAST_ITERM["fail_t"] = time.time()
+        return list(_LAST_ITERM["rows"])   # 問い合わせに失敗: 前回の一覧を使う(盤は止めない)
+    _LAST_ITERM["fail_t"] = 0
+    for line in out.splitlines():
         parts = line.split("\t")
         if len(parts) >= 4:
             rows.append({"win": int(parts[0]), "tab": int(parts[1]),
                          "tty": parts[2].replace("/dev/", ""), "title": parts[3]})
+    _LAST_ITERM.update(rows=list(rows), t=time.time())
     return rows + app_panes()
 
 

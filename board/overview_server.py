@@ -318,6 +318,10 @@ class Handler(BaseHTTPRequestHandler):
                 if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
                     _login.update(t=now, data=overview.login_status())
                 self._json(200, {"ok": True, "logins": _login["data"], "settings": overview.settings_info(), "fetched": _login["t"]})
+            elif path == "/api/notes":
+                key = q.get("key", "")
+                self._json(200, {"ok": True, "key": key, "text": overview.read_notes(key) if key else "",
+                                 "instructions": (overview.groups().get(key) or {}).get("instructions", "")})
             elif path == "/api/pick":
                 now = time.time()
                 if not _acct.get("data") or now - _acct.get("t", 0) > 60:
@@ -422,6 +426,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/send":
             ok, reason = send_to_tab(body)
             return self._json(200 if ok else 409, {"ok": ok, "reason": reason})
+        if path == "/api/notes":
+            try:
+                n = overview.save_notes(str(body.get("key", "")), str(body.get("text", "")))
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
+            return self._json(200, {"ok": True, "chars": n})
         if path == "/api/groups":
             try:
                 saved = overview.save_groups(body.get("groups") or {}, {c["id"] for c in overview.client_defs()})

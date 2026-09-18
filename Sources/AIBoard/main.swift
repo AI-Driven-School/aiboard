@@ -537,7 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let isCodex = (b["ai"] as? String) == "Codex"
             let profile = (b["profile"] as? String) ?? ""
             guard profile.range(of: "^[A-Za-z0-9_-]{0,32}$", options: .regularExpression) != nil else { return }
-            let brief = projectInstructions(key)
+            let brief = projectBrief(key)
             let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
             var cmd: String
             if isCodex {
@@ -692,6 +692,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         return t
     }
 
+    /// 案件の申し送り(引き継ぎ)。盤の案件パネルから書かれたもの
+    func projectNotes(_ key: String) -> String {
+        let safe = String(key.map { "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".contains($0) ? $0 : "_" }.prefix(64))
+        return (try? String(contentsOfFile: STATE_DIR + "/projects/" + safe + ".notes.md", encoding: .utf8)) ?? ""
+    }
+
+    /// 端末に渡す前提(共通の指示 + 申し送り)。どちらも空なら空
+    func projectBrief(_ key: String) -> String {
+        let ins = projectInstructions(key), notes = projectNotes(key).trimmingCharacters(in: .whitespacesAndNewlines)
+        if ins.isEmpty && notes.isEmpty { return "" }
+        if notes.isEmpty { return ins }
+        let head = ins.isEmpty ? "" : ins + "\n\n"
+        return head + "## これまでの申し送り\n" + notes
+    }
+
     /// 指示を書いたファイルの場所(端末に渡す。盤や他人には渡さない)
     func writeInstructions(_ key: String, _ text: String) -> String {
         let dir = STATE_DIR + "/projects"
@@ -705,7 +720,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     /// 案件の指示つきで端末を開く。Claude は --append-system-prompt-file、Codex は最初のメッセージとして渡す
     /// (Codex には同等の指定が無いため。2026-09-18 に CLI の help と実行で確認)
     func openInProject(key: String, cwd: String, ai: String) {
-        let text = projectInstructions(key)
+        let text = projectBrief(key)
         let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
         var cmd = ai == "Codex" ? "codex" : "claude"
         if !text.isEmpty {

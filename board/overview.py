@@ -414,6 +414,41 @@ def save_groups(groups_in, clients_known=None):
     return clean
 
 
+def safe_key(key):
+    """案件の名前をファイル名に使える形に(アプリ側の writeInstructions と同じ規則)。"""
+    ok = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    return "".join(c if c in ok else "_" for c in str(key))[:64]
+
+
+def notes_path(key):
+    import aiboard_paths as ap
+    d = ap.data("projects")
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, safe_key(key) + ".notes.md")
+
+
+def read_notes(key):
+    """案件の申し送り(次に入る人・AI への引き継ぎ)。無ければ空。"""
+    try:
+        with open(notes_path(key), encoding="utf-8") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def save_notes(key, text):
+    if not isinstance(key, str) or not (1 <= len(key) <= 80):
+        raise ValueError("案件の名前が不正")
+    if not isinstance(text, str) or len(text) > 20000:
+        raise ValueError("申し送りが長すぎる(20000 字まで)")
+    p = notes_path(key)
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, p)
+    return len(text)
+
+
 def client_defs():
     """顧客の定義(id/label/emoji/rgb)。判定規則そのものは clients.py が持つ。"""
     import aiboard_paths as ap
@@ -1135,6 +1170,8 @@ def snapshot(with_macmini=True):
         "projects": pr,
         "machine": machine(procs),
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
+        "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
+                  "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
         "counts": {
             "your_turn": sum(1 for s in sess if s["state"] == "確認待ち"),
             "working": sum(1 for s in sess if s["mark"] in ("🟢", "🟩")),
