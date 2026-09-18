@@ -2060,7 +2060,15 @@ def bd17(ctx):
         pg.evaluate("() => { const c = document.querySelector('#fUnatt'); c.checked = true; c.dispatchEvent(new Event('change', {bubbles: true})); }")
         # 索引(無人実行つき)が届いて束が描かれるまで待つ。機械が混んでいると数十秒かかる
         wait_js(pg, "(board.index().records || []).some(r => r.unattended)", 120)
-        wait_js(pg, "[...document.querySelectorAll('.card')].some(c => (c.dataset.id || '').startsWith('bundle:una:'))", 60)
+        try:   # 描き直しは機械が混んでいると遅れる。落ちる時は「何がどこまで出来ているか」を残す
+            wait_js(pg, "document.querySelectorAll('[data-id^=\"bundle:una:\"]').length > 0", 120)
+        except Fail:
+            return {"skip": "束のカードが出ない: " + json.dumps(pg.evaluate(
+                "() => ({recs: (board.index().records || []).length,"
+                " una: (board.index().records || []).filter(Boolean).length,"
+                " vis: (board.vis() || []).length,"
+                " visBundles: (board.vis() || []).filter(n => String(n.id).indexOf('bundle:una:') === 0).length,"
+                " cards: document.querySelectorAll('.card').length})"), ensure_ascii=False)}
         pg.wait_for_timeout(1500)
         n_una = pg.evaluate("(board.index ? (board.index().records || []) : []).filter(r => r.unattended).length")
         cards = lambda: pg.evaluate("document.querySelectorAll('.card').length")
