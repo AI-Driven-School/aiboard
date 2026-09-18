@@ -114,6 +114,10 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
   padding:0 5px;border-radius:9px;font:700 11px/1 -apple-system,sans-serif;color:#0B0B0B;background:var(--yellow)}
 .f-badge.need{background:var(--red);color:#fff}
 .convhead{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.cvlink{font-size:11.5px;padding:2px 8px;border-radius:10px;border:1px solid var(--line2);color:var(--muted)}
+.cvlink.on{color:#5EEAD4;border-color:rgba(94,234,212,.5)}
+.card.onright{outline:2px solid rgba(94,234,212,.8);outline-offset:-1px}
+.c-right{position:absolute;left:8px;bottom:6px;font-size:12px;color:#5EEAD4;z-index:2}
 .convhead button{margin-left:auto}
 .cvstate{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .cvstate .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)} .cvstate .dot.work{background:var(--green)} .cvstate .dot.turn{background:var(--red)} .cvstate .dot.wait{background:var(--yellow)}
@@ -568,7 +572,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '右の端末で打つ': 'Type in the right terminal', '右の端末に同じセッションを出しています': 'The right terminal shows this same session', 'この会話は右の端末には出ていません': 'This conversation is not in the right terminal', '右の端末に出ています': 'Shown in the right terminal', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
   '遠隔（同じ Wi-Fi の中だけ）': 'Remote (same Wi-Fi only)', 'スマホから判断待ちに答える': 'Answer from your phone',
   '入れています': 'on', '切ってあります': 'off', '切る': 'Turn off', '開く場所': 'Open at',
   'LAN の住所が取れません': 'no LAN address', '切りました': 'Turned off',
@@ -804,7 +808,10 @@ async function getJSON(u, opt) { opt = opt || {}; opt.headers = Object.assign({'
 async function loadSnap() {
   try { snap = await getJSON('/api/snapshot'); statusBase = `${T('更新')} ${new Date().toLocaleTimeString()}  ${T('取得')} ${snap.took}s  ${T('タブ')} ${snap.counts.tabs}`; }
   catch (e) { $('#status').innerHTML = `<span class="warn">${T('snapshot 取得失敗')}: ${esc(e)}</span>`; return; }
-  if (APP) toApp({type: 'sessions', list: snap.sessions.filter(x => isAppTab(x.tab)).map(x => ({tab: x.tab, sid: x.sid, ai: x.ai, cwd: x.cwd}))});
+  if (APP) toApp({type: 'sessions', list: snap.sessions.filter(x => isAppTab(x.tab)).map(x => ({tab: x.tab, sid: x.sid, ai: x.ai, cwd: x.cwd,
+    // 右の端末の札を、盤のカードと同じ名前・同じ色にする(左右が同じものだと分かるように)
+    label: x.ai ? `${(x.model_style || {}).label || x.ai} · ${x.project_hint || x.project || ''}`.replace(/ · $/, '') : '',
+    rgb: (x.model_style || {}).rgb || null}))});
   render();
 }
 async function loadIndex() {
@@ -998,7 +1005,7 @@ function render() {
     const m = Object.assign({}, n.model || {emoji: '❔', label: 'モデル不明', rgb: [120, 120, 120]}); m.label = T(m.label);
     const mc = rgb(m.rgb);
     if (n.bundle) { items.push(['n:' + n.id, `<div class="card past bundle ${sel === n.id ? 'sel' : ''}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:var(--muted)"><div class="doing">${esc(n.doing)}</div><div class="task">${esc(n.task)}</div></div>`]); return; }
-    const cls = ['card', n.live ? 'live' : 'past', n.ghost ? 'ghost' : '', sel === n.id ? 'sel' : '', (sel && sel !== n.id && !related.has(n.id) && n.parentId !== sel) ? 'dimmed' : '', (n.live && n.s.limit && n.s.limit.active) ? 'limited' : (n.live && n.state === '確認待ち') ? 'turn' : (n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'yourturn' : ''].join(' ');
+    const cls = ['card', n.live ? 'live' : 'past', n.ghost ? 'ghost' : '', sel === n.id ? 'sel' : '', (rightTab && n.tab === rightTab) ? 'onright' : '', (sel && sel !== n.id && !related.has(n.id) && n.parentId !== sel) ? 'dimmed' : '', (n.live && n.s.limit && n.s.limit.active) ? 'limited' : (n.live && n.state === '確認待ち') ? 'turn' : (n.live && (n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'yourturn' : ''].join(' ');
     const dot = n.live ? (n.mark === '🟢' || n.mark === '🟩' ? 'work' : n.state === '確認待ち' ? 'turn' : 'wait') : '';
     const kidsRec = n.r?.child_models || (index.records || []).find(r => r.id === n.id)?.child_models;
     const liveKids = n.live && n.s.subagents ? Object.keys(n.s.subagents).length : 0;
@@ -1015,7 +1022,7 @@ function render() {
     const mine = n.live ? (n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '') : '';
     const badge = mine ? `<span class="c-badge ${mine}" title="${esc(mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
     items.push(['n:' + n.id, `<div class="card ${cls} k-${stKey}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:${mc}" title="${esc(title)}">
-      ${badge}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
+      ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
       ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
       <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
@@ -1653,7 +1660,7 @@ $('#nodes').addEventListener('dblclick', async ev => {
   const r = await goTab(n.tab); if (!r.ok) say(r.reason, true);
 });
 function say(msg, bad) { const el = $('#sendMsg'); if (el) { el.textContent = msg; el.className = bad ? 'warn' : 'legend'; } }
-function closePanel() { $('#pTitle').dataset.kind = ''; $('#panel').classList.remove('open'); sel = null; clearInterval(detailTimer); detailTimer = null; render(); }
+function closePanel() { $('#pTitle').dataset.kind = ''; $('#panel').classList.remove('open'); sel = null; clearInterval(detailTimer); detailTimer = null; if (APP) toApp({type: 'show', tab: ''}); render(); }
 $('#pClose').onclick = closePanel;
 async function openPanel(id) {
   $('#panel').classList.add('open');
@@ -1674,6 +1681,8 @@ function tlHtml(tl) {
 // 端末の生の画面ではなく、記録から「依頼 / 返答 / 操作」を時系列で並べ、下に 1 行の入力欄。
 // 判断待ちの時だけ選択肢のボタンを出す(Claude Code の許可確認は数字キーで選ぶ)。本物の端末は「端末」ボタンかダブルクリック。
 let convWho = '';   // 吹き出しの名前に使う「いま見ている AI」
+let rightTab = '';  // 右の端末でいま見えている端末(アプリが知らせる)。そのカードに ⇄ を出す
+function setRightTab(tab) { if (rightTab === tab) return; rightTab = tab || ''; render(); }
 function convHtml(tl) {
   // 連続する「操作」は 1 行に畳む(最後の 1 件を見せ、件数を添える)
   const out = []; let ops = [];
@@ -1714,9 +1723,13 @@ async function renderLive(n) {
   const s0 = n.s, m = s0.model_style || {};
   convWho = m.label || s0.ai || 'AI';   // 吹き出しの名前
   $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`; $('#pTitle').dataset.kind = 'live';
+  if (APP) toApp({type: 'show', tab: isAppTab(s0.tab) ? s0.tab : ''});   // 右の端末も同じセッションへ(入力先は奪わない)
+  const link = !APP ? '' : isAppTab(s0.tab)
+    ? `<span class="cvlink on" title="${esc(T('右の端末に同じセッションを出しています'))}">⇄ ${T('右の端末')} ${esc(s0.tab.slice(2))}</span>`
+    : `<span class="cvlink off" title="${esc(T('この会話は右の端末には出ていません'))}">⇄ ${T('右の端末には無い')}（${esc(s0.tab.startsWith('a-') ? T('背景') : 'iTerm ' + s0.tab)}）</span>`;
   $('#pBody').innerHTML = `
     <div class="convwrap">
-      <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span><button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? T('右の端末で開く') : T('iTerm で開く')}</button></div>
+      <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
       ${loopLine(s0)}
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
       <div class="convlimit" id="cvLimit" hidden></div>
@@ -1821,7 +1834,7 @@ setInterval(loadIndex, 300000);
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
 window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
   frames: () => window._frames, vis: () => window._vis, snap: () => snap,
-  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult};   // 試験用: いまの snap で上のバーだけ描き直す
+  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult, setRightTab, rightTab: () => rightTab};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

@@ -181,6 +181,10 @@ final class PaneManager {
     }
     let header = NSTextField(labelWithString: "")
     var onChange: (() -> Void)?
+    /// 盤と同じ名前と色(「Opus 5 · homepage」)。左の会話と右の端末が同じものだと一目で分かるように、両方に同じ札を出す
+    var labels: [Int: (text: String, rgb: [Int])] = [:]
+    /// 左の会話ビューで開いている端末(⇄ の印を出す)。空なら無し
+    var linkedTab = 0
 
     @discardableResult
     func open(kind: String, cwd: String, command: String?) -> Pane {
@@ -195,14 +199,14 @@ final class PaneManager {
         return p
     }
 
-    func select(_ p: Pane) {
+    func select(_ p: Pane, focus: Bool = true) {
         selected?.view.isHidden = true
         selected = p
         p.view.isHidden = false
         p.view.frame = container.bounds
         panes.forEach { $0.view.setSurfaceVisible($0 === p) }   // 見えない端末は描画を止める(セッションは続く)
         p.view.needsDisplay = true
-        p.view.window?.makeFirstResponder(p.view)
+        if focus { p.view.window?.makeFirstResponder(p.view) }   // 左で読んでいるだけの時は、入力先を奪わない
         titleChanged(p)
         onChange?()
     }
@@ -220,7 +224,20 @@ final class PaneManager {
     func titleChanged(_ p: Pane) {
         if p === selected {
             let mark = p.kind == "claude" ? "◉ CLAUDE" : p.kind == "codex" ? "◉ CODEX" : "○ SHELL"
-            header.stringValue = "\(mark)  ·  \(p.id)/\(panes.count)  ·  \(p.title)"
+            let a = NSMutableAttributedString()
+            if let l = labels[p.id] {
+                // 盤のカードと同じ色の ● と同じ名前。左の会話と同じものならその印
+                let c = NSColor(red: CGFloat(l.rgb[0]) / 255, green: CGFloat(l.rgb[1]) / 255, blue: CGFloat(l.rgb[2]) / 255, alpha: 1)
+                a.append(NSAttributedString(string: "● ", attributes: [.foregroundColor: c]))
+                a.append(NSAttributedString(string: l.text))
+                a.append(NSAttributedString(string: "  ·  \(p.id)/\(panes.count)", attributes: [.foregroundColor: NSColor.secondaryLabelColor]))
+            } else {
+                a.append(NSAttributedString(string: "\(mark)  ·  \(p.id)/\(panes.count)  ·  \(p.title)"))
+            }
+            if linkedTab == p.id {
+                a.append(NSAttributedString(string: L("   ⇄ the conversation on the left", "   ⇄ 左の会話と同じ"), attributes: [.foregroundColor: NSColor.systemTeal]))
+            }
+            header.attributedStringValue = a
         }
         publish()
     }
@@ -581,6 +598,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { self.offerHookIfNeeded() }
         // 通知と Dock バッジ(判断待ちの数)。通知を押すと、その端末へ
+        let prevChange = pm.onChange
+        pm.onChange = { [weak self] in
+            prevChange?()
+            guard let self else { return }
+            let tab = self.pm.selected.map { "0-\($0.id)" } ?? ""
+            self.web.evaluateJavaScript("window.board && board.setRightTab && board.setRightTab(\(String(reflecting: tab)))") { _, _ in }
+        }
         watcher.center.delegate = self
         watcher.onCount = { n in NSApp.dockTile.badgeLabel = n > 0 ? String(n) : nil }
         watcher.onOpen = { [weak self] tab, _ in self?.open(tab: tab) }
@@ -611,6 +635,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     rep["firstResponderIsTerminal"] = self.pm.selected.map { self.window.firstResponder === $0.view } ?? false
                     rep["terminalVisible"] = !self.split.isSubviewCollapsed(self.split.arrangedSubviews[1])
                     rep["chimes"] = Chime.log
+                    rep["paneHeader"] = self.pm.header.stringValue
+                    rep["linkedTab"] = self.pm.linkedTab
                     case .failure(let e): rep["ok"] = false; rep["error"] = String(describing: e)
                     }
                     if !JSONSerialization.isValidJSONObject(rep) { rep["value"] = String(describing: rep["value"] ?? "") }
@@ -742,6 +768,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if m.name == "log" { webLog.append(String(describing: m.body)); if webLog.count > 200 { webLog.removeFirst(100) }; return }
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
         switch type {
+        case "show":
+            // 左で会話を開いた: 右の端末も同じセッションにする(入力先は奪わない)。tab が空なら結び付きを外す
+            let tab = (b["tab"] as? String) ?? ""
+            if let p = pm.pane(tab: tab) { pm.linkedTab = p.id; showTerminal(); pm.select(p, focus: false) }
+            else { pm.linkedTab = 0; if let cur = pm.selected { pm.titleChanged(cur) } }
         case "focus":
             if let tab = b["tab"] as? String, let p = pm.pane(tab: tab) {
                 showTerminal(); pm.select(p); lastFocusedTab = tab
@@ -853,8 +884,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "sessions":
             // 盤が知っている sid を端末に結び付けておく(次回起動時の復元に使う)
             for s in (b["list"] as? [[String: Any]] ?? []) {
-                if let tab = s["tab"] as? String, let sid = s["sid"] as? String, let p = pm.pane(tab: tab), !sid.hasPrefix("tty:") { p.sid = sid }
+                guard let tab = s["tab"] as? String, let p = pm.pane(tab: tab) else { continue }
+                if let sid = s["sid"] as? String, !sid.hasPrefix("tty:") { p.sid = sid }
+                if let text = s["label"] as? String, !text.isEmpty {
+                    pm.labels[p.id] = (text, (s["rgb"] as? [Int]) ?? [120, 120, 120])
+                }
             }
+            if let cur = pm.selected { pm.titleChanged(cur) }
             pm.publish()
         default: break
         }

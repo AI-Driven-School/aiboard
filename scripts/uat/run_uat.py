@@ -2603,6 +2603,52 @@ def sd01(ctx):
     return "設定の入切が snapshot に出る / 3 回続けて呼んでも 1 回だけ鳴る"
 
 
+@case("LK-01", "左右の結び付き: 左で会話を開くと右も同じ端末になり(入力先は奪わない)、両方に同じ札と ⇄ が出る。閉じると外れる")
+def lk01(ctx):
+    js = """
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -f'});   // 2 枚目
+      await nap(2500);
+      // 1 枚目(0-1)を AI のセッションに見せる(素のシェルはカードにならない)。右は 0-2 が選ばれているはず
+      const realFetch = window.fetch;
+      const fake = {tab: '0-1', sid: 'uat-link', ai: 'Claude', state: '作業中', mark: '🟢', cwd: '/Users/uat', project: 'uatproj',
+        doing: 'x', task: 'uat', model_style: {label: 'Opus 5', emoji: '🟠', rgb: [200, 120, 60], short: 'o5', vendor: '', id: 'm'},
+        mem_mb: 1, subagents: {}, tools: null, loop: null, limit: null, client: null, state_for: 1, ago: 1, group_label: '', group_rgb: null, transcript: ''};
+      window.fetch = async (u, o) => {
+        const url = String(u);
+        if (url.includes('/api/conv')) return new Response(JSON.stringify(Object.assign({ok: true, etag: 'x', timeline: []}, fake)), {headers: {'Content-Type': 'application/json'}});
+        if (url.includes('/api/snapshot')) { const r = await realFetch(u, o); const d = await r.json();
+          d.sessions = [fake].concat((d.sessions || []).filter(x => x.tab !== '0-1')); return new Response(JSON.stringify(d), {headers: {'Content-Type': 'application/json'}}); }
+        return realFetch(u, o); };
+      await nap(3500);
+      const s1 = fake;
+      document.querySelector('#q') && document.querySelector('#q').focus();
+      board.select(s1.sid);
+      await nap(1200);
+      const link = (document.querySelector('.cvlink') || {}).textContent || '';
+      const onright = [...document.querySelectorAll('.card.onright')].map(c => c.dataset.id);
+      const active = document.activeElement && (document.activeElement.id || document.activeElement.tagName);
+      return {tab: s1.tab, sid: s1.sid, link, onright, rightTab: board.rightTab(), active};"""
+    r = run_app_js(ctx, js, wait="8")
+    check(r.get("ok"), f"{r}")
+    v = r["value"]
+    check(not v.get("why"), f"{v.get('why')}")
+    check(r.get("selected") == "0-1", f"左で 0-1 を開いたのに右は {r.get('selected')}")
+    check(not r.get("firstResponderIsTerminal"), "左で読んでいるだけなのに入力先が端末に移った")
+    check("⇄" in v["link"] and "1" in v["link"], f"左の見出しに結び付きが無い {v['link']!r}")
+    check(r.get("linkedTab") == 1 and "⇄" in r.get("paneHeader", ""), f"右の札に ⇄ が無い linked={r.get('linkedTab')} header={r.get('paneHeader')!r}")
+    check(v["rightTab"] == "0-1" and v["sid"] in v["onright"], f"右で見えている端末のカードに印が無い {v['rightTab']} {v['onright']}")
+    # 閉じると結び付きが外れる
+    js2 = """
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      window.webkit.messageHandlers.aiboard.postMessage({type: 'show', tab: '0-1'}); await nap(500);
+      board.closePanel(); await nap(600); return 1;"""
+    r2 = run_app_js(ctx, js2, wait="8")
+    check(r2.get("ok") and r2.get("linkedTab") == 0 and "⇄" not in r2.get("paneHeader", ""), f"閉じても結び付きが残る {r2.get('linkedTab')} {r2.get('paneHeader')!r}")
+    return f"左で 0-1 を開く→右も 0-1(入力先は盤のまま)・左「{v['link']}」・右の札「{r.get('paneHeader')}」・カードに ⇄ / 閉じると外れる"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o
