@@ -1147,6 +1147,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if op.runModal() == .OK, let u = op.url { showTerminal(); pm.open(kind: "claude", cwd: u.path, command: "claude") }
     }
     @objc func closePane(_ s: Any?) { if let p = pm.selected { pm.close(p) } else { window.performClose(nil) } }
+    /// ⌃⌘1…9 で n 枚目の端末へ(右のタブ列の並びと同じ番号)。左の会話も追従する
+    @objc func paneByNumber(_ sender: Any?) {
+        guard let it = sender as? NSMenuItem, it.tag >= 1, it.tag <= pm.panes.count else { return }
+        let p = pm.panes[it.tag - 1]
+        showTerminal(); pm.select(p); pm.onUserSelect?(p)
+    }
     @objc func nextPane(_ s: Any?) { pm.step(1) }
     @objc func prevPane(_ s: Any?) { pm.step(-1) }
     @objc func bigger(_ s: Any?) { pm.setFont(delta: 1) }
@@ -1253,6 +1259,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if t == "-" { m.addItem(.separator()); continue }
                 let it = NSMenuItem(title: t, action: sel, keyEquivalent: key); it.keyEquivalentModifierMask = mods; m.addItem(it)
             }
+            if title == L("View", "表示") || title == L("Window", "ウインドウ") {
+                // ⌃⌘1…9 で n 枚目の端末へ(右のタブ列と同じ番号)
+                for n in 1...9 {
+                    let it = NSMenuItem(title: L("Terminal \(n)", "端末 \(n)"), action: #selector(paneByNumber(_:)), keyEquivalent: String(n))
+                    it.keyEquivalentModifierMask = [.control, .command]; it.tag = n; m.addItem(it)
+                }
+            }
             mi.submenu = m; main.addItem(mi)
         }
         menu("AIBoard", [(L("Settings…", "設定…"), #selector(openSettings(_:)), ",", .command), ("-", nil, "", []),
@@ -1272,7 +1285,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                      (L("Select All", "すべて選択"), #selector(NSText.selectAll(_:)), "a", .command)])
         menu(L("View", "表示"), [(L("Toggle Board", "盤を隠す/出す"), #selector(toggleBoard(_:)), "b", .command),
                      (L("Focus Board", "盤へ"), #selector(focusBoard(_:)), "1", .command), (L("Focus Terminal", "端末へ"), #selector(focusTerminal(_:)), "2", .command), ("-", nil, "", []),
-                     (L("Next Terminal", "次の端末"), #selector(nextPane(_:)), "]", [.command, .shift]), (L("Previous Terminal", "前の端末"), #selector(prevPane(_:)), "[", [.command, .shift]), ("-", nil, "", []),
+                     (L("Next Terminal", "次の端末"), #selector(nextPane(_:)), "]", [.command, .shift]), (L("Previous Terminal", "前の端末"), #selector(prevPane(_:)), "[", [.command, .shift]),
+                     ("-", nil, "", []),
                      (L("Bigger Text", "文字を大きく"), #selector(bigger(_:)), "+", .command), (L("Smaller Text", "文字を小さく"), #selector(smaller(_:)), "-", .command), ("-", nil, "", []),
                      (L("Reload Board", "盤を読み込み直す"), #selector(reloadBoard(_:)), "r", .command)])
         NSApp.mainMenu = main
