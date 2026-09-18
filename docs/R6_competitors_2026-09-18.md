@@ -23,6 +23,28 @@
 | Nyx | 不明 | Mac/Win | 非公開 | $29 買い切り | ― | 有料のみ | 非公開 | X | 個人 |
 | **Maestri** | **Swift/SwiftUI** | Mac | 非公開 | 無料/$18 買い切り | ― | 無料＋有料 | 非公開 | PH 180票・日間8位 | 個人 |
 
+## 追記（2026-09-18 夕・本人共有 https://agi-labo.com/tools/cockpit）
+
+**AGI Cockpit**（日本語・商用・3OS: Windows / macOS Apple Silicon / Linux）。公開ページに書いてある範囲のみ:
+
+| 軸 | Cockpit | AIBoard |
+|---|---|---|
+| 見せ方 | **タスク一覧**（実行中・待機中・完了）。チャット応答・ファイル差分・プレビュー | セッションのカード（canvas）。会話ビュー＋本物の端末 |
+| 対応 AI | Claude Code / Codex / Antigravity / Cursor / Grok Build＋OpenRouter・LM Studio | Claude・Codex は状態つき。Gemini/Grok/Cursor は在席のみ |
+| 判断待ち | **`cockpit ask`＝最前面に浮かぶ小窓**でボタン or 自由入力。外出先はスマホでも | Dock の数字＋OS 通知（**通知を切られると無音**＝今日の実測） |
+| 自動実行 | Autorun（時刻・間隔を指定して起動） | 既存の /loop・cron を**読んで表示**するだけ（作れない） |
+| まとめ役 | Master Agent が仕事を分解し「向いている AI に任せて 5 つ並列」、進捗を集約 | 「任せる」＝上限でない AI を 1 本起こす＋結果の突き合わせ（今日追加） |
+| 遠隔 | PWA でタスク追加・追加指示・画像添付・ask への応答 | 無し（ローカル完結が売り） |
+| 価格 | ローカルは無料・無制限。**Autorun とリモートだけ $20/月 or $200/年** | MIT・全部無料 |
+| 既存セッション | 「普段の CLI もそのまま」とだけ。取り込みの記述は無し | iTerm のタブを tty で拾い、右の端末へ移せる |
+| 状態の取り方 | **記載なし** | Claude の hook・Codex の rollout・`claude agents --json` |
+
+読み取れること:
+1. **同じ痛み（どれが自分を待っているか）に、別の入口で答えている**。向こうは「タスクを作らせる」、AIBoard は「既にあるセッションを拾う」。ここは正面衝突しない。
+2. **有料になっているのは Autorun とリモートの 2 つだけ**＝そこに金を払う人がいる、という他人の実証。AIBoard は両方持っていない（リモートはローカル完結の方針と衝突する）。
+3. **`cockpit ask` の最前面小窓**は、今日の実測（この Mac は通知が denied で 1 通も出ていなかった）への直接の答えになっている。通知は利用者が切れるが、**自前の小窓は切られない**。
+4. 状態の検出方法を公開していない＝「どうやって知るのか」は AIBoard の説明資産（hook・rollout・公式の agents）として使える。
+
 ## 表1 要点（機能）
 - 無限キャンバス: termcanvas / termscape / Nyx / Maestri。顧客・案件で束ねる B2 が ✅ は Maestri だけ。
 - 判断待ち検知 C1 ✅: cmux・Agent View・Nimbalyst(モバイル)・Switchboard・agentboard・termcanvas。OS 通知＋Dock C2 はどれも ⚠ か不明。
