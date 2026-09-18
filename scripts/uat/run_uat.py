@@ -4554,15 +4554,15 @@ def wr02(ctx):
 
     got, errs = with_page(ctx, fn, "?lang=ja", route_extra=extra)
     fr = got["frames"]
-    check(fr.get("w:alpha-proj") == ["uat-a1", "uat-a2"], f"alpha の枠 {fr.get('w:alpha-proj')}")
-    check(fr.get("w:beta-proj") == ["uat-b1"], f"beta の枠 {fr.get('w:beta-proj')}")
+    check(fr.get("p:alpha-proj") == ["uat-a1", "uat-a2"], f"alpha の枠 {fr.get('p:alpha-proj')}")
+    check(fr.get("p:beta-proj") == ["uat-b1"], f"beta の枠 {fr.get('p:beta-proj')}")
     check("uat-h1" in (fr.get("home") or []), f"持ち場の分からないものはホームの枠に {fr.get('home')}")
     check(any("alpha-proj" in l for l in got["labels"]), f"枠の見出しに持ち場の名前が出ていない {got['labels']}")
     check(not errs, f"{errs[:1]}")
     dgot, derrs = with_page(ctx, fn, "?lang=ja&demo=1", route_extra=extra)
     dl = " ".join(dgot["labels"])
     check("alpha-proj" not in dl and "beta-proj" not in dl, f"デモで実名が出ている {dgot['labels']}")
-    dfr = {k: v for k, v in dgot["frames"].items() if k.startswith("w:")}
+    dfr = {k: v for k, v in dgot["frames"].items() if k.startswith("p:")}
     check(len(dfr) == 2 and sorted(map(len, dfr.values())) == [1, 2], f"デモで分かれ方が変わった {dfr}")
     return f"alpha 2 枚 / beta 1 枚 / 持ち場不明 1 枚はホーム・見出しに名前・デモでは伏せて分かれ方は同じ"
 

@@ -4,9 +4,11 @@
 
 Native macOS · open source (MIT) · local only, no telemetry
 
-![AIBoard: running sessions grouped by client; yellow cards are waiting for you](site/img/board-overview-crop.png)
+![AIBoard in 30 seconds: sessions grouped by client and working folder, a card turns red, you reply from the board, then History](site/img/demo.gif)
 
-30-second demo: [`site/demo.mp4`](site/demo.mp4) (recorded by `scripts/demo/record.py`)
+*30-second demo, demo mode. [MP4 version](site/demo.mp4) · recorded by [`scripts/demo/record.py`](scripts/demo/record.py)*
+
+![The board: running sessions grouped by client; yellow cards are waiting for you](site/img/board-overview-crop.png)
 
 > Working name. Screenshots use demo mode (`?demo=1`): client names, prompts and folders are fake.
 
