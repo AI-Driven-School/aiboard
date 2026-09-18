@@ -1507,10 +1507,11 @@ def ap13(ctx):
         json.dumps(sid), json.dumps(d1), json.dumps(sid), json.dumps(HOME), json.dumps(real))
     out = os.path.join(data, "js.json")
     env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
-               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await (async () => { " + js + " })()",
+               AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
     try:
         subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
-                       env=env, capture_output=True, text=True, timeout=150)
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
     except subprocess.TimeoutExpired:
         check(False, "アプリが終わらない(ダイアログで止まっている可能性)")
     check(os.path.exists(out) and json.load(open(out)).get("ok"), "盤の中で JS が動かなかった")
@@ -4802,16 +4803,28 @@ def ap07(ctx):
       P({type: 'resume', ai: 'Claude', id: %s, cwd: %s});
       P({type: 'resume', ai: 'Claude', id: %s, cwd: %s});
       await new Promise(r => setTimeout(r, 7000));
-      P({type: 'send', tab: '0-2', text: 'pwd > %s; echo $AIBOARD_PANE >> %s', enter: true});
-      P({type: 'send', tab: '0-3', text: 'pwd > %s; echo $AIBOARD_PANE >> %s', enter: true});
-      await new Promise(r => setTimeout(r, 7000)); return 1;""" % (
+      // シェルの起動は機械が混んでいると 1 分を超える。冪等な指示を送り直し、題名が変わるのを待つ
+      for (let i = 0; i < 20; i++) {
+        P({type: 'send', tab: '0-2', text: "printf '\\033]0;PANE_OK\\007'; pwd > %s; echo $AIBOARD_PANE >> %s", enter: true});
+        P({type: 'send', tab: '0-3', text: "printf '\\033]0;PANE_OK\\007'; pwd > %s; echo $AIBOARD_PANE >> %s", enter: true});
+        await new Promise(r => setTimeout(r, 5000));
+        try {
+          const d = await fetch('/api/snapshot', {headers: {'X-Overview': '1'}}).then(x => x.json());
+          const ok = ['0-2', '0-3'].every(t => { const x = (d.sessions || []).find(y => y.tab === t);
+            return x && ((x.topic || '') + (x.title_topic || '')).indexOf('PANE_OK') >= 0; });
+          if (ok) break;
+        } catch (e) {}
+      }
+      return 1;""" % (
         json.dumps(sid), json.dumps(odd), json.dumps(sid), json.dumps(gone), m1, m1, m2, m2)
     out = os.path.join(data, "js.json")
     env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
-               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await (async () => { " + js + " })()",
+               # 置き場の扱いを見る試験なので、起動の速いシェルで(利用者の .zshrc は混雑時 1 分かかる)
+               AIBOARD_JS_WAIT="4", AIBOARD_DRY="1", AIBOARD_FAST_SHELL="1")
     try:
         subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
-                       env=env, capture_output=True, text=True, timeout=150)
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
     except subprocess.TimeoutExpired:
         check(False, "アプリが終わらない(ダイアログで止まっている可能性)")
     check(os.path.exists(out), "アプリが結果を書かなかった")
@@ -4908,10 +4921,12 @@ def ap09(ctx):
         json.dumps(sid), json.dumps(HOME), json.dumps(sid), json.dumps(HOME), m1, m2, m9, mu, mo)
     out = os.path.join(data, "js.json")
     env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
-               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await (async () => { " + js + " })()",
+               # 宛先の切り分けを見る試験なので、起動の速いシェルで(利用者の .zshrc は混雑時 1 分かかる)
+               AIBOARD_JS_WAIT="4", AIBOARD_DRY="1", AIBOARD_FAST_SHELL="1")
     try:
         subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
-                       env=env, capture_output=True, text=True, timeout=150)
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
     except subprocess.TimeoutExpired:
         check(False, "アプリが終わらない(ダイアログで止まっている可能性)")
     check(os.path.exists(out), "アプリが結果を書かなかった")
@@ -4956,10 +4971,11 @@ def ap10(ctx):
         json.dumps(notjsonl), json.dumps(cfg), json.dumps(tr), json.dumps(cfg))
     out = os.path.join(data, "js.json")
     env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
-               AIBOARD_JS_TEST=out, AIBOARD_JS=js, AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await (async () => { " + js + " })()",
+               AIBOARD_JS_WAIT="4", AIBOARD_DRY="1")
     try:
         subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
-                       env=env, capture_output=True, text=True, timeout=150)
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
     except subprocess.TimeoutExpired:
         check(False, "アプリが終わらない(ダイアログで止まっている可能性)")
     check(os.path.exists(out), "アプリが結果を書かなかった")

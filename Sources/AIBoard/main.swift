@@ -72,7 +72,9 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
         // libghostty に渡す command は空白で分けられるので、渡すのはこのパス 1 つだけにする
         // (以前は "zsh -l -i -c source<NBSP>path" と書いていたが、NBSP が引数に残って
         //  zsh が "source path" という名前のコマンドを探し、端末が即終了していた。2026-09-18 実測)
-        let script = "#!/bin/zsh -il\nexport AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\nexec /bin/zsh -il\n"
+        // 自己試験だけ、起動の速いシェルにできる(利用者の .zshrc は機械が混んでいると 1 分かかる。2026-09-18 実測)
+        let sh = ProcessInfo.processInfo.environment["AIBOARD_FAST_SHELL"] != nil ? "/bin/zsh -f" : "/bin/zsh -il"
+        let script = "#!" + sh + "\nexport AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\nexec " + sh + "\n"
         if path.contains(" ") {   // 空白を含む置き場だと command が分割されるので /tmp に逃がす
             let alt = "/tmp/aiboard-\(getuid())"
             try? FileManager.default.createDirectory(atPath: alt, withIntermediateDirectories: true)
