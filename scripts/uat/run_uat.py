@@ -2686,6 +2686,42 @@ def lk02(ctx):
     return f"タブ列 {[b['title'] for b in strip]} / 0-1 を押す→右が 0-1・入力先は端末・左に会話「{v['title']}」が開く"
 
 
+@case("LK-03", "タブ列が長くても選んだ端末は見える(横に送る)・右クリックに「左で会話を開く」「端末を閉じる」・閉じると端末が減る")
+def lk03(ctx):
+    js = """
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      for (let i = 0; i < 7; i++) { P({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -f'}); await nap(400); }
+      await nap(2500);
+      // 盤が渡すのと同じ形で、長い名前を付ける(列を窓より長くする)
+      P({type: 'sessions', list: [1,2,3,4,5,6,7,8].map(i => ({tab: '0-' + i, sid: 'uat-sid-' + i, ai: 'Claude', cwd: '/tmp',
+        label: 'Opus 5 · long-project-name-' + i, rgb: [200, 120, 60], state: i === 3 ? '確認待ち' : '作業中'}))});
+      await nap(800);
+      P({type: '_test_stripTap', id: 8});                 // 最後の端末を選ぶ(列の右端)
+      await nap(800);
+      return 1;"""
+    r = run_app_js(ctx, js, wait="8")
+    check(r.get("ok"), f"{r}")
+    strip = [b for b in (r.get("strip") or []) if b["tag"] > 0]
+    check(len(strip) == 8, f"端末が 8 枚でない {len(strip)}")
+    last = next(b for b in strip if b["tag"] == 8)
+    check(last["on"] and last["visible"], f"選んだ右端の端末が見えていない {last}")
+    check(r.get("stripWidth", 0) > r.get("stripVisibleWidth", 0), f"列が窓より短く、送る試験になっていない {r.get('stripWidth')} <= {r.get('stripVisibleWidth')}")
+    check(any("左で会話" in t for t in last["menu"]) and any("閉じる" in t for t in last["menu"]), f"右クリックの品書き {last['menu']}")
+    # 右クリック → 端末を閉じる(シェルなので確認なし)
+    js2 = """
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -f'}); await nap(2500);
+      P({type: '_test_stripMenu', id: 2, item: '閉じる'}); await nap(1500);
+      return 1;"""
+    r2 = run_app_js(ctx, js2, wait="8")
+    check(r2.get("ok"), f"{r2}")
+    tags = [p["tab"] for p in (r2.get("panes") or [])]
+    check(tags == ["0-1"], f"2 枚目を閉じたのに残っている {tags}")
+    return f"8 枚で列 {int(r.get('stripWidth', 0))}px > 窓 {int(r.get('stripVisibleWidth', 0))}px でも右端の端末が見える / 品書き {last['menu']} / 閉じると 1 枚に"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

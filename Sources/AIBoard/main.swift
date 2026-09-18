@@ -177,6 +177,30 @@ final class PaneStripTarget: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { p.view.window?.makeFirstResponder(p.view) }
     }
     @objc func plus(_ b: NSButton) { pm.open(kind: "shell", cwd: HOME, command: nil) }
+    @objc func openLeft(_ m: NSMenuItem) {
+        guard let p = pm.panes.first(where: { $0.id == m.tag }) else { return }
+        pm.select(p); pm.onUserSelect?(p)
+    }
+    @objc func closeTab(_ m: NSMenuItem) {
+        guard let p = pm.panes.first(where: { $0.id == m.tag }) else { return }
+        if p.kind != "shell" && !SELF_TEST {   // AI が動いている端末は、閉じる前に聞く(シェルはそのまま)
+            let a = NSAlert()
+            a.messageText = L("Close this terminal?", "この端末を閉じますか？")
+            a.informativeText = L("The session in it will be terminated. You can resume it from History.", "中の AI は終了します。「過去」から再開できます。")
+            a.addButton(withTitle: L("Close", "閉じる")); a.addButton(withTitle: L("Cancel", "やめる"))
+            if a.runModal() != .alertFirstButtonReturn { return }
+        }
+        pm.close(p)
+    }
+    func menu(for p: Pane) -> NSMenu {
+        let m = NSMenu()
+        let a = NSMenuItem(title: L("Open the conversation on the left", "左で会話を開く"), action: #selector(openLeft(_:)), keyEquivalent: "")
+        a.target = self; a.tag = p.id; m.addItem(a)
+        m.addItem(.separator())
+        let c = NSMenuItem(title: L("Close terminal", "端末を閉じる"), action: #selector(closeTab(_:)), keyEquivalent: "")
+        c.target = self; c.tag = p.id; m.addItem(c)
+        return m
+    }
 }
 
 @MainActor
@@ -228,12 +252,18 @@ final class PaneManager {
             if linkedTab == p.id { a.append(NSAttributedString(string: " ⇄", attributes: [.foregroundColor: NSColor.systemTeal, .font: font])) }
             b.attributedTitle = a
             b.toolTip = "\(p.id): \(p.cwd)"
+            b.menu = stripTarget.menu(for: p)     // 右クリック: 左で会話を開く / 端末を閉じる
             strip.addArrangedSubview(b)
         }
         let plus = NSButton(title: "＋", target: stripTarget, action: #selector(PaneStripTarget.plus(_:)))
         plus.bezelStyle = .accessoryBarAction
         plus.toolTip = L("New shell (⇧⌘T) · ⌘T Claude · ⌥⌘T Codex", "新しいシェル(⇧⌘T)・⌘T Claude・⌥⌘T Codex")
         strip.addArrangedSubview(plus)
+        strip.layoutSubtreeIfNeeded()
+        // 端末が多くて列が長い時は、選んでいる端末が見える所まで横に送る
+        if let sel = selected, let b = strip.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.tag == sel.id }) {
+            b.scrollToVisible(b.bounds)
+        }
     }
     lazy var stripTarget = PaneStripTarget(pm: self)
     /// 左の会話ビューで開いている端末(⇄ の印を出す)。空なら無し
@@ -618,17 +648,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         pm.container.translatesAutoresizingMaskIntoConstraints = false
         pm.strip.orientation = .horizontal; pm.strip.spacing = 4; pm.strip.alignment = .centerY
         pm.strip.translatesAutoresizingMaskIntoConstraints = false
-        pm.strip.setClippingResistancePriority(.defaultLow, for: .horizontal)   // 端末が多い時は端が切れる(スクロールより単純)
-        right.addSubview(pm.header); right.addSubview(pm.strip); right.addSubview(pm.container)
+        // 端末が多い時は横に送れるようにする(つまみは出さない。選ぶと見える所まで送る)
+        let stripScroll = NSScrollView()
+        stripScroll.translatesAutoresizingMaskIntoConstraints = false
+        stripScroll.hasHorizontalScroller = false; stripScroll.hasVerticalScroller = false
+        stripScroll.drawsBackground = false; stripScroll.horizontalScrollElasticity = .allowed
+        stripScroll.documentView = pm.strip
+        pm.strip.setHuggingPriority(.required, for: .horizontal)
+        right.addSubview(pm.header); right.addSubview(stripScroll); right.addSubview(pm.container)
         NSLayoutConstraint.activate([
             pm.header.topAnchor.constraint(equalTo: right.topAnchor, constant: 34),   // 透かしたタイトルバーの下
             pm.header.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 10),
             pm.header.trailingAnchor.constraint(equalTo: right.trailingAnchor, constant: -10),
-            pm.strip.topAnchor.constraint(equalTo: pm.header.bottomAnchor, constant: 4),
-            pm.strip.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 8),
-            pm.strip.trailingAnchor.constraint(lessThanOrEqualTo: right.trailingAnchor, constant: -8),
+            stripScroll.topAnchor.constraint(equalTo: pm.header.bottomAnchor, constant: 4),
+            stripScroll.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 8),
+            stripScroll.trailingAnchor.constraint(equalTo: right.trailingAnchor, constant: -8),
+            stripScroll.heightAnchor.constraint(equalToConstant: 24),
             pm.strip.heightAnchor.constraint(equalToConstant: 24),
-            pm.container.topAnchor.constraint(equalTo: pm.strip.bottomAnchor, constant: 4),
+            pm.container.topAnchor.constraint(equalTo: stripScroll.bottomAnchor, constant: 4),
             pm.container.leadingAnchor.constraint(equalTo: right.leadingAnchor, constant: 6),
             pm.container.trailingAnchor.constraint(equalTo: right.trailingAnchor),
             pm.container.bottomAnchor.constraint(equalTo: right.bottomAnchor),
@@ -702,7 +739,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                     rep["chimes"] = Chime.log
                     rep["paneHeader"] = self.pm.header.stringValue
                     rep["firstResponder"] = self.window.firstResponder.map { String(describing: type(of: $0)) } ?? "nil"
-                    rep["strip"] = self.pm.strip.arrangedSubviews.compactMap { ($0 as? NSButton) }.map { ["tag": $0.tag, "title": $0.attributedTitle.string, "on": $0.state == .on] }
+                    rep["strip"] = self.pm.strip.arrangedSubviews.compactMap { ($0 as? NSButton) }.map { ["tag": $0.tag, "title": $0.attributedTitle.string, "on": $0.state == .on,
+                        "menu": ($0.menu?.items.map { $0.title } ?? []), "visible": $0.visibleRect.width > 0] }
+                    rep["stripWidth"] = self.pm.strip.fittingSize.width
+                    rep["stripVisibleWidth"] = self.pm.strip.enclosingScrollView?.contentView.bounds.width ?? 0
                     rep["linkedTab"] = self.pm.linkedTab
                     case .failure(let e): rep["ok"] = false; rep["error"] = String(describing: e)
                     }
@@ -835,6 +875,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         if m.name == "log" { webLog.append(String(describing: m.body)); if webLog.count > 200 { webLog.removeFirst(100) }; return }
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
         switch type {
+        case "_test_stripMenu":
+            guard SELF_TEST, let id = b["id"] as? Int, let p = pm.panes.first(where: { $0.id == id }) else { return }
+            let m = pm.stripTarget.menu(for: p)
+            let title = (b["item"] as? String) ?? ""
+            if let it = m.items.first(where: { $0.title.contains(title) }), let a = it.action { _ = pm.stripTarget.perform(a, with: it) }
         case "_test_stripTap":
             // 自己試験: 右のタブ列を押したのと同じ道(人の操作と同じ処理)
             guard SELF_TEST, let id = b["id"] as? Int, let btn = pm.strip.arrangedSubviews.compactMap({ $0 as? NSButton }).first(where: { $0.tag == id }) else { return }
