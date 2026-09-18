@@ -474,6 +474,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     var boardHidden = false
     var lastState: [[String: Any]] = []
     let ask = AskPanel()
+    var scheduleTimer: Timer?
+    var scheduleLog: [String] = []
 
     func applicationDidFinishLaunching(_ n: Notification) {
         if let d = FileManager.default.contents(atPath: STATE_FILE),
@@ -570,6 +572,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             self.ask.update(rows, offscreen: SELF_TEST)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self.watcher.start() }
+        if ProcessInfo.processInfo.environment["AIBOARD_NO_SCHEDULE"] == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6) { self.startSchedule() }
+        }
         if let cmd = ProcessInfo.processInfo.environment["AIBOARD_SELFTEST"] { selfTest(cmd) }
         if let out = ProcessInfo.processInfo.environment["AIBOARD_JS_TEST"], let js = ProcessInfo.processInfo.environment["AIBOARD_JS"] {
             // UAT 用: 盤が読み込まれてから JS(async 可)を実行し、戻り値を JSON で書いて終わる
@@ -831,6 +836,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     }
 
     /// タブを前面に。アプリの端末ならその端末、iTerm のタブなら盤サーバ経由で iTerm を前に出す
+    /// 予約(Autorun)を見張る。アプリが開いている間だけ走る。走った仕事は普通のセッションとして盤に出る。
+    /// crontab や launchd は触らない(再起動で消える・場所によっては読めない)。
+    func startSchedule() {
+        runDueJobs()   // 開いた時点で期限が来ている分は、待たずに走らせる
+        scheduleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.runDueJobs() }
+    }
+
+    func runDueJobs() {
+        var req = URLRequest(url: BOARD_URL.appendingPathComponent("api/schedule")); req.timeoutInterval = 4
+        req.setValue("1", forHTTPHeaderField: "X-Overview")
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            guard let self, let d = data, let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let jobs = o["jobs"] as? [[String: Any]] else { return }
+            DispatchQueue.main.async {
+                for j in jobs where (j["due"] as? Bool) == true {
+                    guard let id = j["id"] as? String, let prompt = j["prompt"] as? String, !prompt.isEmpty else { continue }
+                    self.startJob(id: id, key: (j["key"] as? String) ?? "", prompt: prompt,
+                                  cwd: (j["cwd"] as? String) ?? HOME, ai: (j["ai"] as? String) ?? "Claude")
+                }
+            }
+        }.resume()
+    }
+
+    func startJob(id: String, key: String, prompt: String, cwd: String, ai: String) {
+        let isCodex = ai == "Codex"
+        let brief = key.isEmpty ? "" : projectBrief(key)
+        let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
+        let ask = writeInstructions("sched-" + id, (brief.isEmpty ? "" : brief + "\n\n---\n\n") + prompt)
+        let cmd = isCodex ? "codex \"$(cat \(shellQuote(ask)))\""
+                          : "command claude \"$(cat \(shellQuote(ask)))\""
+        scheduleLog.append("run \(id) ai=\(ai) cwd=\(dir)")
+        if ProcessInfo.processInfo.environment["AIBOARD_DRY"] == nil {
+            showTerminal()
+            pm.open(kind: isCodex ? "codex" : "claude", cwd: dir, command: cmd)
+        }
+        var req = URLRequest(url: BOARD_URL.appendingPathComponent("api/schedule")); req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.setValue("1", forHTTPHeaderField: "X-Overview")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: ["op": "ran", "id": id])
+        URLSession.shared.dataTask(with: req).resume()
+    }
+
     /// 判断待ちへの答えを、その端末へ。アプリの端末は直接、iTerm のタブは盤サーバの /api/send に頼む。
     func answer(tab: String, sid: String, key: String, text: String) {
         if let p = pm.pane(tab: tab) {

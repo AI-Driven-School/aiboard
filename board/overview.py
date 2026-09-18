@@ -427,6 +427,129 @@ def notes_path(key):
     return os.path.join(d, safe_key(key) + ".notes.md")
 
 
+# ---------------------------------------------------------------- 予約 ----
+# 「毎朝 6 時にこれを」を盤から作る。crontab や launchd は触らない(再起動で消える・TCC で読めない場所がある)。
+# 代わりにアプリが開いている間に見張って走らせる。走った仕事は普通のセッションとして盤に出る。
+SCHEDULE_MIN_EVERY = 15
+
+
+def schedule_path():
+    import aiboard_paths as ap
+    return ap.data("schedule.json")
+
+
+def read_schedule():
+    try:
+        with open(schedule_path(), encoding="utf-8") as f:
+            rows = json.load(f)
+    except (OSError, ValueError):
+        return []
+    return [r for r in rows if isinstance(r, dict) and r.get("id")] if isinstance(rows, list) else []
+
+
+def _write_schedule(rows):
+    p = schedule_path()
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False)
+    os.replace(tmp, p)
+
+
+def save_job(job):
+    """予約を 1 件足す/書き換える。形が違えば ValueError(黙って壊れたものを置かない)。"""
+    if not isinstance(job, dict):
+        raise ValueError("予約の形が不正")
+    prompt = str(job.get("prompt", "")).strip()
+    if not (1 <= len(prompt) <= 4000):
+        raise ValueError("依頼文は 1〜4000 字")
+    cwd = str(job.get("cwd", "") or HOME)
+    if not cwd.startswith("/") or ".." in cwd:
+        raise ValueError("場所が不正")
+    ai = "Codex" if str(job.get("ai", "")) == "Codex" else "Claude"
+    at, every = str(job.get("at", "") or ""), job.get("every")
+    if at and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+        raise ValueError("時刻は HH:MM")
+    if every is not None and every != "":
+        try:
+            every = int(every)
+        except (TypeError, ValueError):
+            raise ValueError("間隔は分(数)")
+        if every < SCHEDULE_MIN_EVERY:
+            raise ValueError(f"間隔は {SCHEDULE_MIN_EVERY} 分以上")
+    else:
+        every = None
+    if not at and not every:
+        raise ValueError("時刻か間隔のどちらかが要る")
+    jid = str(job.get("id") or f"j{int(time.time() * 1000)}")
+    rows = [r for r in read_schedule() if r.get("id") != jid]
+    rec = {"id": jid, "key": str(job.get("key", ""))[:80], "prompt": prompt, "cwd": cwd, "ai": ai,
+           "at": at, "every": every, "enabled": bool(job.get("enabled", True)),
+           "last_run": float(job.get("last_run") or 0), "created": time.time()}
+    rows.append(rec)
+    _write_schedule(rows[-100:])
+    return rec
+
+
+def delete_job(jid):
+    rows = read_schedule()
+    left = [r for r in rows if r.get("id") != jid]
+    _write_schedule(left)
+    return len(rows) - len(left)
+
+
+def mark_ran(jid, when=None):
+    rows = read_schedule()
+    hit = 0
+    for r in rows:
+        if r.get("id") == jid:
+            r["last_run"] = float(when or time.time())
+            hit += 1
+    _write_schedule(rows)
+    return hit
+
+
+def job_due(job, now=None, grace=3600):
+    """いま走らせるべきか。
+
+    - 間隔(every 分): 前回から every 分経っていれば走る
+    - 時刻(at HH:MM): その時刻を過ぎていて、今日まだ走っていなければ走る。
+      ただし grace 秒より古い時刻は走らせない(アプリを夕方に開いて、朝の予約が突然動くのを防ぐ)
+    """
+    if not job.get("enabled", True):
+        return False
+    now = now if now is not None else time.time()
+    last = float(job.get("last_run") or 0)
+    if job.get("every"):
+        return now - last >= float(job["every"]) * 60
+    at = str(job.get("at") or "")
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+        return False
+    lt = time.localtime(now)
+    h, m = (int(x) for x in at.split(":"))
+    today = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+    if now < today:
+        return False
+    if now - today > grace:
+        return False
+    return last < today
+
+
+def job_next_at(job, now=None):
+    """次に走る時刻(表示用)。止めてあれば None。"""
+    if not job.get("enabled", True):
+        return None
+    now = now if now is not None else time.time()
+    if job.get("every"):
+        return max(now, float(job.get("last_run") or 0) + float(job["every"]) * 60)
+    at = str(job.get("at") or "")
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+        return None
+    lt = time.localtime(now)
+    h, m = (int(x) for x in at.split(":"))
+    today = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+    return today if now < today and float(job.get("last_run") or 0) < today else today + 86400
+
+
 def deleg_path(key):
     import aiboard_paths as ap
     d = ap.data("projects")

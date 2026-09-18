@@ -2240,6 +2240,132 @@ def as03(ctx):
     return "アプリの端末(0-1)へは直接送り、シェルが実行した(サーバは経由しない)"
 
 
+@case("SC-04", "予約の画面: 案件に予約を作れて一覧に出る・止める/消すが画面から効く(確認つき)")
+def sc04(ctx):
+    import overview as o
+    origin = {"Origin": BASE.rstrip("/")}
+
+    def fn(pg, errs, bl):
+        fk = pg.evaluate("((board.frames() || []).find(f => f.key.startsWith('p:')) || {}).key")
+        return fk, errs
+    fk, errs = with_page(ctx, fn, "?lang=ja")
+    if not fk:
+        return "SKIP: 案件の枠が無い"
+    key = fk[2:]
+    made = []
+
+    def fn2(pg, errs2, bl):
+        pg.evaluate("() => { window.confirm = () => true; }")
+        pg.evaluate("(k) => board.renderProject(k)", fk)
+        wait_js(pg, "!!document.querySelector('#scAdd')", 30)
+        pg.fill("#scPrompt", "今日の失敗したジョブをまとめて")
+        pg.fill("#scAt", "06:30")
+        pg.click("#scAdd")
+        # 作れたら画面を描き直すので、印は「一覧に行が出たこと」で見る(#scMsg は描き直しで消える)
+        wait_js(pg, "document.querySelector('#pBody').innerText.includes('06:30')", 30)
+        msg = "作成"
+        shown = pg.evaluate("document.querySelector('#pBody').innerText")
+        pg.click("[data-sc-toggle]")
+        wait_js(pg, "document.querySelector('#pBody').innerText.includes('止めています')", 20)
+        paused = pg.evaluate("document.querySelector('#pBody').innerText")
+        pg.click("[data-sc-del]")
+        wait_js(pg, "!document.querySelector('#pBody').innerText.includes('今日の失敗したジョブ')", 30)
+        gone = pg.evaluate("document.querySelector('#pBody').innerText")
+        return {"msg": msg, "shown": shown, "paused": paused, "gone": gone}, errs2
+    try:
+        v, errs = with_page(ctx, fn2, "?lang=ja")
+        made = [j for j in o.read_schedule() if j.get("key") == key]
+        check(not errs, f"ページエラー {errs[:1]}")
+        check("06:30" in v["shown"], f"作れていない {v['shown'][:200]!r}")
+        check("06:30" in v["shown"] and "今日の失敗したジョブ" in v["shown"], f"一覧に出ていない {v['shown'][:200]!r}")
+        check("止めています" in v["paused"], "止められない")
+        check("今日の失敗したジョブ" not in v["gone"], f"消えていない {v['gone'][:200]!r}")
+        check(not [j for j in o.read_schedule() if j.get("key") == key], "画面から消したのに残っている")
+    finally:
+        for j in [x for x in o.read_schedule() if x.get("key") == key]:
+            o.delete_job(j["id"])
+    return f"案件 {fk} に予約を作成→一覧に表示→止める→消す(確認ダイアログつき)"
+
+
+@case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
+def sc01(ctx):
+    import overview as o
+    bad = []
+    for name, job in (("依頼文なし", {"prompt": "", "at": "06:00"}),
+                      ("時刻の形", {"prompt": "x", "at": "25:00"}),
+                      ("間隔が短い", {"prompt": "x", "every": 5}),
+                      ("時刻も間隔も無い", {"prompt": "x"}),
+                      ("場所が不正", {"prompt": "x", "at": "06:00", "cwd": "../etc"})):
+        try:
+            o.save_job(job)
+            bad.append(name)
+        except ValueError:
+            pass
+    check(not bad, f"受けてはいけない予約を受けた: {bad}")
+    j = o.save_job({"prompt": "今日の失敗したジョブをまとめて", "at": "06:00", "cwd": HOME, "key": "uat", "ai": "Codex"})
+    st, d, _ = http("/api/schedule")
+    mine = [x for x in d["jobs"] if x["id"] == j["id"]]
+    check(st == 200 and len(mine) == 1, f"一覧に出ない {d}")
+    check(mine[0]["ai"] == "Codex" and mine[0]["next_at"], f"中身 {mine[0]}")
+    st, r, _ = http("/api/schedule", "POST", dict(j, enabled=False), headers={"Origin": BASE.rstrip("/")})
+    check(st == 200 and r["ok"] and r["job"]["enabled"] is False, f"止められない {r}")
+    st, d2, _ = http("/api/schedule")
+    check([x for x in d2["jobs"] if x["id"] == j["id"]][0]["next_at"] is None, "止めたのに次の時刻が出る")
+    st, r, _ = http("/api/schedule", "POST", {"op": "delete", "id": j["id"]}, headers={"Origin": BASE.rstrip("/")})
+    check(r.get("deleted") == 1, f"消せない {r}")
+    st, d3, _ = http("/api/schedule")
+    check(not [x for x in d3["jobs"] if x["id"] == j["id"]], "消したのに残っている")
+    return "不正 5 通りを拒否 / 作成→一覧→止める→消すが往復する"
+
+
+@case("SC-02", "予約の判定: 時刻は過ぎたら 1 回だけ・古すぎる分は走らせない・間隔は前回からの経過で決まる")
+def sc02(ctx):
+    import overview as o
+    day = time.mktime(time.strptime("2026-09-18", "%Y-%m-%d"))
+    at6 = day + 6 * 3600
+    daily = {"prompt": "x", "at": "06:00", "enabled": True, "last_run": 0}
+    rows = [
+        ("5:59 はまだ", dict(daily), at6 - 60, False),
+        ("6:05 は走る", dict(daily), at6 + 300, True),
+        ("走った後は走らない", dict(daily, last_run=at6 + 10), at6 + 600, False),
+        ("2 時間後に開いたら走らせない", dict(daily), at6 + 7200, False),
+        ("翌日はまた走る", dict(daily, last_run=at6 + 10), at6 + 86400 + 300, True),
+        ("止めてあれば走らない", dict(daily, enabled=False), at6 + 300, False),
+        ("間隔: 前回から 30 分", {"prompt": "x", "every": 30, "enabled": True, "last_run": at6 - 1800}, at6, True),
+        ("間隔: まだ 29 分", {"prompt": "x", "every": 30, "enabled": True, "last_run": at6 - 1740}, at6, False),
+    ]
+    bad = {n: (o.job_due(j, now=now), want) for n, j, now, want in rows if o.job_due(j, now=now) != want}
+    check(not bad, f"判定が違う(実際, 期待) {bad}")
+    nxt = o.job_next_at(dict(daily), now=at6 - 60)
+    check(abs(nxt - at6) < 61, f"次の時刻 {time.strftime('%H:%M', time.localtime(nxt))}")
+    nxt2 = o.job_next_at(dict(daily, last_run=at6 + 10), now=at6 + 600)
+    check(abs(nxt2 - (at6 + 86400)) < 61, f"走った後の次 {time.strftime('%m-%d %H:%M', time.localtime(nxt2))}")
+    check(o.job_next_at(dict(daily, enabled=False)) is None, "止めた予約に次の時刻が出る")
+    return f"{len(rows)} 通りすべて期待どおり(時刻・重複・古い分・間隔・停止)"
+
+
+@case("SC-03", "アプリが予約を走らせる: 期限の来た分だけ起こし、走ったと記録する(実行は試しのみ)")
+def sc03(ctx):
+    import overview as o
+    due = o.save_job({"prompt": "期限が来ている仕事", "every": 15, "cwd": HOME, "key": "uat-sc", "ai": "Claude"})
+    o.mark_ran(due["id"], when=time.time() - 3600)
+    later = o.save_job({"prompt": "まだの仕事", "at": "23:59", "cwd": HOME, "key": "uat-sc"})
+    o.mark_ran(later["id"], when=time.time())
+    try:
+        js = "return await fetch('/api/schedule', {headers: {'X-Overview': '1'}}).then(x => x.json())"
+        r = run_app_js(ctx, js, {"AIBOARD_DRY": "1"}, wait="12")
+        check(r.get("ok"), f"{r}")
+        after = {j["id"]: j for j in r["value"]["jobs"]}
+        check(after[due["id"]]["last_run"] > time.time() - 120, f"期限の来た予約が走っていない {after[due['id']]}")
+        check(after[later["id"]]["last_run"] < time.time() - 1 or not after[later["id"]]["due"],
+              f"まだの予約まで走らせた {after[later['id']]}")
+        panes = r.get("panes") or []
+        check(not [p for p in panes if p.get("kind") in ("claude", "codex")], f"試しのみのはずが端末を開いた {panes}")
+    finally:
+        o.delete_job(due["id"]); o.delete_job(later["id"])
+    return "期限の来た 1 件だけ走らせて記録し、まだの 1 件は触らない(AIBOARD_DRY で端末は開かない)"
+
+
 @case("TU-01", "フォルダの信頼: 設定にある答えだけを信頼済みと読む(全アカウント分・壊れた設定は無視・末尾の / は同一視)")
 def tu01(ctx):
     import cs

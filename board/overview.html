@@ -549,7 +549,13 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', '任せた仕事': 'Delegated', '結果待ち': 'waiting for a result', '無人実行': 'Unattended', 'の無人実行。クリックで展開': 'unattended runs. Click to expand', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
+  '無人ジョブ': 'Unattended jobs', '予約（アプリを開いている間に走ります）': 'Scheduled (runs while this app is open)',
+  '止めています': 'paused', '分ごと': ' min', '止める': 'pause', '再開': 'resume', '消す': 'delete', '予約する': 'Schedule',
+  '例: 今日の失敗したジョブをまとめて': 'e.g. summarise today\u2019s failed jobs',
+  '時刻(HH:MM)を入れると毎日その時刻に。アプリが閉じている間は走りません。走った仕事は普通のカードとして出ます。':
+    'A time (HH:MM) runs it daily. Nothing runs while this app is closed. What runs appears as a normal card.',
+  '依頼文を入れてください': 'Type what to ask', 'この予約を作ります': 'Create this schedule', '(時刻未指定)': '(no time)',
+  '予約しました': 'Scheduled', '予約できません': 'Cannot schedule', 'この予約を消します': 'Delete this schedule', '任せた仕事': 'Delegated', '結果待ち': 'waiting for a result', '無人実行': 'Unattended', 'の無人実行。クリックで展開': 'unattended runs. Click to expand', '「過去」で詳細': 'see History for details', '全部正常': 'all fine', 'いま': 'Now', '● いま': '● Now', '◷ 過去': '◷ History', '⋯ もっと': '⋯ More', '絞り込み・見た目・マシン': 'Filters, look, machine', '? 使い方': '? Tour', '使い方の案内': 'How to use',
   'tour.1.t': 'This is your board', 'tour.1.b': 'Each running Claude Code or Codex session is a card. Squares are clients, dots are models. Drag to pan, wheel to zoom, F fits everything. Switch to History to see the last 30 days.',
   'tour.2.t': 'Your turn', 'tour.2.b': 'This number is how many agents are waiting for a decision. Click it to zoom to them. In History, a strip at the top lists live sessions by urgency.',
   'tour.3.t': 'Color tells you the state', 'tour.3.b': 'Red = stuck on a permission or question. Yellow = replied, your turn. Green = working. Your Dock badge and macOS notifications tell you too.',
@@ -627,6 +633,8 @@ async function renderProject(frameKey) {
   $('#pBody').innerHTML = T('読込中…');
   let d; try { d = await getJSON('/api/notes?key=' + encodeURIComponent(key)); } catch (e) { $('#pBody').textContent = String(e); return; }
   let dg = {rows: []}; try { dg = await getJSON('/api/delegations?key=' + encodeURIComponent(key)); } catch (e) {}
+  let sc = {jobs: []}; try { sc = await getJSON('/api/schedule'); } catch (e) {}
+  const myJobs = (sc.jobs || []).filter(j => j.key === key);
   if (mode !== 'history' && !(index.records || []).length) loadIndex();
   const live = (snap.sessions || []).filter(x => (x.project_hint || x.project) === key).map(liveNode);
   const past = (index.records || []).filter(r => (r.project_hint || r.project) === key && !live.some(l => l.id === r.id)).map(pastNode);
@@ -648,6 +656,20 @@ async function renderProject(frameKey) {
           <div class="pjw">${esc(fmtT(g.at))}</div>
           <div class="pjt">${esc(String(DEMO ? pick(DEMO_TASKS, 'dg' + g.at) : g.text).slice(0, 90))}</div>
           <div class="pjs">${esc(g.ai || '')}${g.profile ? '(' + esc(DEMO ? 'demo' : g.profile) + ')' : ''} · ${esc(m.label)}</div></div>`; }).join('')}</div>` : ''}
+    <h3>${T('予約（アプリを開いている間に走ります）')}</h3>
+    <div class="acct">
+      ${myJobs.length ? `<div class="pjlist">${myJobs.map(j => `<div class="pjrow">
+        <div class="pjw">${j.enabled ? esc(hhmm(j.next_at)) : T('止めています')}</div>
+        <div class="pjt">${esc(DEMO ? pick(DEMO_TASKS, 'sc' + j.id) : String(j.prompt).slice(0, 80))}</div>
+        <div class="pjs">${esc(j.ai)}${j.every ? ` · ${j.every}${T('分ごと')}` : ` · ${esc(j.at)}`}
+          <button data-sc-toggle="${esc(j.id)}">${j.enabled ? T('止める') : T('再開')}</button>
+          <button data-sc-del="${esc(j.id)}">${T('消す')}</button></div></div>`).join('')}</div>` : ''}
+      <div class="opts"><input id="scPrompt" placeholder="${esc(T('例: 今日の失敗したジョブをまとめて'))}" style="flex:1">
+        <input id="scAt" placeholder="06:00" size="5">
+        <select id="scAi"><option>Claude</option><option>Codex</option></select>
+        <button class="primary" id="scAdd">${T('予約する')}</button><span id="scMsg" class="legend"></span></div>
+      <div class="sub">${T('時刻(HH:MM)を入れると毎日その時刻に。アプリが閉じている間は走りません。走った仕事は普通のカードとして出ます。')}</div>
+    </div>
     <h3>${T('この案件の経過')} <span class="legend">${rows.length}${T('件')}</span></h3>
     <div class="pjlist">${rows.map(n => {
       const s0 = n.s || n.r || {}, when = n.live ? T('いま') : fmtT(n.t);
@@ -660,6 +682,25 @@ async function renderProject(frameKey) {
     $('#pjMsg').textContent = r.ok ? `${T('保存しました')}（${r.chars}${T('字')}）` : `${T('保存できません')}: ${r.reason}`;
     $('#pjMsg').className = r.ok ? 'legend' : 'warn';
   };
+  const scPost = async (body) => { try { return await getJSON('/api/schedule', {method: 'POST', body: JSON.stringify(body)}); } catch (e) { return {ok: false, reason: String(e)}; } };
+  if ($('#scAdd')) $('#scAdd').onclick = async () => {
+    const prompt = $('#scPrompt').value.trim(), at = $('#scAt').value.trim();
+    if (!prompt) { $('#scMsg').textContent = T('依頼文を入れてください'); return; }
+    const cwd = (live[0] && live[0].s.cwd) || (past[0] && past[0].r.cwd) || '';
+    if (!confirm(`${T('この予約を作ります')}\n${at || T('(時刻未指定)')} ${$('#scAi').value}\n${prompt}\n${cwd}`)) return;
+    const r = await scPost({key, prompt, at, ai: $('#scAi').value, cwd});
+    $('#scMsg').textContent = r.ok ? T('予約しました') : `${T('予約できません')}: ${r.reason}`;
+    $('#scMsg').className = r.ok ? 'legend' : 'warn';
+    if (r.ok) renderProject(frameKey);
+  };
+  $('#pBody').querySelectorAll('[data-sc-del]').forEach(b => b.onclick = async () => {
+    if (!confirm(T('この予約を消します'))) return;
+    await scPost({op: 'delete', id: b.dataset.scDel}); renderProject(frameKey);
+  });
+  $('#pBody').querySelectorAll('[data-sc-toggle]').forEach(b => b.onclick = async () => {
+    const j = myJobs.find(x => x.id === b.dataset.scToggle); if (!j) return;
+    await scPost(Object.assign({}, j, {enabled: !j.enabled})); renderProject(frameKey);
+  });
   $('#pjIns').onclick = () => renderSettings(false);
   if ($('#pjC')) $('#pjC').onclick = () => { const cwd = (live[0] && live[0].s.cwd) || (past[0] && past[0].r.cwd) || ''; toApp({type: 'newInProject', key, cwd, ai: 'Claude'}); };
   if ($('#pjX')) $('#pjX').onclick = () => { const cwd = (live[0] && live[0].s.cwd) || (past[0] && past[0].r.cwd) || ''; toApp({type: 'newInProject', key, cwd, ai: 'Codex'}); };

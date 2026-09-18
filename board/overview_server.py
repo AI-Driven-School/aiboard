@@ -322,6 +322,12 @@ class Handler(BaseHTTPRequestHandler):
                 key = q.get("key", "")
                 self._json(200, {"ok": True, "key": key, "text": overview.read_notes(key) if key else "",
                                  "instructions": (overview.groups().get(key) or {}).get("instructions", "")})
+            elif path == "/api/schedule":
+                # 予約の一覧(次に走る時刻つき)。走らせるのはアプリ側
+                rows = []
+                for j in overview.read_schedule():
+                    rows.append(dict(j, next_at=overview.job_next_at(j), due=overview.job_due(j)))
+                self._json(200, {"ok": True, "jobs": rows, "min_every": overview.SCHEDULE_MIN_EVERY})
             elif path == "/api/delegations":
                 key = q.get("key", "")
                 self._json(200, {"ok": True, "key": key, "rows": overview.read_delegations(key) if key else []})
@@ -440,6 +446,16 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/schedule":
+            op = str(body.get("op", "save"))
+            try:
+                if op == "delete":
+                    return self._json(200, {"ok": True, "deleted": overview.delete_job(str(body.get("id", "")))})
+                if op == "ran":
+                    return self._json(200, {"ok": True, "marked": overview.mark_ran(str(body.get("id", "")))})
+                return self._json(200, {"ok": True, "job": overview.save_job(body)})
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
         if path == "/api/delegations":
             try:
                 rec = overview.add_delegation(str(body.get("key", "")), body)
