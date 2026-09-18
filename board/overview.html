@@ -373,6 +373,18 @@ html,body{font:13px/1.45 "Inter",-apple-system,BlinkMacSystemFont,"Hiragino Sans
 #panel button.danger{background:var(--f-red) !important;border-color:var(--f-red) !important;color:#fff !important}
 #panel button[disabled]{opacity:.4;cursor:default}
 #panel{top:var(--tbh,45px) !important}   /* 上のバーに重ねない(重なるとパネルを開いたまま設定・メモリを押せない) */
+.grpwrap{max-height:260px;overflow:auto;margin:8px 0;border:1px solid var(--f-line);border-radius:8px}
+table.grp{width:100%;border-collapse:collapse;font-size:12px}
+table.grp th{position:sticky;top:0;background:#2A2A2A;color:var(--f-ink3);font-weight:600;text-align:left;padding:6px 8px;border-bottom:1px solid var(--f-line)}
+table.grp td{padding:4px 8px;border-bottom:1px solid #303030;vertical-align:middle}
+table.grp td.k{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--f-ink)}
+table.grp td.n{white-space:nowrap;color:var(--f-ink3);font-variant-numeric:tabular-nums}
+table.grp td.n b{color:var(--f-green)} table.grp .dim{color:#6E6E6E}
+table.grp input[type=text],table.grp .gl{width:100%;background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:3px 6px}
+table.grp td:nth-child(4){white-space:nowrap}
+#grpIn textarea{width:100%;background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:6px;font:12px var(--mono);margin-top:6px}
+table.grp .gc{width:28px;height:22px;padding:0;border:1px solid var(--f-line2);border-radius:4px;background:#262626}
+table.grp .gk{background:#262626;border:1px solid var(--f-line2);border-radius:6px;color:var(--f-ink);padding:3px 6px;max-width:130px}
 #zoomctl{background:#2C2C2C !important;border-color:var(--f-line) !important}
 </style>
 </head>
@@ -463,6 +475,8 @@ const JA = {
   'tour.next': '次へ', 'tour.done': 'わかった', 'tour.skip': 'とばす',
 };
 const EN = {
+  'AI に頼む文をコピー': 'Copy a prompt for your agent', '返事を取り込む': 'Paste the answer', '表に反映': 'Fill the table', 'AIBoard からは何も送りません。手元の Claude / Codex に貼って、返ってきた JSON をここに戻します。': 'AIBoard sends nothing. Paste this into your own Claude/Codex and bring the JSON back here.', 'コピーしました。手元の Claude / Codex に貼ってください': 'Copied — paste it into your own Claude or Codex', 'コピーできないので、この文を手で写してください': 'Clipboard blocked — copy this text by hand', 'JSON として読めません': 'Not valid JSON', '表に入れました': 'Filled', '。中身を見てから保存してください': ' — check it, then Save',
+  '束ね方（名前・色・顧客）': 'Grouping (name, colour, client)', '自動で決めた持ち場の名前・色・どの顧客か を、ここで上書きできます（空欄なら自動のまま）。': 'Override the name, colour and client of each detected working folder. Leave blank to keep what was detected.', '持ち場': 'Working folder', '件数': 'Sessions', '表示名': 'Name', '色': 'Colour', '顧客': 'Client', '自動': 'auto', '色を使う': 'use this colour', '保存': 'Save', '読み直す': 'Reload', '保存しました': 'Saved', '保存できません': 'Could not save',
   'AI セッションではないので、ここからは送れません（端末で操作します）': 'Not an agent session — use the terminal itself',
   '右の端末で開く': 'Open in terminal', '右の端末で再開': 'Resume in terminal', 'AI セッションではないので右の端末には開けません': 'Not an agent session — cannot open it here', 'このセッションは別の端末で作業中です。作業を中断（Esc）して、同じ会話を右の端末で続けますか？ 中断した作業は途中で止まります。': 'This session is working in another terminal. Interrupt it (Esc) and continue the same conversation here? The current step stops midway.', 'このセッションは別の端末で動いています。そちらの AI を終了し、同じ会話を右の端末で続けます。': 'This session is running in another terminal. Quit the agent there and continue the same conversation here?', '中断できなかったので移していません': 'Could not interrupt it, so it was not moved', '右の端末で開きました': 'Opened in terminal',
   '移せませんでした': 'Could not move', 
@@ -710,6 +724,10 @@ function render() {
     let label, color = null, sum = '';
     if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
     else if (f.key.startsWith('c:')) { const c = f.sample.client; label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
+    else if (f.key.startsWith('p:') && f.nodes.find(n => (n.s || n.r || {}).group_label)) {
+      const g = f.nodes.map(n => (n.s || n.r || {})).find(x => x.group_label) || {};
+      label = '● ' + g.group_label; color = g.group_rgb ? rgb(g.group_rgb) : color; sum = frameSummary(f);
+    }
     else if (f.key === 'home') { label = T('● 自社・その他（直近）'); sum = frameSummary(f) + (f.hidden ? ` <span class="fmore" data-more="1">${T('さらに表示')} (+${f.hidden})</span>` : homeExpanded ? ` <span class="fmore" data-more="0">${T('直近だけに戻す')}</span>` : ''); }
     else { label = '● ' + f.key.slice(2); sum = frameSummary(f); }
     if (f.w < 420) sum = '';   // 狭い枠では見出しと重なるので要約を出さない
@@ -1010,6 +1028,64 @@ function renderMemory() {
     let r; try { r = await getJSON('/api/stop', {method: 'POST', body: JSON.stringify({tab: x.tab, sid: snap.sessions.find(s => s.tab === tab).sid})}); } catch (e) { r = {ok: false, reason: String(e)}; }
     msg(r.reason || ''); renderMemory(); });
 }
+async function renderGroups() {
+  const box = $('#grpBox'); if (!box) return;
+  let d; try { d = await getJSON('/api/groups'); } catch (e) { box.textContent = String(e); return; }
+  const rows = (d.detected || []).slice(0, 40);
+  const cur = d.groups || {}, cls = d.clients || [];
+  const nameOf = k => DEMO ? pick(DEMO_PROJECTS, 'w:' + k) : k;
+  box.innerHTML = `<div class="sub">${T('自動で決めた持ち場の名前・色・どの顧客か を、ここで上書きできます（空欄なら自動のまま）。')}</div>
+    <div class="grpwrap"><table class="grp"><thead><tr><th>${T('持ち場')}</th><th>${T('件数')}</th><th>${T('表示名')}</th><th>${T('色')}</th><th>${T('顧客')}</th></tr></thead><tbody>
+    ${rows.map(r => { const g = cur[r.key] || {};
+      return `<tr data-key="${esc(r.key)}"><td class="k" title="${esc(nameOf(r.key))}">${esc(nameOf(r.key))}</td>
+        <td class="n">${r.live ? `<b>${r.live}</b>` : ''}${r.recent ? ` <span class="dim">${r.recent}</span>` : ''}</td>
+        <td><input class="gl" value="${esc(g.label || '')}" placeholder="${esc(nameOf(r.key))}" maxlength="40"></td>
+        <td><input class="gc" type="color" value="${g.rgb ? rgbHex(g.rgb) : '#8a8a8a'}"><input class="gu" type="checkbox" ${g.rgb ? 'checked' : ''} title="${T('色を使う')}"></td>
+        <td><select class="gk"><option value="">${T('自動')}</option>${cls.map(c => `<option value="${esc(c.id)}" ${g.client === c.id ? 'selected' : ''}>${esc(DEMO ? pick(DEMO_CLIENTS.map(x => x[1]), 'c:' + c.id) : (c.label || c.id))}</option>`).join('')}</select></td></tr>`; }).join('')}
+    </tbody></table></div>
+    <div class="opts"><button class="primary" id="grpSave">${T('保存')}</button><button id="grpReload">${T('読み直す')}</button><button id="grpAsk">${T('AI に頼む文をコピー')}</button><button id="grpPaste">${T('返事を取り込む')}</button><span id="grpMsg" class="legend"></span></div>
+    <div id="grpIn" hidden><textarea id="grpJson" rows="4" placeholder='{"groups": {"folder": {"label": "名前", "rgb": [80,140,220], "client": "id"}}}'></textarea><div class="opts"><button id="grpApply">${T('表に反映')}</button><span class="legend">${T('AIBoard からは何も送りません。手元の Claude / Codex に貼って、返ってきた JSON をここに戻します。')}</span></div></div>`;
+  $('#grpReload').onclick = () => renderGroups();
+  $('#grpAsk').onclick = async () => {
+    const list = rows.map(r => `- ${nameOf(r.key)}（いま ${r.live} 本・直近30日 ${r.recent} 本）`).join('\n');
+    const cl = cls.map(c => `- ${c.id}: ${DEMO ? pick(DEMO_CLIENTS.map(x => x[1]), 'c:' + c.id) : (c.label || c.id)}`).join('\n') || '-（未登録）';
+    const prompt = `次はわたしの作業フォルダの一覧です。盤に出す表示名・色・どの顧客の仕事かを決めてください。\n\n作業フォルダ:\n${list}\n\n登録済みの顧客:\n${cl}\n\n決め方:\n- 表示名は日本語で 12 文字以内。何の仕事かが分かる言い方にする(フォルダ名の言い換えでよい)\n- 色は暗い背景で読める彩度の RGB(各 0-255)。近い意味のものは近い色にし、別の仕事は離す\n- 顧客は上の id から選ぶ。自社・私用なら空にする\n- 分からないものは省く(推測で顧客を付けない)\n\n返事は次の JSON だけ:\n{"groups": {"フォルダ名": {"label": "表示名", "rgb": [R,G,B], "client": "顧客id か 空"}}}`;
+    try { await navigator.clipboard.writeText(prompt); $('#grpMsg').textContent = T('コピーしました。手元の Claude / Codex に貼ってください'); $('#grpMsg').className = 'legend'; }
+    catch (e) { $('#grpIn').hidden = false; $('#grpJson').value = prompt; $('#grpMsg').textContent = T('コピーできないので、この文を手で写してください'); }
+  };
+  $('#grpPaste').onclick = () => { $('#grpIn').hidden = !$('#grpIn').hidden; if (!$('#grpIn').hidden) $('#grpJson').focus(); };
+  $('#grpApply').onclick = () => {
+    let d2; try { d2 = JSON.parse($('#grpJson').value.replace(/^[^{]*/, '').replace(/[^}]*$/, '')); } catch (e) { $('#grpMsg').textContent = T('JSON として読めません'); $('#grpMsg').className = 'warn'; return; }
+    const g = d2.groups || d2; let n = 0;
+    box.querySelectorAll('tbody tr').forEach(tr => {
+      const row = g[tr.dataset.key]; if (!row) return;
+      n++;
+      if (row.label) tr.querySelector('.gl').value = String(row.label).slice(0, 40);
+      if (Array.isArray(row.rgb) && row.rgb.length === 3) { tr.querySelector('.gc').value = rgbHex(row.rgb.map(x => x | 0)); tr.querySelector('.gu').checked = true; }
+      const sel = tr.querySelector('.gk');
+      if (row.client !== undefined) sel.value = [...sel.options].some(o => o.value === row.client) ? row.client : '';
+    });
+    $('#grpMsg').textContent = `${T('表に入れました')}（${n}）${T('。中身を見てから保存してください')}`;
+    $('#grpMsg').className = 'legend';
+  };
+  $('#grpSave').onclick = async () => {
+    const out = {};
+    box.querySelectorAll('tbody tr').forEach(tr => {
+      const k = tr.dataset.key, label = tr.querySelector('.gl').value.trim(), use = tr.querySelector('.gu').checked,
+            col = tr.querySelector('.gc').value, client = tr.querySelector('.gk').value;
+      const row = {};
+      if (label) row.label = label;
+      if (use) row.rgb = [1, 3, 5].map(i => parseInt(col.slice(i, i + 2), 16));
+      if (client) row.client = client;
+      if (Object.keys(row).length) out[k] = row;
+    });
+    let r; try { r = await getJSON('/api/groups', {method: 'POST', body: JSON.stringify({groups: out})}); } catch (e) { r = {ok: false, reason: String(e)}; }
+    $('#grpMsg').textContent = r.ok ? `${T('保存しました')}（${Object.keys(r.groups).length}）` : `${T('保存できません')}: ${r.reason}`;
+    $('#grpMsg').className = r.ok ? 'legend' : 'warn';
+    if (r.ok) loadSnap();
+  };
+}
+function rgbHex(c) { return '#' + c.map(x => Math.max(0, Math.min(255, x | 0)).toString(16).padStart(2, '0')).join(''); }
 async function renderExtensions(refresh) {
   let e; try { e = await getJSON('/api/extensions' + (refresh ? '?refresh=1' : '')); } catch (err) { if ($('#extBox')) $('#extBox').textContent = String(err); return; }
   const box = $('#extBox'); if (!box) return;
@@ -1050,6 +1126,7 @@ async function renderSettings(refresh) {
     <div class="acct"><div class="h"><b>${T('状態の通知')}</b><span class="st"><span class="dot ${st.hook_installed ? 'ok' : 'lim'}"></span>${st.hook_installed ? T('入っている') : T('入っていない')}</span></div>
       <div class="sub">${T('無いと Claude の「作業中 / 判断待ち」が出ません。既存の設定は残し、控えを取ってから足します。')}</div>
       <div class="opts">${APP ? (st.hook_installed ? `<button id="hookOff">${T('外す')}</button>` : `<button class="primary" id="hookOn">${T('入れる')}</button>`) : `<code>python3 board/install_hook.py --install</code>`}<button data-open="${esc(st.claude_settings)}">settings.json</button></div></div>
+    <h3>${T('束ね方（名前・色・顧客）')}</h3><div id="grpBox" class="acct"><div class="sub">${T('読込中…')}</div></div>
     <h3>${T('skill と MCP')}</h3><div id="extBox" class="acct"><div class="sub">${T('確認中…（MCP の接続を試すので数秒かかります）')}</div></div>
     <h3>${T('盤')}</h3>
     <div class="acct">
@@ -1072,6 +1149,7 @@ async function renderSettings(refresh) {
   $('#tourAgain').onclick = () => { closePanel(); tourShow(0); };
   $('#refreshLogin').onclick = () => renderSettings(true);
   renderExtensions(false);
+  renderGroups();
   $('#addClaude').onclick = () => { const name = (prompt(T('新しいアカウントの名前（英数字）'), 'work') || '').trim(); if (!/^[A-Za-z0-9_-]{1,32}$/.test(name)) return;
     runCmd('Claude login ' + name, `mkdir -p ~/.claude-profiles/${name} && CLAUDE_CONFIG_DIR=~/.claude-profiles/${name} command claude auth login`); setTimeout(() => renderSettings(true), 20000); };
   if ($('#hookOn')) $('#hookOn').onclick = () => toApp({type: 'hook', op: 'install'});

@@ -813,7 +813,7 @@ def mm03(ctx):
     return f"送信 0 件・表示「{msg}」"
 
 
-@case("ST-01", "設定パネル: アカウント・hook・skill と MCP・盤の 4 区画が出て、アカウント数が API と一致")
+@case("ST-01", "設定パネル: アカウント・hook・束ね方・skill と MCP・盤の 5 区画が出て、アカウント数が API と一致")
 def st01(ctx):
     def fn(pg, errs, bl):
         pg.click("#btnSettings"); wait_js(pg, "document.querySelectorAll('#pBody .acct').length > 1", 60)
@@ -821,7 +821,8 @@ def st01(ctx):
         return pg.evaluate("[[...document.querySelectorAll('#pBody h3')].map(h => h.textContent), document.querySelectorAll('.accts .acct').length]"), errs
     (heads, n), errs = with_page(ctx, fn, "?lang=ja")
     st, d, _ = http("/api/settings")
-    check(len(heads) == 4 and n == len(d["logins"]) and not errs, f"見出し {heads} アカウント {n}/{len(d['logins'])} errs {errs[:1]}")
+    want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤"]
+    check(heads == want and n == len(d["logins"]) and not errs, f"見出し {heads} != {want} / アカウント {n}/{len(d['logins'])} errs {errs[:1]}")
     return f"{heads} / アカウント {n}"
 
 
@@ -4587,6 +4588,111 @@ def wr03(ctx):
     check(ix._hint_from_files({"cwd": HOME, "files_top": [[p, 2]]}) == o.work_root(p), "いまと過去で規則が違う")
     live = [r for r in http("/api/index?days=30")[1]["records"] if r.get("project_hint")]
     return f"合成 {len(rows)} 通り一致 / 実データでは 30 日の記録のうち {len(live)} 件に持ち場が付く"
+
+
+@case("GP-01", "束ね方の上書き: 保存できる形だけ受け取り、壊れた値は 400 で断る(本番の設定は触らない)")
+def gp01(ctx):
+    import overview as o
+    live_file = os.path.join(LIVE_DATA, "groups.json")
+    before = os.path.getmtime(live_file) if os.path.exists(live_file) else None
+    st, d, _ = http("/api/groups")
+    check(st == 200 and isinstance(d.get("detected"), list), f"候補が取れない {st} {str(d)[:120]}")
+    ids = [c["id"] for c in d["clients"]]
+    ok_body = {"groups": {"uat-work": {"label": "UAT 工場", "rgb": [10, 20, 30]}}}
+    if ids:
+        ok_body["groups"]["uat-work"]["client"] = ids[0]
+    st2, d2, _ = http("/api/groups", "POST", ok_body, headers={"Origin": BASE.rstrip("/")})
+    check(st2 == 200 and d2["groups"]["uat-work"]["label"] == "UAT 工場", f"保存できない {st2} {d2}")
+    saved = json.load(open(os.path.join(ctx["data"], "groups.json")))
+    check(saved["groups"]["uat-work"]["rgb"] == [10, 20, 30], f"書かれた中身 {saved}")
+    bad = [({"groups": {"k": {"rgb": [1, 2]}}}, "色の数"), ({"groups": {"k": {"rgb": [1, 2, 300]}}}, "色の範囲"),
+           ({"groups": {"k": {"label": "あ" * 41}}}, "長すぎる表示名"), ({"groups": {"k": {"client": "no-such"}}}, "知らない顧客"),
+           ({"groups": {"": {"label": "x"}}}, "空の名前"), ({"groups": "x"}, "形が違う")]
+    for body, why in bad:
+        stb, db, _ = http("/api/groups", "POST", body, headers={"Origin": BASE.rstrip("/")})
+        check(stb == 400 and db.get("ok") is False, f"{why}: {stb} {db}")
+    after = os.path.getmtime(live_file) if os.path.exists(live_file) else None
+    check(after == before, "本番の groups.json を書き換えた")
+    st3, d3, _ = http("/api/groups", "POST", {"groups": {}}, headers={"Origin": BASE.rstrip("/")})
+    check(st3 == 200 and d3["groups"] == {}, f"空に戻せない {d3}")
+    return f"保存 1 件・壊れた値 {len(bad)} 通りを 400・空に戻せる・本番の設定は不変"
+
+
+@case("GP-02", "上書きした名前・色・顧客が、盤の枠とカードに出る")
+def gp02(ctx):
+    import overview as o
+    with patched(o, "groups", lambda force=False: {"alpha": {"label": "アルファ工場", "rgb": [200, 30, 90]}}):
+        s = {"project_hint": "alpha", "project": os.path.basename(HOME), "client": None}
+        got = o.apply_group(dict(s))
+        check(got["group_label"] == "アルファ工場" and got["group_rgb"] == [200, 30, 90], f"当たっていない {got}")
+        cid = (o.client_defs() or [{}])[0].get("id")
+        if cid:
+            with patched(o, "groups", lambda force=False: {"alpha": {"client": cid}}):
+                g2 = o.apply_group({"project_hint": "alpha", "project": "", "client": None})
+                check((g2.get("client") or {}).get("id") == cid and g2["client"]["by"] == "group", f"顧客が付かない {g2.get('client')}")
+                g3 = o.apply_group({"project_hint": "alpha", "project": "", "client": {"id": "keep", "label": "元", "by": "path"}})
+                check(g3["client"]["id"] == "keep", "自動で付いた顧客を上書きしてしまう")
+    base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "作業中", "mark": "🟢", "doing": "", "task": "UAT",
+            "topic": "", "project": os.path.basename(HOME), "cwd": HOME, "client": None, "project_hint": "alpha",
+            "model_style": {"emoji": "🔷", "label": "Sonnet", "rgb": [80, 140, 220]}, "ago": 5, "state_for": 5,
+            "mem_mb": 100, "limit": None, "loop": None, "tools": None, "account": "", "transcript": "",
+            "group_label": "アルファ工場", "group_rgb": [200, 30, 90]}
+    ss = [base, dict(base, tab="9-2", sid="uat-2")]
+
+    def extra(pg):
+        def fake(route):
+            r = route.fetch(); d = r.json()
+            d["sessions"] = ss; d["attention"] = []
+            d["counts"] = dict(d.get("counts") or {}, working=2, tabs=2)
+            route.fulfill(response=r, body=json.dumps(d))
+        pg.route("**/api/snapshot*", fake)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card[data-id^=\"uat-\"]').length === 2", 30)
+        pg.wait_for_timeout(400)
+        return pg.evaluate("""[...document.querySelectorAll('.frame')].map(f => [f.querySelector('.flabel').textContent,
+            (f.querySelector('.flabel b') || {}).style?.background || ''])"""), list(errs)
+
+    labels, errs = with_page(ctx, fn, "?lang=ja", route_extra=extra)
+    hit = [l for l in labels if "アルファ工場" in l[0]]
+    check(hit, f"枠の見出しに上書きした名前が出ていない {labels}")
+    check("200, 30, 90" in hit[0][1].replace("rgb(", "").replace(")", ""), f"枠の色が上書きされていない {hit[0]}")
+    check(not errs, f"{errs[:1]}")
+    return f"枠「{hit[0][0]}」に上書きした名前と色({hit[0][1]})が出る / 自動の顧客は上書きしない"
+
+
+@case("GP-03", "AI の返事の取り込み: JSON を表に入れるだけで、保存も外部送信もしない")
+def gp03(ctx):
+    def extra(pg):
+        pg.route("**/api/groups", lambda route, req: route.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"ok": True, "groups": {}, "clients": [{"id": "acme", "label": "Acme", "emoji": "🟦", "rgb": [1, 2, 3]}],
+             "detected": [{"key": "alpha", "live": 2, "recent": 5}, {"key": "beta", "live": 0, "recent": 3}]})) if req.method == "GET" else route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "groups": json.loads(req.post_data)["groups"]})))
+
+    def fn(pg, errs, bl):
+        pg.click("#btnSettings")
+        wait_js(pg, "!!document.querySelector('#grpBox tbody tr')", 40)
+        n0 = len(bl)
+        answer = json.dumps({"groups": {"alpha": {"label": "アルファ", "rgb": [200, 30, 90], "client": "acme"},
+                                        "beta": {"label": "ベータ", "client": "no-such"},
+                                        "gamma": {"label": "無いフォルダ"}}}, ensure_ascii=False)
+        pg.click("#grpPaste"); pg.fill("#grpJson", "ここまでが説明です " + answer + " おわり")
+        posts = []
+        pg.route("**/api/groups", lambda route, req: (posts.append(req.method), route.fulfill(status=200, content_type="application/json", body='{"ok": true, "groups": {}}')))
+        pg.click("#grpApply"); pg.wait_for_timeout(500)
+        table = pg.evaluate("""[...document.querySelectorAll('#grpBox tbody tr')].map(tr => [tr.dataset.key,
+            tr.querySelector('.gl').value, tr.querySelector('.gc').value, tr.querySelector('.gu').checked, tr.querySelector('.gk').value])""")
+        msg = pg.inner_text("#grpMsg")
+        return table, msg, posts, len(bl) - n0, list(errs)
+
+    table, msg, posts, sends, errs = with_page(ctx, fn, "?lang=ja", route_extra=extra)
+    by = {r[0]: r for r in table}
+    check(by["alpha"][1] == "アルファ" and by["alpha"][3] is True and by["alpha"][2] == "#c81e5a", f"alpha が入っていない {by.get('alpha')}")
+    check(by["alpha"][4] == "acme", f"顧客が入っていない {by['alpha']}")
+    check(by["beta"][1] == "ベータ" and by["beta"][4] == "", f"知らない顧客を入れた {by['beta']}")
+    check("POST" not in posts, f"取り込んだだけで保存してしまった {posts}")
+    check(sends == 0 and not errs, f"外部へ送った/例外 {sends} {errs[:1]}")
+    check("2" in msg, f"入れた件数が出ていない {msg!r}")
+    return "JSON を前後の文ごと貼っても 2 件だけ表に入り、知らない顧客は空・保存はしない・送信 0"
 
 
 # ------------------------------------------------------------------ 実行

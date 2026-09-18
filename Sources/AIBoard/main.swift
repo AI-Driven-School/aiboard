@@ -393,10 +393,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         split.frame = window.contentView!.bounds
         split.autoresizingMask = [.width, .height]
         window.contentView!.addSubview(split)
-        window.makeKeyAndOrderFront(nil)
+        if SELF_TEST {
+            // 自己試験では画面を奪わない: Dock にも出さず、前面化もせず、見えない場所で動かす
+            NSApp.setActivationPolicy(.accessory)
+            window.setFrame(NSRect(x: -9000, y: -9000, width: 1400, height: 900), display: false)
+            window.orderBack(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         window.contentView?.layoutSubtreeIfNeeded()
         split.setPosition(split.bounds.width * 0.5, ofDividerAt: 0)
-        NSApp.activate(ignoringOtherApps: true)
         startServerThenLoad()
         // 右の端末は空にしない: iTerm と同じく、起動したらシェルを 1 枚開いて打てる状態にする(復元の試験中は除く)
         if ProcessInfo.processInfo.environment["AIBOARD_RESTORE_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_SWITCH_TEST"] == nil && ProcessInfo.processInfo.environment["AIBOARD_NO_SHELL"] == nil && pm.panes.isEmpty {

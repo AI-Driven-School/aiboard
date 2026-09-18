@@ -344,6 +344,100 @@ def work_root(path):
     return top
 
 
+_GROUPS = {"t": 0, "val": {}}
+
+
+def groups_file():
+    import aiboard_paths as ap
+    return ap.data("groups.json")
+
+
+def groups(force=False):
+    """束ね方の上書き(~/.aiboard/groups.json)。{持ち場やプロジェクトの名前: {label, rgb, client}}。
+
+    自動判定(顧客の規則・cwd・触ったファイル)はそのまま使い、表示名・色・どの顧客かだけを人が上書きできる。
+    """
+    p = groups_file()
+    try:
+        st = os.stat(p)
+    except OSError:
+        _GROUPS.update(t=0, val={})
+        return {}
+    if force or _GROUPS["t"] != st.st_mtime_ns:
+        try:
+            with open(p, encoding="utf-8") as f:
+                d = json.load(f)
+            _GROUPS.update(t=st.st_mtime_ns, val=d.get("groups") or {})
+        except (OSError, ValueError):
+            _GROUPS.update(t=st.st_mtime_ns, val={})
+    return _GROUPS["val"]
+
+
+def save_groups(groups_in, clients_known=None):
+    """束ね方の上書きを保存する。形が違うものは弾く(盤から来た値をそのまま書かない)。"""
+    if not isinstance(groups_in, dict) or len(groups_in) > 200:
+        raise ValueError("形が違う(dict・200 件まで)")
+    clean = {}
+    for k, v in groups_in.items():
+        if not isinstance(k, str) or not (1 <= len(k) <= 80) or not isinstance(v, dict):
+            raise ValueError(f"名前が不正: {str(k)[:20]}")
+        row = {}
+        label = v.get("label")
+        if label:
+            if not isinstance(label, str) or len(label) > 40:
+                raise ValueError(f"表示名が長すぎる: {str(label)[:20]}")
+            row["label"] = label
+        rgb = v.get("rgb")
+        if rgb:
+            if (not isinstance(rgb, (list, tuple)) or len(rgb) != 3
+                    or not all(isinstance(x, int) and 0 <= x <= 255 for x in rgb)):
+                raise ValueError(f"色が不正: {rgb}")
+            row["rgb"] = list(rgb)
+        cid = v.get("client")
+        if cid:
+            if not isinstance(cid, str) or (clients_known is not None and cid not in clients_known):
+                raise ValueError(f"知らない顧客: {str(cid)[:20]}")
+            row["client"] = cid
+        if row:
+            clean[k] = row
+    p = groups_file()
+    tmp = f"{p}.{os.getpid()}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"_doc": "束ね方の上書き。盤の設定から編集する。キーは持ち場/プロジェクトの名前", "groups": clean}, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, p)
+    groups(force=True)
+    return clean
+
+
+def client_defs():
+    """顧客の定義(id/label/emoji/rgb)。判定規則そのものは clients.py が持つ。"""
+    import aiboard_paths as ap
+    try:
+        with open(ap.clients_file(), encoding="utf-8") as f:
+            return [{k: c.get(k) for k in ("id", "label", "emoji", "rgb")} for c in json.load(f).get("clients", [])]
+    except (OSError, ValueError):
+        return []
+
+
+def apply_group(sess):
+    """束ね方の上書きを 1 セッションに当てる(顧客が未判定なら顧客を付け、表示名と色を差し替える)。"""
+    g = groups()
+    if not g:
+        return sess
+    key = sess.get("project_hint") or (sess.get("project") or "")
+    row = g.get(key)
+    if not row:
+        return sess
+    if row.get("client") and not sess.get("client"):
+        c = next((x for x in client_defs() if x.get("id") == row["client"]), None)
+        if c:
+            sess["client"] = dict(c, by="group")
+    if row.get("label") or row.get("rgb"):
+        sess["group_label"] = row.get("label") or key
+        sess["group_rgb"] = row.get("rgb")
+    return sess
+
+
 def project_hint(tools, cwd, min_hits=3):
     """ホームで動いている会話に、触ったファイルから持ち場の名前を付ける(足りなければ空)。"""
     if not tools or (cwd or "").rstrip("/") != HOME:
@@ -505,10 +599,11 @@ def sessions(procs=None):
             "subagents": t.get("subagents") or {},
             "tools": _tools_brief(t),
             "loop": loop_state(session_tools(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None),
+            "group_label": "", "group_rgb": None,
             "limit": with_active(codex_limit(t.get("doing")) if (t.get("ai") or "").startswith("Codex")
                                  else claude_limit(t["transcript"]) if t.get("transcript") else None),
         })
-    return out
+    return [apply_group(x) for x in out]
 
 
 def attention(sess):

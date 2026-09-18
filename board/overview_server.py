@@ -56,7 +56,8 @@ _lock = threading.Lock()
 _snap = {"t": 0, "data": None}
 _login = {}  # ログイン状態は CLI に聞くので 120 秒使い回す
 _acct = {}   # アカウント一覧は 60 秒使い回す(記録を舐めるので)
-_index = {"stats": None, "building": False, "error": ""}   # 索引そのものは持たない(index.db から期間で引く)
+_index = {"stats": None, "building": False, "error": ""}
+_groups_seen = {}   # 直近 30 日に見えた持ち場/プロジェクトの件数(/api/index を引いたときに覚える)   # 索引そのものは持たない(index.db から期間で引く)
 
 
 def snapshot_cached(max_age=None):
@@ -317,6 +318,19 @@ class Handler(BaseHTTPRequestHandler):
                 if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
                     _login.update(t=now, data=overview.login_status())
                 self._json(200, {"ok": True, "logins": _login["data"], "settings": overview.settings_info(), "fetched": _login["t"]})
+            elif path == "/api/groups":
+                # 束ね方の候補(いま動いている分と、索引にある直近 30 日)と、いまの上書き
+                snap = snapshot_cached()
+                live = {}
+                for x in snap["sessions"]:
+                    k = x.get("project_hint") or x.get("project") or ""
+                    if k and x.get("ai"):
+                        live[k] = live.get(k, 0) + 1
+                seen = dict(_groups_seen)
+                self._json(200, {"ok": True, "groups": overview.groups(), "clients": overview.client_defs(),
+                                 "detected": sorted(({"key": k, "live": live.get(k, 0), "recent": seen.get(k, 0)}
+                                                     for k in set(live) | set(seen)),
+                                                    key=lambda r: (-r["live"], -r["recent"], r["key"]))})
             elif path == "/api/extensions":
                 self._json(200, {"ok": True, **overview.extensions_info(refresh=q.get("refresh") == "1")})
             elif path == "/api/accounts":
@@ -363,7 +377,15 @@ class Handler(BaseHTTPRequestHandler):
                                    capture_output=True, timeout=120)
                 if r.returncode != 0:
                     return self._json(500, {"ok": False, "reason": r.stderr.decode("utf-8", "replace")[-300:]})
+                try:   # 束ね方の設定に出す候補として、直近で見えた持ち場/プロジェクトを覚えておく(数えるためだけ)
+                    for rec in json.loads(r.stdout).get("records", []):
+                        k = rec.get("project_hint") or rec.get("project") or ""
+                        if k:
+                            _groups_seen[k] = _groups_seen.get(k, 0) + 1
+                except ValueError:
+                    pass
                 self._raw(200, r.stdout)
+
             elif path == "/api/session":
                 sid = q.get("id", "")
                 if not re.fullmatch(r"[0-9a-f\-]{8,}(/agent-[0-9a-f]+)?", sid):
@@ -395,6 +417,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/send":
             ok, reason = send_to_tab(body)
             return self._json(200 if ok else 409, {"ok": ok, "reason": reason})
+        if path == "/api/groups":
+            try:
+                saved = overview.save_groups(body.get("groups") or {}, {c["id"] for c in overview.client_defs()})
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
+            return self._json(200, {"ok": True, "groups": saved})
         if path == "/api/stop":
             ok, reason, pid = stop_session(body)
             return self._json(200 if ok else 409, {"ok": ok, "reason": reason, "pid": pid})
