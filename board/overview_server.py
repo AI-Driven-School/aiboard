@@ -359,6 +359,12 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/keys":
+                import keys as keysmod
+                if not _login.get("data"):
+                    _login.update(t=time.time(), data=overview.login_status())
+                self._json(200, {"ok": True, "rows": keysmod.status(_login.get("data")),
+                                 "note": "AIBoard は鍵の値を持ちません。入れる・出すは端末で行います"})
             elif path == "/api/usage":
                 # アカウントごとの利用状況(自分のログから数えた量＋学習した母数に対する目安の %)
                 import usage
@@ -459,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
                     st = os.stat(tr); etag = f"{st.st_size}-{int(st.st_mtime)}"
                 except OSError:
                     etag = ""
-                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for", "limit", "trust_ask")}
+                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for", "limit", "trust_ask", "auth_lost", "account")}
                 if etag and q.get("etag") == etag:
                     return self._json(200, dict(base, ok=True, same=True, etag=etag))
                 tl = []
@@ -533,6 +539,12 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/keys":
+            import keys as keysmod
+            try:
+                return self._json(200, {"ok": True, "rows": keysmod.save(body.get("rows") or [])})
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
         if path == "/api/git":
             import gitinfo
             return self._json(200, {"ok": True, **gitinfo.set_config(body)})

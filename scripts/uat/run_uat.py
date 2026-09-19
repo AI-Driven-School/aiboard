@@ -3250,6 +3250,124 @@ def pt01(ctx):
     return f"tmux: 拾える({target})・send-keys でシェルが実行した / ps は PATH から / cwd・開始時刻・開いているファイルに /proc の道がある"
 
 
+@case("AL-01", "止まり方の見分け: 認証 4 種・クレジット切れ・一時的な失敗 3 種を直し方ごとに分け、返答が来ていれば解く")
+def al01(ctx):
+    import overview as o
+    d = tempfile.mkdtemp(dir=ctx["data"])
+    J = lambda x: json.dumps(x, ensure_ascii=False)
+    err = lambda t: J({"type": "assistant", "isApiErrorMessage": True, "timestamp": "2026-09-19T00:00:00.000Z",
+                       "message": {"model": "<synthetic>", "content": [{"type": "text", "text": t}]}})
+    ok = J({"type": "assistant", "timestamp": "2026-09-19T00:01:00.000Z",
+            "message": {"model": "claude-opus-5", "content": [{"type": "text", "text": "はい"}]}})
+    # 直し方が違うものは、違う印にする(実測: 認証 1,012・クレジット 11・一時的な失敗 102)
+    cases = [("未ログイン", [err("Not logged in · Please run /login")], "login", "login"),
+             ("鍵が無効", [err("Invalid API key · Please run /login")], "apikey", "key"),
+             ("OAuth 失効", [err("Failed to authenticate: OAuth session expired and could not be refreshed")], "oauth", "login"),
+             ("期限切れ", [err("Login expired · Please run /login")], "expired", "login"),
+             ("クレジット切れ", [err("You're out of usage credits. Run /usage-credits")], "credits", "billing"),
+             ("スリープ", [err("API Error: Your computer went to sleep mid-request")], "transient", "wait"),
+             ("応答が止まる", [err("API Error: The response stopped arriving")], "transient", "wait"),
+             ("到達不能", [err("API Error: Can't reach the API server — check your connection")], "transient", "wait"),
+             ("戻っている", [err("Not logged in · Please run /login"), ok], None, None),
+             ("上限は別もの", [err("You've hit your session limit · resets 3pm (Asia/Tokyo)")], None, None),
+             ("普通の会話", [ok], None, None)]
+    bad = {}
+    for i, (name, lines, kind, fix) in enumerate(cases):
+        p = os.path.join(d, f"a{i}-{time.time_ns()}.jsonl")
+        open(p, "w").write("\n".join(lines) + "\n")
+        got = o.claude_auth_error(p)
+        if (got or {}).get("kind") != kind or (got or {}).get("fix") != fix:
+            bad[name] = ((got or {}).get("kind"), (got or {}).get("fix"))
+    check(not bad, f"止まり方の見分けが違う(実際 kind, fix) {bad}")
+    # 実データ: 末尾がログイン切れで終わっている会話が実際にあること(この Mac の直近 30 日で 1,012 回)
+    import glob
+    real = [f for f in sorted(glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl")), key=os.path.getmtime, reverse=True)[:150]
+            if o.claude_auth_error(f)]
+    p = os.path.join(d, "x.jsonl"); open(p, "w").write("\n".join([err("Not logged in · Please run /login")]) + "\n")
+    check(o.claude_auth_error(p)["text"].startswith("Not logged in"), "理由の文が取れない")
+    st, snap, _ = http("/api/snapshot")
+    check(all("auth_lost" in x for x in snap["sessions"]), "snapshot に auth_lost が無い")
+    return f"11 通り(認証 4・クレジット・一時 3・復帰・上限・普通)を kind と直し方まで一致 / 実データでも {len(real)} 本が該当"
+
+
+@case("AL-02", "ログイン切れのカードと一手: 🔑 の赤バッジが出て、会話ビューに「ログインし直す」と「同じ会話を再開」だけが出る")
+def al02(ctx):
+    def route(pg):
+        def handler(route_, req):
+            import urllib.request
+            r = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            d = json.loads(r.read())
+            base = (d.get("sessions") or [{}])[0]
+            s0 = dict(base, sid="auth-uat", tab="9-9", ai="Claude", state="返答待ち", mark="🟡", cwd="/tmp/uat", project="uat",
+                      account="lifehack", doing="", task="uat", mem_mb=1, subagents={}, tools=None, loop=None, limit=None,
+                      client=None, state_for=1, ago=1, group_label="", group_rgb=None, trust_ask="", transcript="",
+                      model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"},
+                      auth_lost={"kind": "login", "fix": "login", "label": "ログインしていません",
+                                 "text": "Not logged in · Please run /login", "at": "2026-09-19T00:00:00Z"})
+            d["sessions"] = [s0]
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
+        pg.route("**/api/snapshot", handler)
+        pg.route("**/api/conv*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps({
+            "ok": True, "etag": "x", "timeline": [], "tab": "9-9", "sid": "auth-uat", "state": "返答待ち", "mark": "🟡",
+            "ai": "Claude", "account": "lifehack", "doing": "", "task": "uat", "trust_ask": "",
+            "auth_lost": {"kind": "login", "fix": "login", "label": "ログインしていません",
+                          "text": "Not logged in · Please run /login", "at": "2026-09-19T00:00:00Z"}})))
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "!!document.querySelector('.card.live .c-badge.auth')", 40)
+        badge = pg.evaluate("document.querySelector('.card.live .c-badge.auth').textContent")
+        pg.evaluate("board.select('auth-uat')")
+        wait_js(pg, "!!document.querySelector('#cvAsk button')", 30)
+        return {"badge": badge, "q": pg.evaluate("document.querySelector('#cvAsk .q').innerText"),
+                "buttons": pg.evaluate("[...document.querySelectorAll('#cvAsk button')].map(b => b.textContent.trim())")}, errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(v["badge"] == "🔑", f"バッジ {v['badge']!r}")
+    check("ログインが切れています" in v["q"] and "Not logged in" in v["q"], f"文面 {v['q']!r}")
+    check(v["buttons"] == ["このアカウントでログインし直す", "ログイン後に同じ会話を再開"], f"ボタン {v['buttons']}")
+    return f"🔑 の赤バッジ / 文面に理由 / 次の一手は 2 つだけ {v['buttons']}"
+
+
+@case("KY-01", "鍵の棚: 在処だけを持ち、値は読まない・鍵束の名前は aiboard- だけ・入れる/出すは端末のコマンド")
+def ky01(ctx):
+    import keys as K
+    rows = K.status()
+    ids = [r["id"] for r in rows]
+    check(set(["claude", "codex", "gh", "judge", "asc"]) <= set(ids), f"既定の項目が足りない {ids}")
+    for r in rows:
+        check(not any(k in r for k in ("value", "secret", "token", "password")), f"値を持っている {r['id']}")
+        check(r["state"] in ("ok", "ng", "unknown"), f"状態 {r['state']}")
+    # 鍵束の確認は値を取り出さない(-w を付けない)
+    keep = K.subprocess.run
+    seen = []
+    K.subprocess.run = lambda a, **k: (seen.append(a), keep(a, **k))[1]
+    try:
+        K.state({"where": {"kind": "keychain", "name": "aiboard-judge"}})
+    finally:
+        K.subprocess.run = keep
+    check(seen and "-w" not in seen[0], f"鍵束から値を読もうとした {seen}")
+    # 名前の形: aiboard- 以外は受けない
+    try:
+        K.save([{"id": "x", "where": {"kind": "keychain", "name": "Claude Code-credentials"}}])
+        check(False, "他人の鍵束項目を受けた")
+    except ValueError:
+        pass
+    # 値を渡しても保存しない
+    saved = K.save([{"id": "judge", "label": "判定器", "where": {"kind": "keychain", "name": "aiboard-judge"},
+                     "env": "AIBOARD_JUDGE_KEY", "value": "sk-should-not-be-saved"}])
+    check(not any("value" in r for r in saved), "値を保存した")
+    check(K.load() and "sk-should-not-be-saved" not in open(K.path()).read(), "値がファイルに残った")
+    cmds = K.commands({"where": {"kind": "keychain", "name": "aiboard-judge"}, "env": "AIBOARD_JUDGE_KEY"})
+    check(cmds["put"].startswith("security add-generic-password -U -s aiboard-judge") and "-w" in cmds["put"], f"入れるコマンド {cmds}")
+    check(cmds["export"] == "export AIBOARD_JUDGE_KEY=$(security find-generic-password -s aiboard-judge -w)", f"出すコマンド {cmds}")
+    st, d, _ = http("/api/keys")
+    check(st == 200 and d["ok"] and "鍵の値を持ちません" in d["note"], f"/api/keys {str(d)[:100]}")
+    src = open(os.path.join(ROOT, "Sources", "AIBoard", "main.swift"), encoding="utf-8").read()
+    check('"security add-generic-password -U -s aiboard-"' in src, "アプリが入れるコマンドを通さない")
+    os.remove(K.path())
+    return f"既定 {len(rows)} 項目・値は持たない/保存しない・鍵束は aiboard- だけ・確認に -w を使わない・端末のコマンド 2 種"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

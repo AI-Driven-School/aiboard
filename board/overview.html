@@ -108,6 +108,7 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
   color:#0B0B0B;background:var(--yellow);box-shadow:0 1px 4px rgba(0,0,0,.45);z-index:2}
 .c-badge.need{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
 .c-badge.lim{background:#9747FF;color:#fff}
+.c-badge.auth{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
 @keyframes badgepulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 @media (prefers-reduced-motion:reduce){.c-badge.need{animation:none}}
 .c-git{font:11px var(--mono);color:#9AA4B5;border:1px solid var(--line2);border-radius:8px;padding:0 5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -576,7 +577,29 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '使用量: 数えています…': 'Usage: counting…', 'トークン': 'tokens', '目安': 'approx',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal',
+  '一時的に失敗しました。そのまま自動で戻ります': 'A temporary failure. It recovers on its own.',
+  'API キーが無効です（ログインではなく鍵の設定の問題です）': 'The API key is invalid (a key setting, not a sign-in)',
+  '鍵の棚を開く': 'Open the key shelf', '直したら同じ会話を再開': 'Resume this conversation once fixed',
+  'クレジットが尽きています（時間では戻りません）': 'Out of credits (waiting will not fix this)',
+  '請求のページを開く': 'Open the billing page', '別のアカウントで続ける': 'Continue on another account',
+  'クレジットが尽きています': 'Out of credits', 'ログインしていません': 'Not signed in', 'API キーが無効です': 'The API key is invalid',
+  'OAuth の期限が切れました': 'The OAuth session expired', 'ログインの期限が切れました': 'The sign-in expired',
+  '一時的に失敗しました(自動で戻ります)': 'Temporary failure (recovers on its own)', '鍵の棚（値は AIBoard を通りません）': 'Keys (values never pass through AIBoard)',
+  'AIBoard は鍵の値を持ちません。「入れる」「端末に出す」は端末でコマンドを走らせるだけで、値はあなたが端末に入れます。':
+    'AIBoard never holds a key. "Store" and "Put in terminal" just run a command in the terminal; you type the value there.',
+  '入れる': 'Store', '端末に出す': 'Put in terminal', '取りに行く': 'Get one', '先に端末を開いてください': 'Open a terminal first',
+  '端末に出しました': 'Sent to the terminal', '端末で値の入力を待っています（貼り付けて Enter）': 'The terminal is waiting for the value (paste it and press Enter)',
+  '端末でログインを始めました': 'Sign-in started in the terminal',
+  'Claude Code': 'Claude Code', 'Codex': 'Codex', 'GitHub (gh)': 'GitHub (gh)', '判定器の鍵 (OpenRouter 等)': 'Judge key (OpenRouter etc.)',
+  'App Store Connect の鍵 (公証)': 'App Store Connect key (notarization)',
+  'ログインは claude auth login': 'Sign in with claude auth login', 'ログインは codex login': 'Sign in with codex login',
+  'PR バッジと Releases に使う': 'Used for the PR badge and Releases', '外部の決定モデルを使う時だけ': 'Only when you use an external decision model',
+  'リリースの公証に使う': 'Used to notarize releases', 'ログインが切れて止まっています': 'Stopped: the login expired',
+  'ログインが切れています': 'The login has expired', 'このアカウントでログインし直す': 'Sign in again on this account',
+  'ログイン後に同じ会話を再開': 'Resume this conversation after signing in', 'ログイン': 'Sign in',
+  '端末でログインを始めました。終わったら「同じ会話を再開」を押してください': 'Sign-in started in the terminal. When it finishes, press "Resume this conversation".',
+  '右の端末で同じ会話を開きました': 'Opened the same conversation in the right terminal', '使用量: 数えています…': 'Usage: counting…', 'トークン': 'tokens', '目安': 'approx',
   '上限は不明（当たった時に学習します）': 'ceiling unknown (learned when you hit it)', '5 時間枠': '5-hour window', '7 日枠': '7-day window',
   '※ 公式の使用率ではありません。使った量は自分の会話ログから数えたもの、% は前に上限に当たった時の使用量を 100% とした目安です':
     'Not an official usage figure. The amounts are counted from your own transcripts; the % is against the usage recorded the last time you hit the limit.', 'さらに': 'more:', '押すと次の分を出します': 'Click to show the next batch', 'このフォルダはまだ信頼の答えが記録されていません。「このフォルダを信頼しますか」で止まっているかもしれません': 'No trust answer is recorded for this folder yet. It may be waiting at \u201cDo you trust this folder?\u201d', '起動の途中か、初回の確認画面で止まっているかもしれません': 'Still starting, or stopped at a first-run prompt', '（いいえ・閉じる）': '(no / dismiss)', '（既定を選ぶ）': '(accept default)', '端末を見る': 'Look at the terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
@@ -1054,8 +1077,9 @@ function render() {
     const title = n.live ? (n.task || n.s.topic || n.project || '') : (n.title || n.r.first_prompt || '');
     const doing = n.live ? (stKey === 'limited' ? '' : TD(n.doing)) : (n.r.last_prompt || '');
     // こっちが持っている(あなたが動かないと進まない)ものにバッジ
-    const mine = n.live ? (n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '') : '';
-    const badge = mine ? `<span class="c-badge ${mine}" title="${esc(mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
+    const stop = n.live && n.s.auth_lost && n.s.auth_lost.fix !== 'wait' ? n.s.auth_lost : null;
+    const mine = n.live ? (stop ? (stop.fix === 'billing' ? 'lim' : 'auth') : n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '') : '';
+    const badge = mine ? `<span class="c-badge ${mine}" title="${esc(stop ? T(stop.label) : mine === 'auth' ? T('ログインが切れて止まっています') : mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${stop && stop.fix === 'billing' ? '¥' : mine === 'auth' ? '🔑' : mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
     items.push(['n:' + n.id, `<div class="card ${cls} k-${stKey}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:${mc}" title="${esc(title)}">
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
@@ -1597,11 +1621,40 @@ async function renderSettings(refresh) {
       <div class="kvrow"><span>${T('判断待ちの音')}</span><span><button id="sndOn" class="${(snap.sound !== false) ? 'primary' : ''}">${T('鳴らす')}</button><button id="sndOff" class="${(snap.sound === false) ? 'primary' : ''}">${T('鳴らさない')}</button> <span class="sub">${T('通知を切っていても鳴ります（8 秒に 1 回まで）')}</span></span></div>
       <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
     </div>
+    <h3>${T('鍵の棚（値は AIBoard を通りません）')}</h3>
+    <div class="acct" id="keyBox"><div class="sub">${T('読込中…')}</div></div>
     <h3>${T('判定器（選ぶだけの判断を誰がするか）')}</h3>
     <div class="acct" id="jdBox"><div class="sub">${T('読込中…')}</div></div>
     <h3>${T('遠隔（同じ Wi-Fi の中だけ）')}</h3>
     <div class="acct" id="rmBox"><div class="sub">${T('読込中…')}</div></div>`;
   const B = $('#pBody');
+  // 鍵の棚: どの鍵がどこにあり、生きているか。入れる/出すは端末で(値はアプリを通らない)
+  (async () => {
+    let kd; try { kd = await getJSON('/api/keys'); } catch (e) { kd = {ok: false, reason: String(e)}; }
+    const box = $('#keyBox'); if (!box) return;
+    if (!kd.ok) { box.textContent = String(kd.reason || ''); return; }
+    const dot = st => st === 'ok' ? '<span class="dot ok"></span>' : st === 'ng' ? '<span class="dot lim"></span>' : '<span class="dot"></span>';
+    box.innerHTML = `<div class="sub">${T('AIBoard は鍵の値を持ちません。「入れる」「端末に出す」は端末でコマンドを走らせるだけで、値はあなたが端末に入れます。')}</div>` +
+      kd.rows.map((r, i) => `<div class="kvrow"><span>${dot(r.state)} ${esc(T(r.label))}${r.env ? ` <code>${esc(r.env)}</code>` : ''}</span><span>
+        <span class="sub">${esc(DEMO ? '' : (r.why || ''))}</span>
+        ${r.commands.login ? `<button data-key-cmd="${i}" data-kind="login">${T('ログイン')}</button>` : ''}
+        ${r.commands.put ? `<button data-key-cmd="${i}" data-kind="put">${T('入れる')}</button>` : ''}
+        ${r.commands.export ? `<button data-key-cmd="${i}" data-kind="export">${T('端末に出す')}</button>` : ''}
+        ${r.doc ? `<button data-key-doc="${esc(r.doc)}">${T('取りに行く')}</button>` : ''}</span></div>` +
+        (r.note ? `<div class="sub" style="margin:-4px 0 6px">${esc(T(r.note))}</div>` : '')).join('');
+    box.querySelectorAll('button[data-key-cmd]').forEach(b => b.onclick = () => {
+      const r = kd.rows[+b.dataset.keyCmd], cmd = r.commands[b.dataset.kind];
+      if (b.dataset.kind === 'export') {
+        const s0 = (snap.sessions || []).find(x => isAppTab(x.tab) && x.tab === rightTab) || (snap.sessions || []).find(x => isAppTab(x.tab));
+        if (!s0) { say(T('先に端末を開いてください'), true); return; }
+        sendTo(s0, {text: cmd, enter: true}); say(`${T('端末に出しました')}: ${r.env}`);
+        return;
+      }
+      runCmd(T(r.label), cmd);
+      say(b.dataset.kind === 'put' ? T('端末で値の入力を待っています（貼り付けて Enter）') : T('端末でログインを始めました'));
+    });
+    box.querySelectorAll('button[data-key-doc]').forEach(b => b.onclick = () => window.open(b.dataset.keyDoc, '_blank', 'noopener'));
+  })();
   // 判定器: 規則(既定・外へ出さない) / 手元のモデル / 外部の決定モデル(既定は切・鍵は環境変数)
   (async () => {
     let jd; try { jd = await getJSON('/api/judge'); } catch (e) { jd = {ok: false, reason: String(e)}; }
@@ -1877,6 +1930,42 @@ async function renderLive(n) {
       ask.innerHTML = `<div class="q">${esc(DEMO ? 'Allow Bash: npm test?' : (d.doing || T('判断を待っています')))}</div><div class="opts">
         <button data-k="1" class="primary">1 ${T('はい')}</button><button data-k="2">2 ${T('はい、今後も')}</button><button data-k="esc">Esc ${T('いいえ')}</button></div>`;
       ask.querySelectorAll('button').forEach(b => b.onclick = async () => { const r = await sendTo(d, b.dataset.k === 'esc' ? {key: 'esc'} : {text: b.dataset.k, enter: false}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 400); });
+    } else if (d.auth_lost && d.auth_lost.fix === 'wait') {
+      // 一時的な失敗(スリープ・到達不能・応答停止・過負荷)。自動で戻るので騒がず、理由だけ出す
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">${T('一時的に失敗しました。そのまま自動で戻ります')}<br><span class="sub">${esc(DEMO ? '' : (d.auth_lost.text || ''))}</span></div>`;
+    } else if (d.auth_lost && d.auth_lost.fix === 'key') {
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">🔑 ${T('API キーが無効です（ログインではなく鍵の設定の問題です）')}<br><span class="sub">${esc(DEMO ? '' : (d.auth_lost.text || ''))}</span></div><div class="opts">
+        <button data-a="keys" class="primary">${T('鍵の棚を開く')}</button><button data-a="resume">${T('直したら同じ会話を再開')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = () => {
+        if (b.dataset.a === 'keys') { renderSettings(false); setTimeout(() => { const el = $('#keyBox'); if (el) el.scrollIntoView({block: 'center'}); }, 300); return; }
+        toApp({type: 'resume', ai: 'Claude', id: s0.sid, cwd: s0.cwd}); say(T('右の端末で同じ会話を開きました'));
+      });
+    } else if (d.auth_lost && d.auth_lost.fix === 'billing') {
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">¥ ${T('クレジットが尽きています（時間では戻りません）')}<br><span class="sub">${esc(DEMO ? '' : (d.auth_lost.text || ''))}</span></div><div class="opts">
+        <button data-a="open" class="primary">${T('請求のページを開く')}</button><button data-a="other">${T('別のアカウントで続ける')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = () => {
+        if (b.dataset.a === 'open') { window.open('https://claude.ai/settings/billing', '_blank', 'noopener'); return; }
+        renderAccounts(false);
+      });
+    } else if (d.auth_lost) {
+      // 実測で最多の止まり方(30 日で 1,012 回)。次の一手は 1 つ: そのアカウントでログインし直す
+      ask.hidden = false;
+      const who = (s0.account || '').trim();
+      ask.innerHTML = `<div class="q">🔑 ${T('ログインが切れています')}${who ? `（${esc(DEMO ? 'demo' : who)}）` : ''}<br><span class="sub">${esc(DEMO ? 'Not logged in · Please run /login' : (d.auth_lost.text || ''))}</span></div><div class="opts">
+        <button data-a="login" class="primary">${T('このアカウントでログインし直す')}</button><button data-a="resume">${T('ログイン後に同じ会話を再開')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = async () => {
+        if (b.dataset.a === 'login') {
+          const l = (accounts || []).find(x => x.ai === 'Claude' && (x.profile === who || (!who && x.profile === 'default')));
+          runCmd(T('ログイン'), (l ? envFor(l) : 'env -u CLAUDE_CONFIG_DIR ') + 'command claude auth login');
+          say(T('端末でログインを始めました。終わったら「同じ会話を再開」を押してください'));
+        } else {
+          toApp({type: 'resume', ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', id: s0.sid, cwd: s0.cwd});
+          say(T('右の端末で同じ会話を開きました'));
+        }
+      });
     } else if (d.state === '起動中?' && isAppTab(d.tab) && d.trust_ask) {
       ask.hidden = false;
       ask.innerHTML = `<div class="q">${T('このフォルダはまだ信頼の答えが記録されていません。「このフォルダを信頼しますか」で止まっているかもしれません')}</div><div class="opts">

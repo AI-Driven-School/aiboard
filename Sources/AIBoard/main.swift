@@ -968,7 +968,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         case "run":
             // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
             guard let cmd = b["command"] as? String, !cmd.isEmpty, cmd.count < 600,
-                  ["command claude auth", "command codex log", "env -u CLAUDE_CONFIG_DIR command claude auth",
+                  ["command claude auth", "command codex log", "command gh auth login",
+                   "security add-generic-password -U -s aiboard-",   // 鍵の値は端末で人が入れる(アプリは見ない)
+                   "env -u CLAUDE_CONFIG_DIR command claude auth",
                    "CLAUDE_CONFIG_DIR=", "mkdir -p ~/.claude-profiles/",
                    "command cursor-agent login", "command cursor-agent logout", "command cursor-agent status",
                    "command gemini", "command grok"].contains(where: { cmd.hasPrefix($0) }) else { return }   // 決まった形以外は動かさない

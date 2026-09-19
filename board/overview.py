@@ -175,6 +175,61 @@ LIMIT_RE = re.compile(r"hit your (session|weekly|opus|usage)[^·\n]*limit(?:\s*�
 CODEX_LIMIT_RE = re.compile(r"(usage limit|hit your limit)[^\n]*?try again at ([A-Za-z]{3} \d{1,2}(?:st|nd|rd|th)?, \d{4} \d{1,2}:\d{2} ?[AP]M)", re.I)
 
 
+# 止まり方の見分け(2026-09-19 実測・母集団=30 日に更新された会話ログ 6,726 本):
+#   認証 1,012(未ログイン 631・鍵が無効 199・OAuth 失効 145・期限切れ 37) / 上限 509 / クレジット切れ 11
+#   一時的な失敗 57 ＋ スリープ 24 ＋ 応答が止まる 13 ＋ 到達不能 8 ＝ 102(これは自動で戻るので騒がない)
+STOP_KINDS = [
+    ("credits", re.compile(r"out of usage credits", re.I), "クレジットが尽きています"),
+    ("login", re.compile(r"Not logged in", re.I), "ログインしていません"),
+    ("apikey", re.compile(r"Invalid API key", re.I), "API キーが無効です"),
+    ("oauth", re.compile(r"OAuth session expired", re.I), "OAuth の期限が切れました"),
+    ("expired", re.compile(r"Login expired", re.I), "ログインの期限が切れました"),
+]
+TRANSIENT_RE = re.compile(r"went to sleep|response stopped arriving|Can't reach the API server|overloaded|"
+                          r"\b5\d\d\b|timeout|ECONN|network error|fetch failed", re.I)
+AUTH_RE = re.compile(r"(Not logged in|Invalid API key|OAuth session expired|Login expired|Please run /login)", re.I)
+
+
+@cs.memo_by_file
+def claude_auth_error(path):
+    """記録の最後が「ログインが切れている」なら {text, at}。その後に本物の返答が来ていれば解けている(None)。
+
+    直近 30 日で 1,012 回起きていて(未ログイン 631・鍵が無効 199・OAuth 失効 145・期限切れ 37)、
+    盤には何も出ていなかった＝利用者には「なぜか進まない」としか見えなかった(2026-09-19 実測)。
+    """
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 200_000))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    last = None
+    for line in chunk.splitlines():
+        if '"assistant"' not in line:      # すきまの入った JSON も拾う(前に同じ取り落としをした)
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("type") != "assistant":
+            continue
+        txt = "".join(b.get("text", "") for b in (d.get("message", {}).get("content") or []) if isinstance(b, dict))
+        if d.get("isApiErrorMessage"):
+            kind = next((k for k, rx, _ in STOP_KINDS if rx.search(txt)), None)
+            if kind:
+                label = next(l for k, _, l in STOP_KINDS if k == kind)
+                # 直し方が違うので分けて出す: 鍵が無効は「ログインし直す」ではなく「鍵の設定を直す」
+                fix = "key" if kind == "apikey" else "billing" if kind == "credits" else "login"
+                last = {"kind": kind, "fix": fix, "label": label, "text": txt[:140], "at": d.get("timestamp", "")}
+            elif TRANSIENT_RE.search(txt):
+                last = {"kind": "transient", "fix": "wait", "label": "一時的に失敗しました(自動で戻ります)",
+                        "text": txt[:140], "at": d.get("timestamp", "")}
+        elif (d.get("message", {}).get("model") or "") != "<synthetic>":
+            last = None      # 本物の返答が来た = 止まりは解けている
+    return last
+
+
 @cs.memo_by_file
 def claude_limit(path):
     """記録の最後が「上限に当たった」なら {kind, resets, at, text}。その後に依頼や返答が続いていれば解けている(None)。"""
@@ -1064,7 +1119,7 @@ def background_sessions(agents=None):
             "state_for": None, "ago": (time.time() - started) if started else None, "started": started,
             "mem_mb": 0, "pid": None, "transcript": "", "today_requests": 0, "today_requests_partial": False,
             "subagents": {}, "tools": None, "loop": None, "limit": None, "group_label": "", "group_rgb": None,
-            "background": True, "project_hint": "",
+            "background": True, "project_hint": "", "auth_lost": None, "deleg": "", "idle": None, "trust_ask": "",
         })
     return out
 
@@ -1153,6 +1208,8 @@ def sessions(procs=None, with_official=True):
             "group_label": "", "group_rgb": None,
             "limit": with_active(codex_limit(t.get("doing")) if (t.get("ai") or "").startswith("Codex")
                                  else claude_limit(t["transcript"]) if t.get("transcript") else None),
+            # ログインが切れて止まっているか(実測で最多の止まり方。盤に出ていなかった)
+            "auth_lost": (claude_auth_error(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None),
         })
     if with_official:
         agents = official_agents()
@@ -1178,7 +1235,9 @@ def attention(sess):
     for s in sess:
         why = None
         rank = None
-        if s["state"] == "確認待ち":
+        if s.get("auth_lost"):
+            why, rank = "ログインが切れている: " + (s["auth_lost"].get("text") or "")[:60], 0
+        elif s["state"] == "確認待ち":
             why, rank = "⚠ 確認待ち(承認か返事が要る)", 0
         elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("loop") or {}).get("wake"):
             continue   # /loop が次に自分で起きる。人の番ではない
