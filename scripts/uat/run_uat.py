@@ -2003,9 +2003,9 @@ def nt03(ctx):
             out[auth or "(空)"] = {"shown": bool(w and not w.get_attribute("hidden") and w.is_visible()),
                                    "text": (w.inner_text() if w else ""), "expect": shown}
         pg.evaluate("board.setToApp(m => { window.__sent = (window.__sent || []).concat([m]); })")
-        pg.evaluate("""() => { board.snap().notify = {auth: 'denied'}; board.toolbar(); }""")
-        pg.wait_for_timeout(200)
-        pg.click("#notifyWarn")
+        # 盤は 2.5 秒ごとに本物の snapshot で描き直す(このページには通知の状態が無い→隠れる)ので、
+        # 出した直後に同じ処理の中で押す(人がクリックするのと同じ onclick)
+        pg.evaluate("""() => { board.snap().notify = {auth: 'denied'}; board.toolbar(); document.querySelector('#notifyWarn').click(); }""")
         pg.wait_for_timeout(200)
         return out, pg.evaluate("window.__sent || []"), errs
     out, sent, errs = with_page(ctx, fn, "?lang=ja")
