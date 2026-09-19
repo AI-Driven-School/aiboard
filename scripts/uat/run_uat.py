@@ -3368,6 +3368,118 @@ def ky01(ctx):
     return f"既定 {len(rows)} 項目・値は持たない/保存しない・鍵束は aiboard- だけ・確認に -w を使わない・端末のコマンド 2 種"
 
 
+@case("RS-01", "解除時刻に自動で続ける: 1 回だけの予約を作れて、その時刻に同じ会話を --resume で開き、走ったら自分を止める")
+def rs01(ctx):
+    import overview as o
+    origin = {"Origin": BASE.rstrip("/")}
+    sid = "0123456789abcdef0123456789abcdef0123"
+    st, r, _ = http("/api/schedule", "POST", {"prompt": "上限が解けたので続けて", "once_at": time.time() + 3600,
+                                              "resume": sid, "cwd": HOME, "key": "uat-rs"}, headers=origin)
+    check(st == 200 and r["ok"], f"1 回だけの予約を作れない {r}")
+    job = r["job"]
+    try:
+        check(job["once_at"] and job["resume"] == sid and not job["at"] and not job["every"], f"中身 {job}")
+        check(o.job_due(job) is False and o.job_due(job, now=time.time() + 3700) is True, "時刻の判定が違う")
+        check(abs(o.job_next_at(job) - job["once_at"]) < 1, "次に走る時刻が違う")
+        check(o.job_missed(job, now=time.time() + 10 * 3600) is None, "1 回だけの予約に「見送り」を出した")
+        for bad in ({"prompt": "x", "once_at": time.time() - 10 * 86400}, {"prompt": "x", "once_at": time.time() + 60, "resume": "short"}):
+            st2, r2, _ = http("/api/schedule", "POST", bad, headers=origin)
+            check(st2 == 400, f"不正を受けた {bad} → {r2}")
+        # アプリが起こす時は --resume が付く(試しのみ)
+        o.mark_ran(job["id"], when=0)
+        rows = [x for x in o.read_schedule() if x["id"] == job["id"]]
+        o.save_job(dict(job, once_at=time.time() - 60, last_run=0))
+        r3 = run_app_js(ctx, "return await fetch('/api/schedule', {headers: {'X-Overview': '1'}}).then(x => x.json())",
+                        {"AIBOARD_DRY": "1"}, wait="12")
+        check(r3.get("ok"), f"{r3}")
+        after = next((j for j in r3["value"]["jobs"] if j["id"] == job["id"]), None)
+        check(after and after["last_run"] > time.time() - 120, f"期限の来た 1 回だけの予約が走っていない {after}")
+        check(after["enabled"] is False, f"走った後も止まっていない {after}")
+        src = open(os.path.join(ROOT, "Sources", "AIBoard", "main.swift"), encoding="utf-8").read()
+        check("codex resume \\(resume)" in src and "--resume \\(resume)" in src, "アプリ側に resume の道が無い")
+    finally:
+        o.delete_job(job["id"])
+    return "1 回だけの予約(once_at＋resume)・不正 2 通りを拒否・期限で走って自分を止める・起動は --resume"
+
+
+@case("TL-02", "会話の区切り: 圧縮された所と、あなたが止めた所を、会話ビューに線で出す")
+def tl02(ctx):
+    import overview as o
+    d = tempfile.mkdtemp(dir=ctx["data"])
+    J = lambda x: json.dumps(x, ensure_ascii=False)
+    lines = [
+        J({"type": "user", "timestamp": "2026-09-19T00:00:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "最初の依頼"}]}}),
+        J({"type": "system", "subtype": "compact_boundary", "timestamp": "2026-09-19T00:01:00Z", "content": "Conversation compacted"}),
+        J({"type": "user", "timestamp": "2026-09-19T00:02:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}}),
+        J({"type": "user", "timestamp": "2026-09-19T00:03:00Z", "message": {"role": "user", "content": [{"type": "text", "text": "次の依頼"}]}}),
+        J({"type": "assistant", "timestamp": "2026-09-19T00:04:00Z", "message": {"model": "claude-opus-5", "content": [{"type": "text", "text": "はい"}]}}),
+    ]
+    p = os.path.join(d, "t.jsonl"); open(p, "w").write("\n".join(lines) + "\n")
+    tl = o.timeline_claude(p, limit=50, with_text=True)
+    kinds = [e["kind"] for e in tl]
+    marks = [e["text"] for e in tl if e["kind"] == "区切り"]
+    check(kinds == ["依頼", "区切り", "区切り", "依頼", "返答"], f"並び {kinds}")
+    check("圧縮" in marks[0] and "止めました" in marks[1], f"区切りの文 {marks}")
+    check(not any("Request interrupted" in e["text"] for e in tl if e["kind"] == "依頼"), "中断の印を依頼として出した")
+
+    def fn(pg, errs, bl):
+        return pg.evaluate("""(tl) => { const h = board.convHtml(tl);
+            const d = document.createElement('div'); d.innerHTML = h;
+            return {marks: [...d.querySelectorAll('.cv.mark')].map(x => x.textContent.trim().slice(0, 20)),
+                    bubbles: d.querySelectorAll('.cv .bub').length}; }""", tl), errs
+    v, errs = with_page(ctx, fn, "?lang=ja")
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(len(v["marks"]) == 2 and v["bubbles"] == 3, f"画面の区切り {v}")
+    return f"記録: 圧縮と中断を区切りとして拾う / 画面: 中央の線 2 本・吹き出し 3 個"
+
+
+@case("PR-01", "同じ場所で並行: 2 本以上動いているフォルダを snapshot に出し、カードに ⇉N、会話ビューに相棒を並べる")
+def pr01(ctx):
+    import overview as o
+    mk = lambda sid, cwd, state="作業中", ai="Claude": {"sid": sid, "cwd": cwd, "ai": ai, "mark": "🟢", "state": state,
+                                                        "tab": "9-" + sid[-1], "task": "t" + sid[-1]}
+    g = o.parallel_groups([mk("a1", "/tmp/x"), mk("a2", "/tmp/x/"), mk("a3", "/tmp/y"),
+                           dict(mk("a4", "/tmp/y"), mark="⚪"), dict(mk("a5", "/tmp/z"), ai=""),
+                           dict(mk("a6", "/tmp/z"), background=True)])
+    check(list(g) == ["/tmp/x"] and len(g["/tmp/x"]) == 2, f"組の作り方 {g}")
+    st, snap, _ = http("/api/snapshot")
+    check("parallel" in snap, "snapshot に parallel が無い")
+    real = {k: len(v) for k, v in (snap.get("parallel") or {}).items()}
+
+    def route(pg):
+        def handler(route_, req):
+            import urllib.request
+            r = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            d = json.loads(r.read())
+            base = (d.get("sessions") or [{}])[0]
+            two = [dict(base, sid="p" + str(i), tab="9-" + str(i), ai="Claude", state="作業中", mark="🟢", cwd="/tmp/par",
+                        project="uat", doing="", task="仕事" + str(i), mem_mb=1, subagents={}, tools=None, loop=None,
+                        limit=None, client=None, state_for=1, ago=1, group_label="", group_rgb=None, auth_lost=None,
+                        model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"})
+                   for i in (1, 2)]
+            d["sessions"] = two
+            d["parallel"] = {"/tmp/par": [{"sid": "p1", "tab": "9-1", "state": "作業中", "ai": "Claude", "task": "仕事1"},
+                                          {"sid": "p2", "tab": "9-2", "state": "確認待ち", "ai": "Claude", "task": "仕事2"}]}
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
+        pg.route("**/api/snapshot", handler)
+        pg.route("**/api/conv*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"ok": True, "etag": "x", "timeline": [], "tab": "9-1", "sid": "p1", "state": "作業中", "mark": "🟢", "ai": "Claude"})))
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card.live .c-par').length >= 2", 40)
+        chips = pg.evaluate("[...document.querySelectorAll('.card.live .c-par')].map(c => c.textContent.trim())")
+        pg.evaluate("board.select('p1')")
+        wait_js(pg, "document.querySelector('#pBody').innerText.includes('同じ場所で動いています')", 30)
+        return {"chips": chips, "mates": pg.evaluate("[...document.querySelectorAll('#pBody button[data-par]')].map(b => b.textContent.trim())"),
+                "warn": "衝突" in pg.evaluate("document.querySelector('#pBody').innerText")}, errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(v["chips"] == ["⇉ 2", "⇉ 2"], f"カードの印 {v['chips']}")
+    check(len(v["mates"]) == 1 and "確認待ち" in v["mates"][0], f"相棒の並び {v['mates']}")
+    check(v["warn"], "衝突の注意が出ていない")
+    return f"組の作り方(末尾の / ・終了・非 AI・背景を除く)・実機 {real}・カード ⇉2・相棒 1 件と注意"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

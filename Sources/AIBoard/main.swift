@@ -1043,19 +1043,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 for j in jobs where (j["due"] as? Bool) == true {
                     guard let id = j["id"] as? String, let prompt = j["prompt"] as? String, !prompt.isEmpty else { continue }
                     self.startJob(id: id, key: (j["key"] as? String) ?? "", prompt: prompt,
-                                  cwd: (j["cwd"] as? String) ?? HOME, ai: (j["ai"] as? String) ?? "Claude")
+                                  cwd: (j["cwd"] as? String) ?? HOME, ai: (j["ai"] as? String) ?? "Claude",
+                                  resume: (j["resume"] as? String) ?? "")
                 }
             }
         }.resume()
     }
 
-    func startJob(id: String, key: String, prompt: String, cwd: String, ai: String) {
+    func startJob(id: String, key: String, prompt: String, cwd: String, ai: String, resume: String = "") {
         let isCodex = ai == "Codex"
         let brief = key.isEmpty ? "" : projectBrief(key)
         let dir = FileManager.default.fileExists(atPath: cwd) ? cwd : HOME
         let ask = writeInstructions("sched-" + id, (brief.isEmpty ? "" : brief + "\n\n---\n\n") + prompt)
-        let cmd = isCodex ? "codex \"$(cat \(shellQuote(ask)))\""
-                          : "command claude \"$(cat \(shellQuote(ask)))\""
+        // resume が付いていれば、新しい会話でなく**その会話の続き**として開く(上限明けの再開)
+        let ok = resume.range(of: "^[0-9a-fA-F-]{16,}$", options: .regularExpression) != nil
+        let cmd = ok ? (isCodex ? "codex resume \(resume)" : "command claude --resume \(resume) \"$(cat \(shellQuote(ask)))\"")
+                     : (isCodex ? "codex \"$(cat \(shellQuote(ask)))\"" : "command claude \"$(cat \(shellQuote(ask)))\"")
         scheduleLog.append("run \(id) ai=\(ai) cwd=\(dir)")
         if ProcessInfo.processInfo.environment["AIBOARD_DRY"] == nil {
             showTerminal()

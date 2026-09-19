@@ -111,6 +111,7 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .c-badge.auth{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
 @keyframes badgepulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 @media (prefers-reduced-motion:reduce){.c-badge.need{animation:none}}
+.c-par{font:600 11px var(--mono);color:#0B0B0B;background:#7DD3FC;border-radius:8px;padding:0 5px}
 .c-git{font:11px var(--mono);color:#9AA4B5;border:1px solid var(--line2);border-radius:8px;padding:0 5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .c-pr{font:600 11px var(--mono);border-radius:8px;padding:0 6px;color:#0B0B0B;background:#8B94A7}
 .c-pr.open{background:#3FB950}.c-pr.merged{background:#A371F7;color:#fff}.c-pr.closed{background:#F85149;color:#fff}.c-pr.draft{opacity:.7}
@@ -142,6 +143,9 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .cv.you .bub code{background:rgba(255,255,255,.28)}
 .cv .bub pre.cb{background:#0B0B0B;border:1px solid #2A2A2A;border-radius:6px;padding:6px 8px;margin:6px 0;
   white-space:pre;overflow-x:auto;font:11.5px/1.5 var(--mono);color:#D6D6D6;max-width:100%}
+.cv.mark{align-items:center;color:#C9A227;font-size:11.5px;margin:10px 0}
+.cv.mark .line{display:flex;align-items:center;gap:8px;width:100%}
+.cv.mark .line::before,.cv.mark .line::after{content:"";flex:1;height:1px;background:#C9A22755}
 .cv.op{align-items:center;color:#8A8A8A;font-size:11px;margin:2px 0 8px}
 .cv.op .line{display:flex;align-items:center;gap:8px;max-width:100%;width:100%}
 .cv.op .line::before,.cv.op .line::after{content:"";flex:1;height:1px;background:var(--line2)}
@@ -381,6 +385,7 @@ html,body{font:13px/1.45 "Inter",-apple-system,BlinkMacSystemFont,"Hiragino Sans
 .lod-far .card.k-loop{background:var(--f-blue) !important}
 .convloop{display:flex;flex-direction:column;gap:4px;padding:8px 12px;border-bottom:1px solid var(--f-line);font-size:12px;color:var(--f-ink2)}
 .convloop b{color:var(--f-ink);font-weight:600}
+.convloop button.mini{font:11.5px inherit;padding:2px 8px;border-radius:9px;margin:2px 2px 0 0}
 .convloop code{font-size:11px;color:var(--f-ink2)}
 .convloop .tools{display:flex;flex-wrap:wrap;gap:4px}
 .convloop .tchip{padding:1px 6px;border:1px solid var(--f-line2);border-radius:4px;font-size:11px}
@@ -577,7 +582,11 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '同じ場所で動いているもの': 'Also running in this folder', '同じ場所で動いています': 'Also running in this folder', '同じファイルを触ると衝突します。片方を待つか、持ち場を分けてください。': 'They will collide if they touch the same files. Wait for one, or give them separate folders.', 'ここで会話が圧縮されました（前半は要約に置き換わっています）': 'The conversation was compacted here (the earlier part is now a summary)', 'ここであなたが止めました': 'You interrupted here', '解除時刻に自動で続ける': 'Continue automatically when it resets',
+  '解除時刻に、この会話の続きを自動で開きます': 'This conversation will be resumed automatically when the limit resets',
+  '（その時にアプリが開いている必要があります）': '(AIBoard must be open at that time)',
+  '解除時刻が分からないので予約できません': 'The reset time is unknown, so this cannot be scheduled',
+  '上限が解けたので続けてください。直前までの作業をそのまま進めてください。': 'The limit has reset. Please continue exactly where you left off.',
   '一時的に失敗しました。そのまま自動で戻ります': 'A temporary failure. It recovers on its own.',
   'API キーが無効です（ログインではなく鍵の設定の問題です）': 'The API key is invalid (a key setting, not a sign-in)',
   '鍵の棚を開く': 'Open the key shelf', '直したら同じ会話を再開': 'Resume this conversation once fixed',
@@ -1084,7 +1093,8 @@ function render() {
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
       ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
-      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${n.live && n.s.git ? `<span class="c-git" title="${esc(DEMO ? '' : (n.s.git.root || ''))}">⎇ ${esc(DEMO ? 'main' : n.s.git.branch)}</span>${n.s.git.pr ? `<span class="c-pr ${esc(n.s.git.pr.state)}${n.s.git.pr.draft ? ' draft' : ''}" title="${esc(DEMO ? '' : n.s.git.pr.title)}">PR #${n.s.git.pr.number}${n.s.git.pr.draft ? ' draft' : ''}${n.s.git.pr.review === 'approved' ? ' ✓' : n.s.git.pr.review === 'changes_requested' ? ' ✗' : ''}</span>` : ''}` : ''}${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
+      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${(() => { const g = n.live && ((snap.parallel || {})[(n.s.cwd || '').replace(/\/$/, '')] || []); return g && g.length > 1 ?
+        `<span class="c-par" title="${esc(T('同じ場所で動いているもの'))}: ${esc(g.map(x => (x.ai || '') + ' ' + TS(x.state || '')).join(' / '))}">⇉ ${g.length}</span>` : ''; })()}${n.live && n.s.git ? `<span class="c-git" title="${esc(DEMO ? '' : (n.s.git.root || ''))}">⎇ ${esc(DEMO ? 'main' : n.s.git.branch)}</span>${n.s.git.pr ? `<span class="c-pr ${esc(n.s.git.pr.state)}${n.s.git.pr.draft ? ' draft' : ''}" title="${esc(DEMO ? '' : n.s.git.pr.title)}">PR #${n.s.git.pr.number}${n.s.git.pr.draft ? ' draft' : ''}${n.s.git.pr.review === 'approved' ? ' ✓' : n.s.git.pr.review === 'changes_requested' ? ' ✗' : ''}</span>` : ''}` : ''}${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
   });
   patchNodes(nodesEl, items);
   // エッジ描画
@@ -1856,6 +1866,10 @@ function convHtml(tl) {
   for (const e of tl) {
     if (e.kind === '操作') { ops.push(e); continue; }
     flush();
+    if (e.kind === '区切り') {   // 圧縮・あなたが止めた所。会話の切れ目として中央に出す
+      out.push(`<div class="cv mark"><div class="line"><span>${esc(T(e.text))}${e.t ? ' · ' + esc(fmtIso(e.t)) : ''}</span></div></div>`);
+      lastWho = ''; continue;
+    }
     const you = e.kind === '依頼';
     const who = you ? 'you' : 'ai';
     // 同じ相手が続けて話した時は、名前と時刻を繰り返さない(5 分以内)
@@ -1894,6 +1908,8 @@ async function renderLive(n) {
   $('#pBody').innerHTML = `
     <div class="convwrap">
       <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${s0.git ? `<span class="c-git">⎇ ${esc(DEMO ? 'main' : s0.git.branch)}</span>${s0.git.pr ? `<a class="c-pr ${esc(s0.git.pr.state)}" href="${esc(DEMO ? '#' : s0.git.pr.url)}" target="_blank" rel="noopener">PR #${s0.git.pr.number}</a>` : ''}` : ''}${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
+      ${(() => { const g = ((snap.parallel || {})[(s0.cwd || '').replace(/\/$/, '')] || []).filter(x => x.sid !== s0.sid);
+        return g.length ? `<div class="convloop"><div><b>⇉ ${T('同じ場所で動いています')}</b> ${g.map(x => `<button class="mini" data-par="${esc(x.sid)}">${esc(x.ai || '')} · ${esc(TS(x.state || ''))}${x.task ? ' · ' + esc(DEMO ? '' : x.task) : ''}</button>`).join(' ')}</div><div class="sub">${T('同じファイルを触ると衝突します。片方を待つか、持ち場を分けてください。')}</div></div>` : ''; })()}
       ${loopLine(s0)}
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
       <div class="convlimit" id="cvLimit" hidden></div>
@@ -1915,8 +1931,19 @@ async function renderLive(n) {
       lb.hidden = false;
       const mine = s0.account && s0.account !== '自社' ? s0.account : 'default';
       const others = accounts.filter(a => a.ai === 'Claude' && a.config_dir && !(a.limit && a.limit.active) && a.profile !== mine);
-      const html = `<b>${T('上限に当たっています')}</b> · ${esc(limitWhen(lim))}${(!(s0.ai || '').startsWith('Codex') && APP && others.length) ? `<div class="opts">${others.map(o => `<button data-prof="${esc(o.profile)}" data-dir="${esc(o.config_dir)}">${T('別アカウントで続ける')}: ${esc(DEMO ? o.profile : (o.email || o.profile))}</button>`).join('')}</div>` : ''}`;
+      const html = `<b>${T('上限に当たっています')}</b> · ${esc(limitWhen(lim))}${(!(s0.ai || '').startsWith('Codex') && APP && others.length) ? `<div class="opts">${others.map(o => `<button data-prof="${esc(o.profile)}" data-dir="${esc(o.config_dir)}">${T('別アカウントで続ける')}: ${esc(DEMO ? o.profile : (o.email || o.profile))}</button>`).join('')}${(s0.limit || {}).resets_at ? `<button data-auto="1">${T('解除時刻に自動で続ける')}</button>` : ''}</div>` : ''}`;
       if (lb.dataset.html !== html) { lb.innerHTML = html; lb.dataset.html = html;
+        const auto = lb.querySelector('button[data-auto]');
+        if (auto) auto.onclick = async () => {
+          const at = (s0.limit || {}).resets_at;
+          if (!at) { say(T('解除時刻が分からないので予約できません'), true); return; }
+          if (!confirm(`${T('解除時刻に、この会話の続きを自動で開きます')}\n${esc(hhmm(at))}\n${T('（その時にアプリが開いている必要があります）')}`)) return;
+          let r; try { r = await getJSON('/api/schedule', {method: 'POST', body: JSON.stringify({
+            key: s0.project_hint || s0.project || '', prompt: T('上限が解けたので続けてください。直前までの作業をそのまま進めてください。'),
+            cwd: s0.cwd, ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', once_at: at + 60, resume: s0.sid})}); }
+            catch (e) { r = {ok: false, reason: String(e)}; }
+          say(r.ok ? `${T('予約しました')}: ${hhmm(at + 60)}` : `${T('予約できません')}: ${r.reason}`, !r.ok);
+        };
         lb.querySelectorAll('button[data-dir]').forEach(b => b.onclick = () => {
           if (!confirm(T('この会話の記録を別アカウントにコピーし、そのアカウントで続きを開きます。元のセッションはそのまま残ります。'))) return;
           toApp({type: 'switchAccount', tab: s0.tab, sid: s0.sid, cwd: s0.cwd, transcript: s0.transcript, configDir: b.dataset.dir, profile: b.dataset.prof});
@@ -2000,6 +2027,7 @@ async function renderLive(n) {
     if (stickBottom) log.scrollTop = log.scrollHeight;
   };
   pull(); clearInterval(detailTimer); detailTimer = setInterval(pull, 1500);
+  $('#pBody').querySelectorAll('button[data-par]').forEach(b => b.onclick = () => select(b.dataset.par));
   const inp = $('#sendIn');
   if (inp) {
     if (!fromRight) inp.focus();   // 右のタブから開いた時は端末に入力先を残す
@@ -2051,7 +2079,7 @@ setInterval(loadIndex, 300000);
 try { new ResizeObserver(() => document.documentElement.style.setProperty('--tbh', $('#toolbar').offsetHeight + 'px')).observe($('#toolbar')); } catch (e) {}
 window.board = {openInApp, renderProject, openDelegate, setToApp: f => { toAppImpl = f; }, fitTo, fitAll, select, closePanel, zoomBy,
   frames: () => window._frames, vis: () => window._vis, snap: () => snap,
-  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult, setRightTab, rightTab: () => rightTab, openFromRight};   // 試験用: いまの snap で上のバーだけ描き直す
+  toolbar: () => renderToolbar(window._frames || [], window._vis || []), index: () => index, delegResult, setRightTab, rightTab: () => rightTab, openFromRight, convHtml};   // 試験用: いまの snap で上のバーだけ描き直す
 })();
 </script>
 </body>

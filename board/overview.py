@@ -714,6 +714,19 @@ def save_job(job):
         raise ValueError("場所が不正")
     ai = "Codex" if str(job.get("ai", "")) == "Codex" else "Claude"
     at, every = str(job.get("at", "") or ""), job.get("every")
+    once_at = job.get("once_at")     # 1 回だけ: この時刻(epoch)を過ぎたら 1 度走って自分を止める
+    if once_at not in (None, ""):
+        try:
+            once_at = float(once_at)
+        except (TypeError, ValueError):
+            raise ValueError("once_at は時刻(epoch)")
+        if once_at < time.time() - 86400 or once_at > time.time() + 30 * 86400:
+            raise ValueError("once_at が現実的でない(過去 1 日〜先 30 日)")
+    else:
+        once_at = None
+    resume_sid = str(job.get("resume") or "")
+    if resume_sid and not re.fullmatch(r"[0-9a-fA-F-]{16,}", resume_sid):
+        raise ValueError("resume は会話の id")
     if at and not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
         raise ValueError("時刻は HH:MM")
     if every is not None and every != "":
@@ -725,12 +738,13 @@ def save_job(job):
             raise ValueError(f"間隔は {SCHEDULE_MIN_EVERY} 分以上")
     else:
         every = None
-    if not at and not every:
-        raise ValueError("時刻か間隔のどちらかが要る")
+    if not at and not every and not once_at:
+        raise ValueError("時刻・間隔・1 回だけ のどれかが要る")
     jid = str(job.get("id") or f"j{int(time.time() * 1000)}")
     rows = [r for r in read_schedule() if r.get("id") != jid]
     rec = {"id": jid, "key": str(job.get("key", ""))[:80], "prompt": prompt, "cwd": cwd, "ai": ai,
-           "at": at, "every": every, "enabled": bool(job.get("enabled", True)),
+           "at": at, "every": every, "once_at": once_at, "resume": resume_sid,
+           "enabled": bool(job.get("enabled", True)),
            "last_run": float(job.get("last_run") or 0), "created": time.time()}
     rows.append(rec)
     _write_schedule(rows[-100:])
@@ -750,6 +764,8 @@ def mark_ran(jid, when=None):
     for r in rows:
         if r.get("id") == jid:
             r["last_run"] = float(when or time.time())
+            if r.get("once_at"):
+                r["enabled"] = False      # 1 回だけの予約は走ったら自分を止める
             hit += 1
     _write_schedule(rows)
     return hit
@@ -766,6 +782,8 @@ def job_due(job, now=None, grace=3600):
         return False
     now = now if now is not None else time.time()
     last = float(job.get("last_run") or 0)
+    if job.get("once_at"):        # 1 回だけ: その時刻を過ぎていて、まだ走っていなければ
+        return not last and now >= float(job["once_at"])
     if job.get("every"):
         return now - last >= float(job["every"]) * 60
     at = str(job.get("at") or "")
@@ -784,7 +802,7 @@ def job_due(job, now=None, grace=3600):
 def job_missed(job, now=None, grace=3600):
     """時刻の予約の「直近の予定時刻」(今日の分が未来なら昨日の分)を見送ったなら、その時刻。無ければ None。
     日付をまたいだ見送り(23:00 の予約を翌 0:30 に開いた)も拾う(codex 再反証 2026-09-19)。"""
-    if not job.get("enabled", True) or job.get("every"):
+    if not job.get("enabled", True) or job.get("every") or job.get("once_at"):
         return None
     now = now if now is not None else time.time()
     at = str(job.get("at") or "")
@@ -806,6 +824,8 @@ def job_next_at(job, now=None):
     if not job.get("enabled", True):
         return None
     now = now if now is not None else time.time()
+    if job.get("once_at"):
+        return None if job.get("last_run") else float(job["once_at"])
     if job.get("every"):
         return max(now, float(job.get("last_run") or 0) + float(job["every"]) * 60)
     at = str(job.get("at") or "")
@@ -1227,6 +1247,19 @@ def sessions(procs=None, with_official=True):
             if b["sid"] not in {x.get("sid") for x in out}:
                 out.append(b)
     return [apply_group(x) for x in out]
+
+
+def parallel_groups(sess):
+    """同じ場所で 2 本以上動いている組。実測で 621 フォルダ中 206(33%)が該当し、
+    「自分が 2 つ動かしていることに気づかない」が起きる。隠さずに数と顔ぶれを出す。"""
+    by = {}
+    for s in sess:
+        cwd = (s.get("cwd") or "").rstrip("/")
+        if not cwd or not s.get("ai") or s.get("mark") == "⚪" or s.get("background"):
+            continue
+        by.setdefault(cwd, []).append({"sid": s.get("sid"), "tab": s.get("tab"), "state": s.get("state"),
+                                       "ai": s.get("ai"), "task": (s.get("task") or "")[:60]})
+    return {k: v for k, v in by.items() if len(v) > 1}
 
 
 def attention(sess):
@@ -1851,6 +1884,7 @@ def snapshot(with_macmini=True):
         "machine": machine(procs),
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
         "notify": {"auth": cs.app_notify_auth()},
+        "parallel": parallel_groups(sess),
         "sound": sound_on(),
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
@@ -1892,22 +1926,35 @@ def timeline_claude(path, limit=20, tail_bytes=3_000_000, with_text=False, sidec
         return []
     events = []
     for line in chunk.splitlines():
-        if '"type":"user"' in line:
+        if "compact_boundary" in line or '"isCompactSummary"' in line:
+            # 会話が圧縮された所。前後が別の話に見えるので、区切りとして出す(30 日で 124 回)
             try:
                 d = json.loads(line)
             except ValueError:
+                d = {}
+            events.append({"t": d.get("timestamp", ""), "kind": "区切り", "text": "ここで会話が圧縮されました（前半は要約に置き換わっています）"})
+            continue
+        if '"user"' in line:      # すきまの入った JSON も拾う(型は読んでから確かめる)
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "user":
                 continue
             if sidechain_ok:
                 d["isSidechain"] = False   # サブエージェントの記録は全行 isSidechain=true なので外す
+            if re.search(r"\[Request interrupted by user", line):
+                events.append({"t": d.get("timestamp", ""), "kind": "区切り", "text": "ここであなたが止めました"})
+                continue
             text = cs.prompt_text(d)
             if text:
                 events.append({"t": d.get("timestamp", ""), "kind": "依頼", "text": text[:2000]})
-        elif '"type":"assistant"' in line:
+        elif '"assistant"' in line:
             try:
                 d = json.loads(line)
             except ValueError:
                 continue
-            if d.get("isSidechain") and not sidechain_ok:
+            if d.get("type") != "assistant" or (d.get("isSidechain") and not sidechain_ok):
                 continue
             for b in d.get("message", {}).get("content", []) or []:
                 if not isinstance(b, dict):
