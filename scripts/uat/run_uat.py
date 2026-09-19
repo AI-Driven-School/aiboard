@@ -2418,6 +2418,8 @@ def rm02(ctx):
         ("外から・合言葉違い", "/api/snapshot", False, "192.168.1.9", "s3cret-token-uat ", on, False),
         ("外から・読める道", "/api/snapshot", False, "192.168.1.9", "s3cret-token-uat", on, True),
         ("外から・小さな画面", "/m", False, "192.168.1.9", "s3cret-token-uat", on, True),
+        ("外から・manifest", "/m.webmanifest", False, "192.168.1.9", "s3cret-token-uat", on, True),
+        ("外から・アイコン", "/m-icon.png", False, "192.168.1.9", "s3cret-token-uat", on, True),
         ("外から・返事は書ける", "/api/send", True, "192.168.1.9", "s3cret-token-uat", on, True),
         ("外から・終了は不可", "/api/stop", True, "192.168.1.9", "s3cret-token-uat", on, False),
         ("外から・起動は不可", "/api/resume", True, "192.168.1.9", "s3cret-token-uat", on, False),
@@ -2982,6 +2984,25 @@ def gb03(ctx):
     check(cards["gb3"]["br"] and not cards["gb3"]["pr"], f"gb3 {cards['gb3']}")
     check(sw == [True, True], f"設定のスイッチ {sw}")
     return "⎇ ブランチ 3 枚 / PR #7 open ✓・#8 merged draft・無しは出さない / 設定のスイッチが状態を映す"
+
+
+@case("RM-05", "小さな画面はホーム画面に追加できる形: manifest・apple-mobile-web-app の meta・180px のアイコン・合言葉は端末に残る")
+def rm05(ctx):
+    st, body, hdr = http("/m", raw=True)
+    check(st == 200, f"/m {st}")
+    html = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body)
+    for need in ('rel="manifest"', 'apple-mobile-web-app-capable', 'apple-touch-icon', 'localStorage.setItem'):
+        check(need in html, f"/m に {need} が無い")
+    st, m, _ = http("/m.webmanifest")
+    check(st == 200 and m.get("display") == "standalone" and m.get("start_url") == "/m", f"manifest {m}")
+    import urllib.request
+    with urllib.request.urlopen(urllib.request.Request(BASE + "/m-icon.png", headers={"X-Overview": "1"}), timeout=10) as r:
+        png = r.read()
+    check(png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 1000, "アイコンが PNG でない")
+    import struct
+    w, h = struct.unpack(">II", png[16:24])
+    check((w, h) == (180, 180), f"アイコンの大きさ {w}x{h}")
+    return "manifest(standalone・/m)・meta・180x180 の PNG・合言葉は localStorage"
 
 
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")

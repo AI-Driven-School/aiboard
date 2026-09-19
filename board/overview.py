@@ -431,7 +431,7 @@ def notes_path(key):
 # ---------------------------------------------------------------- 遠隔 ----
 # 既定は切ってある。入れると「同じ LAN の中から、合言葉つきで」だけ届く。
 # 読み取りと、判断待ちへの返事だけを通す(終了・起動・設定の変更は通さない)。
-REMOTE_PATHS_READ = ("/m", "/m.js", "/api/snapshot", "/api/conv", "/api/schedule", "/api/version")
+REMOTE_PATHS_READ = ("/m", "/m.js", "/m.webmanifest", "/m-icon.png", "/api/snapshot", "/api/conv", "/api/schedule", "/api/version")
 REMOTE_PATHS_WRITE = ("/api/send",)
 
 

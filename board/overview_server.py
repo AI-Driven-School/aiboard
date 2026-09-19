@@ -333,6 +333,20 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/judge":
                 import judge
                 self._json(200, {"ok": True, **judge.status()})
+            elif path == "/m.webmanifest":
+                body = json.dumps({"name": "AIBoard", "short_name": "AIBoard", "start_url": "/m", "display": "standalone",
+                                   "background_color": "#111317", "theme_color": "#111317",
+                                   "icons": [{"src": "/m-icon.png", "sizes": "180x180", "type": "image/png"}]}).encode()
+                self.send_response(200); self.send_header("Content-Type", "application/manifest+json")
+                self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+            elif path == "/m-icon.png":
+                ico = os.path.join(HERE, "m-icon.png")
+                if not os.path.exists(ico):
+                    return self._json(404, {"ok": False})
+                body = open(ico, "rb").read()
+                self.send_response(200); self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(body))); self.send_header("Cache-Control", "max-age=86400")
+                self.end_headers(); self.wfile.write(body)
             elif path == "/api/remote":
                 c = overview.remote_config()
                 self._json(200, {"ok": True, "enabled": c["enabled"], "token": c["token"] if c["enabled"] else "",
