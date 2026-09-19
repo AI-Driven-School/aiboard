@@ -3005,6 +3005,31 @@ def rm05(ctx):
     return "manifest(standalone・/m)・meta・180x180 の PNG・合言葉は localStorage"
 
 
+@case("RM-06", "外から届く住所の一覧: ループバックとリンクローカルを除き、LAN と Tailscale(100.64/10)を見分ける(ifconfig は差し替え)")
+def rm06(ctx):
+    import overview as o
+    fake = """lo0: flags=8049<UP,LOOPBACK> mtu 16384
+	inet 127.0.0.1 netmask 0xff000000
+en0: flags=8863<UP,BROADCAST> mtu 1500
+	inet 192.168.50.246 netmask 0xffffff00 broadcast 192.168.50.255
+en5: flags=8863<UP> mtu 1500
+	inet 169.254.10.9 netmask 0xffff0000
+utun4: flags=8051<UP,POINTOPOINT> mtu 1280
+	inet 100.101.102.103 --> 100.101.102.103 netmask 0xffffffff
+"""
+    keep = o.subprocess.run
+    class R: stdout = fake
+    o.subprocess.run = lambda *a, **k: R()
+    try:
+        got = o.remote_addrs()
+    finally:
+        o.subprocess.run = keep
+    check([(a["ip"], a["kind"]) for a in got] == [("192.168.50.246", "lan"), ("100.101.102.103", "tailscale")], f"{got}")
+    real = o.remote_addrs()
+    check(all(not a["ip"].startswith("127.") for a in real), f"実機の一覧にループバック {real}")
+    return f"差し替え: LAN と Tailscale を見分け、127/169.254 を除く / 実機 {len(real)} 件"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

@@ -488,17 +488,43 @@ def remote_set(enabled, token=None):
     return cfg["remote"]
 
 
-def remote_urls(port):
-    """同じ LAN から開く URL(この機械の LAN 側の住所)。合言葉は付けない(画面で別に見せる)。"""
+def remote_addrs():
+    """この機械の、外から届く IPv4 の住所と、その種類。
+    Wi-Fi/LAN(192.168・10・172.16-31)は同じ Wi-Fi から、Tailscale(100.64-127)は外出先から
+    (自分で張った VPN。AIBoard は中継しない)。"""
+    import ipaddress
     out = []
     try:
-        r = subprocess.run(["/usr/sbin/ipconfig", "getifaddr", "en0"], capture_output=True, text=True, timeout=5)
-        ip = r.stdout.strip()
-        if ip:
-            out.append(f"http://{ip}:{port}/m")
+        r = subprocess.run(["/sbin/ifconfig"], capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        pass
+        return out
+    iface = ""
+    for line in r.stdout.splitlines():
+        if line and not line[0].isspace():
+            iface = line.split(":")[0]
+        m = re.search(r"^\s+inet (\d+\.\d+\.\d+\.\d+)", line)
+        if not m:
+            continue
+        ip = m.group(1)
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if a.is_loopback or a.is_link_local:
+            continue
+        if a in ipaddress.ip_network("100.64.0.0/10"):
+            kind = "tailscale"
+        elif a.is_private:
+            kind = "lan"
+        else:
+            kind = iface
+        out.append({"ip": ip, "iface": iface, "kind": kind})
     return out
+
+
+def remote_urls(port):
+    """同じ LAN(や自分の VPN)から開く URL。合言葉は付けない(画面で別に見せる)。"""
+    return [f"http://{a['ip']}:{port}/m" for a in remote_addrs()]
 
 
 def is_loopback(addr):

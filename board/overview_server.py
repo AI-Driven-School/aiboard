@@ -350,7 +350,8 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/remote":
                 c = overview.remote_config()
                 self._json(200, {"ok": True, "enabled": c["enabled"], "token": c["token"] if c["enabled"] else "",
-                                 "urls": overview.remote_urls(PORT) if c["enabled"] else []})
+                                 "urls": overview.remote_urls(PORT) if c["enabled"] else [],
+                                 "addrs": overview.remote_addrs() if c["enabled"] else []})
             elif path == "/api/version":
                 self._json(200, {"ok": True, "stamp": CODE_STAMP, "pid": os.getpid()})
             elif path == "/api/snapshot":
