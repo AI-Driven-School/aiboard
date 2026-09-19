@@ -19,15 +19,26 @@ def data(name):
 
 
 _cfg = None
+_cfg_stamp = None
 
 
 def config():
-    """~/.aiboard/config.json。無ければ空。壊れていれば空(黙って落ちない: 理由は _config_error に残す)。"""
-    global _cfg
-    if _cfg is None:
+    """~/.aiboard/config.json。無ければ空。壊れていれば空(黙って落ちない: 理由は _config_error に残す)。
+
+    **ファイルが変わったら読み直す。** 設定を書くのは盤のページ(別プロセス)なので、
+    一度だけ読んで持ち続けると、盤サーバはいつまでも古い設定で動いていた(2026-09-19 実測)。
+    """
+    global _cfg, _cfg_stamp
+    p = data("config.json")
+    try:
+        st = os.stat(p)
+        stamp = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = None
+    if _cfg is None or stamp != _cfg_stamp:
+        _cfg_stamp = stamp
         _cfg = {}
-        p = data("config.json")
-        if os.path.exists(p):
+        if stamp is not None:
             try:
                 with open(p, encoding="utf-8") as f:
                     _cfg = json.load(f)

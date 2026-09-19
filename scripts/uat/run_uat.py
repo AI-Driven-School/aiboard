@@ -3550,6 +3550,108 @@ def dt01(ctx):
     return f"{len(rows)} 通り＋優先順位 {len(fights)} 組が表どおり / 文書は表から生成 / 実機 {len(snap['sessions'])} 本すべて表に当たる({', '.join(sorted(hit))})"
 
 
+@case("CF-01", "設定は書いた瞬間から効く: 別のプロセスが書き換えたら、盤サーバも次の読み取りで新しい値になる")
+def cf01(ctx):
+    import aiboard_paths as ap
+    import autopilot as A
+    import overview as o
+    keep_auto, keep_sound = A.policy(), o.sound_on()
+    p = ap.data("config.json")
+    backup = open(p, encoding="utf-8").read() if os.path.exists(p) else None
+    try:
+        A.set_policy({"resume_when_reset": False})
+        st, d0, _ = http("/api/actions")
+        check(d0["policy"]["resume_when_reset"] is False, f"はじめの値 {d0['policy']}")
+        # 盤サーバとは別のプロセス(この試験)で書き換える
+        A.set_policy({"resume_when_reset": True})
+        got = None
+        for _ in range(20):
+            st, d1, _ = http("/api/actions")
+            if d1["policy"]["resume_when_reset"] is True:
+                got = True
+                break
+            time.sleep(0.3)
+        check(got, "別プロセスで書いた設定が盤サーバに届かない(古い設定のまま動く)")
+        # 音の設定も同じ道(snapshot 経由)で効く
+        o.sound_set(False)
+        ok = False
+        for _ in range(20):
+            st, snap, _ = http("/api/snapshot")
+            if snap.get("sound") is False:
+                ok = True
+                break
+            time.sleep(0.5)
+        check(ok, "音の設定が届かない")
+    finally:
+        A.set_policy(keep_auto)
+        o.sound_set(keep_sound)
+        if backup is not None:
+            open(p, "w", encoding="utf-8").write(backup)
+        ap._cfg = None
+    return "別プロセスが書いた設定が、盤サーバの次の読み取りで効く(自動処理・音の 2 経路で確認)"
+
+
+@case("AU-01", "システムが自分でやること: 既定はオフ・入れると上限の会話に 1 回だけ予約・二重に入れない・人しかできない一手は触らない")
+def au01(ctx):
+    import autopilot as A
+    import overview as o
+    import decide
+    check(decide.AUTOABLE == {"move_or_wait": "resume_when_reset"}, f"自動でやれる一手が増えている {decide.AUTOABLE}")
+    for act in ("login", "key", "billing", "answer", "trust", "reply", "resume", "look", "none"):
+        check(decide.auto_for(act) == "", f"人しかできない一手を自動にしている: {act}")
+    keep = A.policy()
+    sid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    lim_sess = [{"sid": sid, "ui": decide.decide({"stop": "five_hour"}), "limit": {"resets_at": time.time() + 600},
+                 "cwd": HOME, "ai": "Claude", "project": "uat-au"}]
+    try:
+        A.set_policy({"resume_when_reset": False})
+        check(A.tick(lim_sess) == [], "オフなのに何かした")
+        check(not [j for j in o.read_schedule() if j.get("resume") == sid], "オフなのに予約を作った")
+        A.set_policy({"resume_when_reset": True})
+        did = A.tick(lim_sess)
+        check(len(did) == 1 and did[0]["done"] and did[0]["kind"] == "resume_when_reset", f"1 件だけ作るはず {did}")
+        jobs = [j for j in o.read_schedule() if j.get("resume") == sid]
+        check(len(jobs) == 1 and jobs[0]["once_at"] and not jobs[0]["at"] and not jobs[0]["every"], f"予約の中身 {jobs}")
+        check("上限が解けたので続けて" in jobs[0]["prompt"], f"送る文 {jobs[0]['prompt']!r}")
+        check(A.tick(lim_sess) == [], "二度目も作った(二重予約)")
+        # 人しかできない一手は、方針を入れていても何もしない
+        for stop in ("login", "apikey", "credits"):
+            sess = [{"sid": sid[:-1] + "f", "ui": decide.decide({"stop": stop}), "limit": {"resets_at": time.time() + 600},
+                     "cwd": HOME, "ai": "Claude"}]
+            check(A.tick(sess) == [], f"{stop} で勝手に何かした")
+        # やったことは記録に残り、API から読める
+        st, d, _ = http("/api/actions")
+        check(st == 200 and d["ok"] and any(r.get("sid") == sid for r in d["rows"]), f"記録が読めない {str(d)[:120]}")
+        check(d["policy"]["resume_when_reset"] is True, f"方針が API に出ない {d['policy']}")
+        # 盤の snapshot にも方針が出る
+        st, snap, _ = http("/api/snapshot")
+        check("autopilot" in snap, "snapshot に方針が無い")
+    finally:
+        for j in [x for x in o.read_schedule() if x.get("resume") == sid]:
+            o.delete_job(j["id"])
+        A.set_policy(keep)
+    return "既定オフ / 上限で 1 回だけ予約(once_at＋resume) / 二重に入れない / 認証・鍵・請求では何もしない / 記録と方針が API に出る"
+
+
+@case("AU-02", "自動処理は盤を止めない: 落ちても snapshot は返り、落ちた事実が記録に残る")
+def au02(ctx):
+    import autopilot as A
+    import overview as o
+    keep = A.tick
+    A.tick = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("uat わざと落とす"))
+    try:
+        t0 = time.time()
+        snap = o.snapshot(with_macmini=False)
+        el = time.time() - t0
+        check(snap.get("sessions") is not None, "自動処理が落ちたら snapshot まで落ちた")
+        check(el < 60, f"snapshot が遅すぎる {el:.1f}s")
+        rows = A.recent(5)
+        check(any("自動処理が落ちた" in (r.get("text") or "") for r in rows), f"落ちた事実が記録に残っていない {rows[:2]}")
+    finally:
+        A.tick = keep
+    return "自動処理が落ちても snapshot は返る / 落ちた事実は記録に残る"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

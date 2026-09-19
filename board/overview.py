@@ -1899,6 +1899,10 @@ def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()
     sess = judge_clients(sessions(procs))   # 判定器が規則以外なら、顧客の候補を付ける(規則なら何もしない)
+    try:
+        __import__("autopilot").tick(sess)  # 表の一手のうち、システムがやってよいものだけ実行(既定は何もしない)
+    except Exception as e:                  # 自動処理の失敗で盤を止めない
+        __import__("autopilot").note("tick", "", f"自動処理が落ちた: {e}"[:160], done=False)
     sess = __import__("gitinfo").annotate(sess)   # git のブランチ/PR(入れてある時だけ。既定は切)
     cl, pr = grouped(sess)
     snap = {
@@ -1914,6 +1918,7 @@ def snapshot(with_macmini=True):
         "notify": {"auth": cs.app_notify_auth()},
         "parallel": parallel_groups(sess),
         "truth_table": [r[0] for r in __import__("decide").ROWS],
+        "autopilot": __import__("autopilot").policy(),
         "sound": sound_on(),
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},

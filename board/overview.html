@@ -583,7 +583,15 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '同じ場所で動いているもの': 'Also running in this folder', '同じ場所で動いています': 'Also running in this folder', '同じファイルを触ると衝突します。片方を待つか、持ち場を分けてください。': 'They will collide if they touch the same files. Wait for one, or give them separate folders.', 'ここで会話が圧縮されました（前半は要約に置き換わっています）': 'The conversation was compacted here (the earlier part is now a summary)', 'ここであなたが止めました': 'You interrupted here', '解除時刻に自動で続ける': 'Continue automatically when it resets',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'システムが自分でやること': 'What the system does by itself',
+  '真理値表が決めた「次の一手」のうち、人しかできないもの（ログイン・鍵・請求・判断への返事）はシステムは触りません。':
+    'Of the next steps the truth table decides, the ones only a person can do (signing in, keys, billing, answering a prompt) are never done by the system.',
+  '上限が解けたら自動で続ける': 'Continue automatically when a limit resets',
+  '解除時刻＋60 秒に、同じ会話を --resume で開く予約を 1 つ作ります（アプリが開いている間）':
+    'Creates one schedule that resumes the same conversation 60s after the reset (while the app is open)',
+  'やったこと': 'What it did', 'やった': 'done', 'やらなかった': 'not done', 'まだ何もしていません': 'Nothing yet',
+  '上限で止まった会話に、解除時刻に続きを開く予約を自動で入れます。送る文は「上限が解けたので続けてください」だけです。よろしいですか？':
+    'For conversations stopped by a limit, a schedule will be created automatically to resume them at the reset. The only text sent is "the limit has reset, please continue". Continue?', '同じ場所で動いているもの': 'Also running in this folder', '同じ場所で動いています': 'Also running in this folder', '同じファイルを触ると衝突します。片方を待つか、持ち場を分けてください。': 'They will collide if they touch the same files. Wait for one, or give them separate folders.', 'ここで会話が圧縮されました（前半は要約に置き換わっています）': 'The conversation was compacted here (the earlier part is now a summary)', 'ここであなたが止めました': 'You interrupted here', '解除時刻に自動で続ける': 'Continue automatically when it resets',
   '解除時刻に、この会話の続きを自動で開きます': 'This conversation will be resumed automatically when the limit resets',
   '（その時にアプリが開いている必要があります）': '(AIBoard must be open at that time)',
   '解除時刻が分からないので予約できません': 'The reset time is unknown, so this cannot be scheduled',
@@ -1634,6 +1642,8 @@ async function renderSettings(refresh) {
       <div class="kvrow"><span>${T('判断待ちの音')}</span><span><button id="sndOn" class="${(snap.sound !== false) ? 'primary' : ''}">${T('鳴らす')}</button><button id="sndOff" class="${(snap.sound === false) ? 'primary' : ''}">${T('鳴らさない')}</button> <span class="sub">${T('通知を切っていても鳴ります（8 秒に 1 回まで）')}</span></span></div>
       <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
     </div>
+    <h3>${T('システムが自分でやること')}</h3>
+    <div class="acct" id="autoBox"><div class="sub">${T('読込中…')}</div></div>
     <h3>${T('鍵の棚（値は AIBoard を通りません）')}</h3>
     <div class="acct" id="keyBox"><div class="sub">${T('読込中…')}</div></div>
     <h3>${T('判定器（選ぶだけの判断を誰がするか）')}</h3>
@@ -1641,6 +1651,28 @@ async function renderSettings(refresh) {
     <h3>${T('遠隔（同じ Wi-Fi の中だけ）')}</h3>
     <div class="acct" id="rmBox"><div class="sub">${T('読込中…')}</div></div>`;
   const B = $('#pBody');
+  // システムが自分でやること(既定は全部オフ)＋やったことの記録
+  (async () => {
+    let ad; try { ad = await getJSON('/api/actions'); } catch (e) { ad = {ok: false, reason: String(e)}; }
+    const box = $('#autoBox'); if (!box) return;
+    if (!ad.ok) { box.textContent = String(ad.reason || ''); return; }
+    const on = !!(ad.policy || {}).resume_when_reset;
+    box.innerHTML = `<div class="sub">${T('真理値表が決めた「次の一手」のうち、人しかできないもの（ログイン・鍵・請求・判断への返事）はシステムは触りません。')}</div>
+      <div class="kvrow"><span>${T('上限が解けたら自動で続ける')}</span><span>
+        <label class="chip"><input type="checkbox" id="autoResume" ${on ? 'checked' : ''}> ${T('入れる')}</label>
+        <span class="sub">${T('解除時刻＋60 秒に、同じ会話を --resume で開く予約を 1 つ作ります（アプリが開いている間）')}</span></span></div>
+      <h3 style="margin-top:10px">${T('やったこと')}</h3>
+      ${(ad.rows || []).length ? `<div class="pjlist">${ad.rows.slice(0, 12).map(r => `<div class="pjrow">
+        <div class="pjw">${esc(hhmm(r.t))}</div><div class="pjt">${esc(DEMO ? '—' : r.text)}</div>
+        <div class="pjs">${r.done ? T('やった') : `<span class="warn">${T('やらなかった')}</span>`}</div></div>`).join('')}</div>`
+        : `<div class="sub">${T('まだ何もしていません')}</div>`}`;
+    const c = $('#autoResume');
+    if (c) c.onchange = async () => {
+      if (c.checked && !confirm(T('上限で止まった会話に、解除時刻に続きを開く予約を自動で入れます。送る文は「上限が解けたので続けてください」だけです。よろしいですか？'))) { c.checked = false; return; }
+      try { await getJSON('/api/actions', {method: 'POST', body: JSON.stringify({resume_when_reset: c.checked})}); } catch (e) { say(String(e), true); }
+      renderSettings(true);
+    };
+  })();
   // 鍵の棚: どの鍵がどこにあり、生きているか。入れる/出すは端末で(値はアプリを通らない)
   (async () => {
     let kd; try { kd = await getJSON('/api/keys'); } catch (e) { kd = {ok: false, reason: String(e)}; }

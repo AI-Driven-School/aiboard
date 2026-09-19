@@ -359,6 +359,10 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/actions":
+                import autopilot
+                self._json(200, {"ok": True, "policy": autopilot.policy(), "rows": autopilot.recent(60),
+                                 "autoable": __import__("decide").AUTOABLE})
             elif path == "/api/keys":
                 import keys as keysmod
                 if not _login.get("data"):
@@ -539,6 +543,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/actions":
+            import autopilot
+            return self._json(200, {"ok": True, "policy": autopilot.set_policy(body)})
         if path == "/api/keys":
             import keys as keysmod
             try:

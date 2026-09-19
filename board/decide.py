@@ -31,6 +31,10 @@ ACTIONS = {
     "none": "",
 }
 
+# システムが自分でやってよい一手(それ以外は人が押す)。
+#   auto="resume_when_reset" だけが自動化できる。ログイン・請求・返事・信頼の確認は**人しかできない**
+AUTOABLE = {"move_or_wait": "resume_when_reset"}
+
 # 上から順に、最初に当たった行が答え
 ROWS = [
     # (名前, 条件, state, badge, sound, popup, action, why)
@@ -68,6 +72,11 @@ FIELDS = ("proc", "stop", "hook", "loop", "trusted", "idle", "others")
 DEFAULTS = {"proc": True, "stop": "", "hook": "", "loop": False, "trusted": None, "idle": None, "others": 0}
 
 
+def auto_for(action):
+    """その一手をシステムが代わりにやれるか。やれるなら自動処理の名前、やれないなら ""。"""
+    return AUTOABLE.get(action, "")
+
+
 def decide(sess):
     """セッション 1 本について、表を上から見て最初に当たった行を返す。"""
     s = {k: sess.get(k, DEFAULTS[k]) for k in FIELDS}
@@ -78,11 +87,11 @@ def decide(sess):
             hit = False
         if hit:
             out = {"row": name, "state": state, "badge": badge, "sound": sound, "popup": popup,
-                   "action": action, "action_label": ACTIONS[action], "why": why}
+                   "action": action, "action_label": ACTIONS[action], "why": why, "auto": auto_for(action)}
             break
     else:
         out = {"row": "(該当なし)", "state": "終了", "badge": "", "sound": False, "popup": False,
-               "action": "none", "action_label": "", "why": ""}
+               "action": "none", "action_label": "", "why": "", "auto": ""}
     # 並行は状態でなく見せ方: どの行でも、同じ場所に他が居れば印を足す
     out["parallel"] = int(s["others"] or 0)
     return out
@@ -105,6 +114,13 @@ def table_markdown():
     for i, ((name, _, state, badge, sound, popup, action, why), c) in enumerate(zip(ROWS, conds), 1):
         L.append(f"| {i} | {c} | {state} | {mark.get(badge, badge)} | {'鳴らす' if sound else '—'} | "
                  f"{'出す' if popup else '—'} | {ACTIONS[action] or '—'} | {why} |")
+    L += ["", "## システムが自分でやること（既定は全部オフ）", "",
+          "| 一手 | 自動でやれるか | 中身 |", "|---|---|---|",
+          "| 別アカウントに移す / 解除時刻に自動で続ける | **やれる**（設定でオン） | 解除時刻＋60 秒に同じ会話を `--resume` で開く予約を 1 つ作る |",
+          "| ログインし直す / 鍵の棚 / 請求 | やれない | 人しかできない（鍵も課金も AIBoard は触らない） |",
+          "| 1 / 2 / Esc・信頼の確認・返事 | やれない | 判断そのものなので、勝手に答えない |",
+          "| 同じ会話を再開・端末を見る | やれない | 人が見たい時に見る |",
+          "", "やったことは `~/.aiboard/actions.jsonl` に全部残り、盤の「やったこと」で読める。", ""]
     L += ["", "## 重なった時（この順で勝つ）", "",
           "認証 → クレジット → 上限 → 判断待ち → 信頼 → 一時的な失敗 → 作業中 → ループ → あなたの番 → 出力の有無 → 起動中 → 終了", "",
           "理由: **人が直さないと永久に進まないもの**を上に置く。時間や AI 自身が解くものほど下。", "",
