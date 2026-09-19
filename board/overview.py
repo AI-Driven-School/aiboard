@@ -1691,12 +1691,14 @@ def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()
     sess = judge_clients(sessions(procs))   # 判定器が規則以外なら、顧客の候補を付ける(規則なら何もしない)
+    sess = __import__("gitinfo").annotate(sess)   # git のブランチ/PR(入れてある時だけ。既定は切)
     cl, pr = grouped(sess)
     snap = {
         "time": time.time(),
         "sessions": sess,
         "attention": attention(sess),
         "judge": __import__("judge").status(),
+        "git": {**__import__("gitinfo").config(), "last_error": __import__("gitinfo").LAST["error"]},
         "clients": cl,
         "projects": pr,
         "machine": machine(procs),

@@ -479,6 +479,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/git":
+            import gitinfo
+            return self._json(200, {"ok": True, **gitinfo.set_config(body)})
         if path == "/api/judge":
             import judge
             try:

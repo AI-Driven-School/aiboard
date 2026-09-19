@@ -30,6 +30,18 @@ case "$JUDGE" in
   local*)    echo "判定器: 手元のモデル(127.0.0.1 のみ)" | tee -a "$OUT" ;;
   *)         echo "判定器: 規則(外へ出さない)" | tee -a "$OUT" ;;
 esac
+GITPR=$(python3 -c "
+import json
+try:
+    print('on' if (json.load(open('$CFG')).get('git') or {}).get('pr') else 'off')
+except Exception:
+    print('off')
+")
+if [ "$GITPR" = "on" ]; then
+  echo "PR バッジ: 入(gh が GitHub にブランチ名で問い合わせる。認証は gh のもの)" | tee -a "$OUT"
+else
+  echo "PR バッジ: 切" | tee -a "$OUT"
+fi
 if [ "$REMOTE" = "on" ]; then
   echo "遠隔: 入(同じ LAN から /m と一覧・返事のみ・合言葉つき。待ち受けは 0.0.0.0)" | tee -a "$OUT"
 else

@@ -2886,6 +2886,104 @@ def jd04(ctx):
     return f"既定=規則 / 手元→試す「{v['try'][:40]}」/ 外部は確認つき・鍵は環境変数と案内 / 規則へ戻る"
 
 
+@case("GB-01", "git のバッジ: 既定は切で snapshot に出ない・入れるとブランチが付く・作業ツリーでない所には付かない・30 秒は git を呼び直さない")
+def gb01(ctx):
+    import gitinfo
+    keep = gitinfo.config()
+    st, d, _ = http("/api/snapshot")
+    check((d.get("git") or {}).get("branch") is False and not any("git" in s for s in d["sessions"]), "既定で git が付いている")
+    repo = tempfile.mkdtemp(dir=ctx["data"])
+    subprocess.run(["git", "init", "-q", "-b", "uat-branch", repo], check=True, capture_output=True)
+    plain = tempfile.mkdtemp(dir=ctx["data"])
+    try:
+        gitinfo.set_config({"branch": True})
+        gitinfo._BRANCH.clear()
+        sess = [{"sid": "g1", "cwd": repo, "ai": "Claude"}, {"sid": "g2", "cwd": plain, "ai": "Claude"}, {"sid": "g3", "cwd": HOME, "ai": "Claude"}]
+        out = gitinfo.annotate([dict(x) for x in sess])
+        check(out[0].get("git", {}).get("branch") == "uat-branch" and out[0]["git"]["pr"] is None, f"ブランチ {out[0].get('git')}")
+        check("git" not in out[1] and "git" not in out[2], f"作業ツリーでない所やホームに付いた {out[1].get('git')} {out[2].get('git')}")
+        keep_run = gitinfo._run
+        calls = []
+        gitinfo._run = lambda *a, **k: (calls.append(a[0][0]), keep_run(*a, **k))[1]
+        try:
+            gitinfo.annotate([dict(x) for x in sess])
+            check(not calls, f"30 秒以内なのに git を呼び直した {calls}")
+        finally:
+            gitinfo._run = keep_run
+    finally:
+        gitinfo.set_config({"branch": keep["branch"], "pr": keep["pr"]})
+        gitinfo._BRANCH.clear()
+    return "既定は切 / 入れると uat-branch が付く / 非 git とホームには付かない / 30 秒は呼び直さない"
+
+
+@case("GB-02", "PR のバッジ: 別スイッチで既定は切・gh を呼んで番号と状態を読む・gh が失敗しても盤は止まらず理由を残す(gh は差し替え)")
+def gb02(ctx):
+    import gitinfo
+    keep = gitinfo.config()
+    repo = tempfile.mkdtemp(dir=ctx["data"])
+    subprocess.run(["git", "init", "-q", "-b", "feat-x", repo], check=True, capture_output=True)
+    bindir = tempfile.mkdtemp(dir=ctx["data"])
+    fake = os.path.join(bindir, "gh")
+    open(fake, "w").write('#!/bin/sh\necho "$@" >> "$0.log"\necho \'{"number": 42, "state": "OPEN", "url": "https://github.com/x/y/pull/42", "title": "Add thing", "isDraft": false, "reviewDecision": "APPROVED"}\'\n')
+    os.chmod(fake, 0o755)
+    keep_path = os.environ["PATH"]
+    try:
+        gitinfo.set_config({"branch": True, "pr": False}); gitinfo._BRANCH.clear(); gitinfo._PR.clear()
+        os.environ["PATH"] = bindir + ":" + keep_path
+        out = gitinfo.annotate([{"sid": "p1", "cwd": repo, "ai": "Claude"}])
+        check(out[0]["git"]["pr"] is None and not os.path.exists(fake + ".log"), "PR が切なのに gh を呼んだ")
+        gitinfo.set_config({"pr": True}); gitinfo._PR.clear()
+        out = gitinfo.annotate([{"sid": "p1", "cwd": repo, "ai": "Claude"}])
+        pr = out[0]["git"]["pr"]
+        check(pr and pr["number"] == 42 and pr["state"] == "open" and pr["review"] == "approved", f"PR の読み取り {pr}")
+        check("pr view feat-x" in open(fake + ".log").read(), f"gh の呼び方 {open(fake + '.log').read()!r}")
+        # gh が失敗 → None・理由
+        open(fake, "w").write('#!/bin/sh\necho "gh: not logged in" >&2; exit 4\n'); gitinfo._PR.clear()
+        out = gitinfo.annotate([{"sid": "p1", "cwd": repo, "ai": "Claude"}])
+        check(out[0]["git"]["pr"] is None and "not logged in" in gitinfo.LAST["error"], f"gh 失敗の扱い {out[0]['git']} {gitinfo.LAST}")
+    finally:
+        os.environ["PATH"] = keep_path
+        gitinfo.set_config({"branch": keep["branch"], "pr": keep["pr"]})
+        gitinfo._BRANCH.clear(); gitinfo._PR.clear(); gitinfo.LAST["error"] = ""
+    return "PR 切=gh を呼ばない / 入=#42 open approved を読む(gh pr view feat-x) / gh 失敗=None と理由"
+
+
+@case("GB-03", "カードと会話の見出しに ⎇ ブランチと PR のバッジが出る(色は open/merged/closed)・設定に 2 つのスイッチ")
+def gb03(ctx):
+    def route(pg):
+        def handler(route_, req):
+            import urllib.request
+            r = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            d = json.loads(r.read())
+            base = (d.get("sessions") or [{}])[0]
+            mk = lambda sid, pr: dict(base, sid=sid, tab="9-" + sid[-1], ai="Claude", state="作業中", mark="🟢", cwd="/tmp/uat", project="uat",
+                                      model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"},
+                                      doing="", task="uat", mem_mb=1, subagents={}, tools=None, loop=None, limit=None, client=None, state_for=1, ago=1,
+                                      group_label="", group_rgb=None, git={"branch": "feat/long-branch-name", "root": "/tmp/uat", "pr": pr})
+            d["sessions"] = [mk("gb1", {"number": 7, "state": "open", "url": "https://github.com/x/y/pull/7", "title": "t", "draft": False, "review": "approved"}),
+                             mk("gb2", {"number": 8, "state": "merged", "url": "https://github.com/x/y/pull/8", "title": "t", "draft": True, "review": ""}),
+                             mk("gb3", None)]
+            d["git"] = {"branch": True, "pr": True, "last_error": ""}
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
+        pg.route("**/api/snapshot", handler)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card.live .c-git').length >= 3", 40)
+        cards = pg.evaluate("""() => { const o = {}; document.querySelectorAll('.card.live').forEach(c => {
+            o[c.dataset.id] = {br: (c.querySelector('.c-git') || {}).textContent, pr: (c.querySelector('.c-pr') || {}).textContent, cls: (c.querySelector('.c-pr') || {}).className}; }); return o; }""")
+        pg.click("#btnSettings")
+        wait_js(pg, "!!document.querySelector('#gitBranch')", 30)
+        sw = pg.evaluate("[document.querySelector('#gitBranch').checked, document.querySelector('#gitPr').checked]")
+        return cards, sw, errs
+    cards, sw, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check(cards["gb1"]["br"] == "⎇ feat/long-branch-name" and "PR #7" in cards["gb1"]["pr"] and "✓" in cards["gb1"]["pr"] and "open" in cards["gb1"]["cls"], f"gb1 {cards['gb1']}")
+    check("PR #8" in cards["gb2"]["pr"] and "draft" in cards["gb2"]["pr"] and "merged" in cards["gb2"]["cls"], f"gb2 {cards['gb2']}")
+    check(cards["gb3"]["br"] and not cards["gb3"]["pr"], f"gb3 {cards['gb3']}")
+    check(sw == [True, True], f"設定のスイッチ {sw}")
+    return "⎇ ブランチ 3 枚 / PR #7 open ✓・#8 merged draft・無しは出さない / 設定のスイッチが状態を映す"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

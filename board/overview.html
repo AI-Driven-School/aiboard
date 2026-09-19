@@ -110,6 +110,9 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .c-badge.lim{background:#9747FF;color:#fff}
 @keyframes badgepulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 @media (prefers-reduced-motion:reduce){.c-badge.need{animation:none}}
+.c-git{font:11px var(--mono);color:#9AA4B5;border:1px solid var(--line2);border-radius:8px;padding:0 5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.c-pr{font:600 11px var(--mono);border-radius:8px;padding:0 6px;color:#0B0B0B;background:#8B94A7}
+.c-pr.open{background:#3FB950}.c-pr.merged{background:#A371F7;color:#fff}.c-pr.closed{background:#F85149;color:#fff}.c-pr.draft{opacity:.7}
 .c-client.sug{opacity:.75;border:1px dashed var(--line2);border-radius:8px;padding:0 5px}
 .f-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;margin-left:6px;
   padding:0 5px;border-radius:9px;font:700 11px/1 -apple-system,sans-serif;color:#0B0B0B;background:var(--yellow)}
@@ -573,7 +576,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
   '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
@@ -1036,7 +1039,7 @@ function render() {
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
       ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
-      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
+      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${n.live && n.s.git ? `<span class="c-git" title="${esc(DEMO ? '' : (n.s.git.root || ''))}">⎇ ${esc(DEMO ? 'main' : n.s.git.branch)}</span>${n.s.git.pr ? `<span class="c-pr ${esc(n.s.git.pr.state)}${n.s.git.pr.draft ? ' draft' : ''}" title="${esc(DEMO ? '' : n.s.git.pr.title)}">PR #${n.s.git.pr.number}${n.s.git.pr.draft ? ' draft' : ''}${n.s.git.pr.review === 'approved' ? ' ✓' : n.s.git.pr.review === 'changes_requested' ? ' ✗' : ''}</span>` : ''}` : ''}${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
   });
   patchNodes(nodesEl, items);
   // エッジ描画
@@ -1541,6 +1544,10 @@ async function renderSettings(refresh) {
       <div class="kvrow"><span>${T('顧客の色分け')}</span><span>${DEMO ? 4 : st.clients} ${T('社')} <button data-open="${esc(st.clients_file)}">clients.json</button></span></div>
       <div class="kvrow"><span>${T('遠隔の無人ジョブ')}</span><span>${DEMO ? '—' : (st.remote_hosts.length ? esc(st.remote_hosts.join(', ')) : T('なし'))} <button data-open="${esc(st.config_file)}">config.json</button></span></div>
       <div class="kvrow"><span>${T('データの置き場')}</span><span><code>${esc(DEMO ? '~/.aiboard' : st.data_dir.replace(/^\/Users\/[^/]+/, '~'))}</code></span></div>
+      <div class="kvrow"><span>${T('git のバッジ')}</span><span>
+        <label class="chip"><input type="checkbox" id="gitBranch" ${(snap.git || {}).branch ? 'checked' : ''}> ⎇ ${T('ブランチ（手元の git だけ）')}</label>
+        <label class="chip"><input type="checkbox" id="gitPr" ${(snap.git || {}).pr ? 'checked' : ''}> PR（gh · GitHub ${T('に問い合わせる')}）</label>
+        ${(snap.git || {}).last_error ? `<span class="warn">${esc(snap.git.last_error)}</span>` : ''}</span></div>
       <div class="kvrow"><span>${T('判断待ちの音')}</span><span><button id="sndOn" class="${(snap.sound !== false) ? 'primary' : ''}">${T('鳴らす')}</button><button id="sndOff" class="${(snap.sound === false) ? 'primary' : ''}">${T('鳴らさない')}</button> <span class="sub">${T('通知を切っていても鳴ります（8 秒に 1 回まで）')}</span></span></div>
       <div class="kvrow"><span>${T('使い方の案内')}</span><span><button id="tourAgain">${T('もう一度見る')}</button></span></div>
     </div>
@@ -1590,7 +1597,12 @@ async function renderSettings(refresh) {
       say(r.ok ? (enabled ? T('入れました（盤サーバを開き直すと有効になります）') : T('切りました')) : String(r.reason), !r.ok);
       renderSettings(true);
     };
-    ['sndOn', 'sndOff'].forEach(id => { const b = $('#' + id); if (!b) return;
+    ['gitBranch', 'gitPr'].forEach(id => { const c = $('#' + id); if (!c) return;
+    c.onchange = async () => {
+      if (id === 'gitPr' && c.checked && !confirm(T('PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？'))) { c.checked = false; return; }
+      try { const r = await getJSON('/api/git', {method: 'POST', body: JSON.stringify({[id === 'gitPr' ? 'pr' : 'branch']: c.checked})}); snap.git = Object.assign(snap.git || {}, r); } catch (e) { say(String(e), true); }
+      renderSettings(true); }; });
+  ['sndOn', 'sndOff'].forEach(id => { const b = $('#' + id); if (!b) return;
     b.onclick = async () => { const on = id === 'sndOn';
       try { await getJSON('/api/sound', {method: 'POST', body: JSON.stringify({on})}); snap.sound = on; } catch (e) { say(String(e), true); }
       renderSettings(true); }; });
@@ -1778,7 +1790,7 @@ async function renderLive(n) {
     : `<span class="cvlink off" title="${esc(T('この会話は右の端末には出ていません'))}">⇄ ${T('右の端末には無い')}（${esc(s0.tab.startsWith('a-') ? T('背景') : T('別の端末') + ' ' + s0.tab)}）</span>`;
   $('#pBody').innerHTML = `
     <div class="convwrap">
-      <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
+      <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${s0.git ? `<span class="c-git">⎇ ${esc(DEMO ? 'main' : s0.git.branch)}</span>${s0.git.pr ? `<a class="c-pr ${esc(s0.git.pr.state)}" href="${esc(DEMO ? '#' : s0.git.pr.url)}" target="_blank" rel="noopener">PR #${s0.git.pr.number}</a>` : ''}` : ''}${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
       ${loopLine(s0)}
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
       <div class="convlimit" id="cvLimit" hidden></div>
