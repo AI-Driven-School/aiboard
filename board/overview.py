@@ -465,7 +465,7 @@ def remote_config():
     return {"enabled": bool(c.get("enabled")), "token": str(c.get("token") or "")}
 
 
-def remote_set(enabled, token=None):
+def remote_set(enabled):
     """遠隔の入切。入れる時に合言葉を作る(呼ぶ側が持っていなければ)。設定ファイルは本人だけが読める形にする。"""
     import aiboard_paths as ap
     import secrets
@@ -477,7 +477,7 @@ def remote_set(enabled, token=None):
         cfg = {}
     if enabled:
         # 入れるたびに合言葉を作り直す(切って入れ直せば、前の合言葉を知る端末は締め出される)
-        cfg["remote"] = {"enabled": True, "token": token or secrets.token_urlsafe(24)}
+        cfg["remote"] = {"enabled": True, "token": secrets.token_urlsafe(24)}   # 外から渡せない(古い合言葉を戻せない)
     else:
         cfg["remote"] = {"enabled": False, "token": ""}
     tmp = f"{p}.{os.getpid()}.tmp"
@@ -727,8 +727,8 @@ def job_due(job, now=None, grace=3600):
 
 
 def job_missed(job, now=None, grace=3600):
-    """時刻の予約が、アプリが閉じていた等で走らなかった日の時刻(走らせずに見送った分)。無ければ None。
-    「1 時間より古い分は走らせない」を黙ってやると、利用者は走らなかったことに気づけない(codex の反証 2026-09-19)。"""
+    """時刻の予約の「直近の予定時刻」(今日の分が未来なら昨日の分)を見送ったなら、その時刻。無ければ None。
+    日付をまたいだ見送り(23:00 の予約を翌 0:30 に開いた)も拾う(codex 再反証 2026-09-19)。"""
     if not job.get("enabled", True) or job.get("every"):
         return None
     now = now if now is not None else time.time()
@@ -737,9 +737,12 @@ def job_missed(job, now=None, grace=3600):
         return None
     lt = time.localtime(now)
     h, m = (int(x) for x in at.split(":"))
-    today = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
-    if now - today > grace and float(job.get("last_run") or 0) < today and float(job.get("created") or 0) < today:
-        return today
+    occ = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+    if occ > now:
+        yl = time.localtime(now - 86400)
+        occ = time.mktime((yl.tm_year, yl.tm_mon, yl.tm_mday, h, m, 0, 0, 0, -1))
+    if now - occ > grace and float(job.get("last_run") or 0) < occ and float(job.get("created") or 0) < occ:
+        return occ
     return None
 
 
@@ -805,6 +808,25 @@ def add_delegation(key, row, keep=100):
         json.dump(rows, f, ensure_ascii=False)
     os.replace(tmp, p)
     return rec
+
+
+def link_delegation(key, did, sid):
+    """控え(did)に、一致で結び付いたセッション(sid)を書き込む。終わった後も同じ会話を指せるように。"""
+    if not (isinstance(sid, str) and 8 <= len(sid) <= 80):
+        raise ValueError("sid の形が不正")
+    rows = read_delegations(key, limit=100)
+    hit = 0
+    for r in rows:
+        if r.get("id") == did and r.get("sid") != sid:
+            r["sid"] = sid
+            hit += 1
+    if hit:
+        p = deleg_path(key)
+        tmp = f"{p}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(sorted(rows, key=lambda r: r.get("at") or 0), f, ensure_ascii=False)
+        os.replace(tmp, p)
+    return hit
 
 
 def read_notes(key):
@@ -1186,6 +1208,7 @@ def _judge_async(key, kind, options, context, ttl):
     hit = _JUDGE_CACHE.get(key)
     if hit and time.time() - hit[0] < ttl:
         return hit[1]
+    # 期限切れの答えは使わない(問い直している間は規則。codex 再反証: 古い判断を返していた)
     if key not in _JUDGE_BUSY:
         _JUDGE_BUSY.add(key)
 
@@ -1195,7 +1218,7 @@ def _judge_async(key, kind, options, context, ttl):
             finally:
                 _JUDGE_BUSY.discard(key)
         threading.Thread(target=run, daemon=True).start()
-    return hit[1] if hit else None     # 古い答えがあればそれを、無ければ規則のまま
+    return None
 
 
 def _judge_priority(items):
@@ -1204,7 +1227,8 @@ def _judge_priority(items):
     if len(items) < 2 or judge.config()["backend"] == "rules":
         return items
     top = items[:5]
-    key = ("priority", tuple(x.get("sid") for x in top))
+    # 顔ぶれだけでなく状態も鍵に入れる(同じ sid でも「確認待ち→返答待ち」になれば問い直す)。経過時間は 5 分刻み
+    key = ("priority", tuple((x.get("sid"), x.get("state"), int((x.get("state_for") or 0) // 300)) for x in top))
     res = _judge_async(key, "priority",
                        [{"id": x.get("sid"), "text": f'{x.get("state")} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
                        {"count": len(items)}, 20)

@@ -576,7 +576,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '起動の途中か、初回の確認画面で止まっているかもしれません': 'Still starting, or stopped at a first-run prompt', '（いいえ・閉じる）': '(no / dismiss)', '（既定を選ぶ）': '(accept default)', '端末を見る': 'Look at the terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'さらに': 'more:', '押すと次の分を出します': 'Click to show the next batch', 'このフォルダはまだ信頼の答えが記録されていません。「このフォルダを信頼しますか」で止まっているかもしれません': 'No trust answer is recorded for this folder yet. It may be waiting at \u201cDo you trust this folder?\u201d', '起動の途中か、初回の確認画面で止まっているかもしれません': 'Still starting, or stopped at a first-run prompt', '（いいえ・閉じる）': '(no / dismiss)', '（既定を選ぶ）': '(accept default)', '端末を見る': 'Look at the terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
   '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
@@ -707,6 +707,7 @@ async function renderProject(frameKey) {
         return Object.entries(gs).map(([gid, rows]) => { const done = rows.filter(g => { const m = delegResult(g, live, past); return m.node && !m.node.live; }).length;
           return `<div class="sub">${T('分けて同時に')} ${rows.length}${T('件')} — ${T('終わり')} ${done}/${rows.length}</div>`; }).join(''); })()}
       <div class="pjlist">${dg.rows.map(g => { const m = delegResult(g, live, past);
+        if (m.exact && m.node && !g.sid) getJSON('/api/delegations', {method: 'POST', body: JSON.stringify({op: 'link', key, id: g.id, sid: m.node.id})}).catch(() => {});
         return `<div class="pjrow ${m.node && m.node.live ? 'live' : ''}"${m.node ? ` data-open="${esc(m.node.id)}"` : ''}>
           <div class="pjw">${esc(fmtT(g.at))}</div>
           <div class="pjt">${g.group ? '<span class="tchip">' + T('束') + '</span> ' : ''}${esc(String(DEMO ? pick(DEMO_TASKS, 'dg' + g.at) : (g.title || g.text)).slice(0, 90))}</div>
@@ -763,16 +764,19 @@ async function renderProject(frameKey) {
   if ($('#pjAsk')) $('#pjAsk').onclick = () => openDelegate(frameKey);
   $('#pBody').querySelectorAll('.pjrow[data-open]').forEach(el => el.onclick = () => select(el.dataset.open));
 }
+function startOf(n) {   // 会話の始まった時刻(生きているものは snapshot の started、過去は索引の start)
+  if (n.live) { const s0 = n.s || {}; return s0.started != null ? s0.started : n.t; }
+  const r0 = n.r || {}; return r0.start != null ? r0.start : n.t;
+}
 function delegResult(g, live, past) {
-  // 一致: 「任せる」で起こした端末は控えの id を持つ(アプリの端末台帳 → セッション)。これが本命
-  // 推定: id で引けない時(iTerm で動かした・アプリを閉じた後)は、任せた"後"に同じ場所で始まった会話を近い順に(10 分以内)。
-  //       推定は「推定」と出す(codex の反証 2026-09-19: 同じフォルダで手で開いた別の会話を結果と誤認し得る)
-  const exact = g.id ? live.find(n => (n.s || {}).deleg === g.id) : null;
-  const pick = exact || [...live, ...past].filter(n => {
-    const s0 = n.s || n.r || {};
-    const started = n.live ? (s0.started || n.t) : ((s0.start != null) ? s0.start : n.t);
-    return g.cwd && s0.cwd === g.cwd && started != null && started >= g.at && started <= g.at + 600;
-  }).sort((a, b) => Math.abs(((a.s || a.r || {}).started || a.t) - g.at) - Math.abs(((b.s || b.r || {}).started || b.t) - g.at))[0];
+  // 一致: 「任せる」で起こした端末は控えの id を持つ。一度一致したら控えに sid を残し、終わった後もそれで引く
+  // 推定: id でも sid でも引けない時だけ、任せた"後"に同じ場所で始まった会話を近い順に(10 分以内)。画面に「推定」
+  const all = [...live, ...past];
+  const exact = (g.sid ? all.find(n => n.id === g.sid) : null) || (g.id ? live.find(n => (n.s || {}).deleg === g.id) : null);
+  const pick = exact || all.filter(n => {
+    const s0 = n.s || n.r || {}, st = startOf(n);
+    return g.cwd && s0.cwd === g.cwd && st != null && st >= g.at && st <= g.at + 600;
+  }).sort((a, b) => Math.abs(startOf(a) - g.at) - Math.abs(startOf(b) - g.at))[0];
   const n = pick;
   if (!n) return {node: null, label: T('結果待ち'), exact: false};
   const s0 = n.s || n.r || {};
@@ -874,6 +878,13 @@ function nodeList() {
       const g = groups[key] = groups[key] || {n: 0, t: 0, frameKey: n.frameKey, day: day, ai: n.ai};
       g.n++; g.t = Math.max(g.t, n.t || 0);
     });
+    // 開いた束から一度に出すのは新しい順に BUNDLE_PAGE 件まで(1,300 件を一度に出すとスクロール中の p90 が 17〜24ms に戻った。実測)
+    const byB = {};
+    nodes.forEach(n => { if (n.bundleId) (byB[n.bundleId] = byB[n.bundleId] || []).push(n); });
+    Object.values(byB).forEach(arr => arr.sort((a, b) => (b.t || 0) - (a.t || 0)).forEach((n, i) => { n.bundleIdx = i; }));
+    Object.entries(groups).forEach(([key, g]) => { if (sel === key && g.n > (bundleShow[key] || BUNDLE_PAGE)) nodes.push({id: 'more:' + key, live: false, bundle: true, more: key,
+      n: g.n - (bundleShow[key] || BUNDLE_PAGE), ai: g.ai, model: null, client: null, cwd: '', project: '', frameKey: g.frameKey, state: '束', mark: '⚪',
+      doing: `${T('さらに')} ${g.n - (bundleShow[key] || BUNDLE_PAGE)} ${T('件')}`, task: T('押すと次の分を出します'), t: 0, text: '', tab: null, role: 'bundle', kind: 'bundle', unattended: true}); });
     Object.entries(groups).forEach(([key, g]) => nodes.push({id: key, live: false, bundle: true, n: g.n, ai: g.ai,
       model: null, client: null, cwd: '', project: '', frameKey: g.frameKey, state: '束', mark: '⚪',
       doing: `${T('無人実行')} ×${g.n}`, task: `${g.day} ${T('の無人実行。クリックで展開')}`, t: g.t,
@@ -905,6 +916,7 @@ function passes(n) {
   if ((n.role === 'review' || n.role === 'helper') && !filters.help && !(sel && (n.parentId === sel || n.id === sel))) return false;
   if (n.bundle) return n.unattended ? !filters.q : !filters.help;   // 無人の束は、検索中は畳まず中身を見せる
   if (n.bundleId && sel !== n.bundleId && !filters.q) return false;  // 畳んだ無人実行(束を選ぶか、検索すれば出る)
+  if (n.bundleId && !filters.q && (n.bundleIdx || 0) >= (bundleShow[n.bundleId] || BUNDLE_PAGE)) return false;   // 開いても一度に出すのは一定数まで
   if (filters.q && !n.text.toLowerCase().includes(filters.q.toLowerCase())) return false;
   if (filters.client && (!n.client || n.client.id !== filters.client)) return false;
   if (filters.ai && n.ai !== filters.ai) return false;
@@ -1691,7 +1703,8 @@ $('#fHelp').onchange = ev => { filters.help = ev.target.checked; loadIndex(); };
 $('#nodes').addEventListener('click', ev => { const m = ev.target.closest('.fmore'); if (m) { homeExpanded = m.dataset.more === '1'; render(); } });
 
 // ---------------- 詳細パネル ----------------
-$('#nodes').addEventListener('click', ev => { const c = ev.target.closest('.card[data-id]'); if (!c) return; if (c.dataset.id.startsWith('bundle:')) { sel = sel === c.dataset.id ? null : c.dataset.id; render(); return; } select(c.dataset.id); });
+$('#nodes').addEventListener('click', ev => { const c = ev.target.closest('.card[data-id]'); if (!c) return; if (c.dataset.id.startsWith('more:')) { const k = c.dataset.id.slice(5); bundleShow[k] = (bundleShow[k] || BUNDLE_PAGE) + BUNDLE_PAGE; render(); return; }
+  if (c.dataset.id.startsWith('bundle:')) { sel = sel === c.dataset.id ? null : c.dataset.id; render(); return; } select(c.dataset.id); });
 function select(id) { sel = id; render(); openPanel(id); }
 $('#nodes').addEventListener('click', ev => {
   const fold = ev.target.closest('[data-fold]'); const shut = ev.target.closest('[data-shut]');
@@ -1738,6 +1751,8 @@ function tlHtml(tl) {
 // 端末の生の画面ではなく、記録から「依頼 / 返答 / 操作」を時系列で並べ、下に 1 行の入力欄。
 // 判断待ちの時だけ選択肢のボタンを出す(Claude Code の許可確認は数字キーで選ぶ)。本物の端末は「端末」ボタンかダブルクリック。
 const NOFOLD = new URLSearchParams(location.search).get('nofold') === '1';
+const BUNDLE_PAGE = 200;
+const bundleShow = {};   // 束ごとに、いま何件まで出しているか
 let convWho = '';   // 吹き出しの名前に使う「いま見ている AI」
 let rightTab = '';  // 右の端末でいま見えている端末(アプリが知らせる)。そのカードに ⇄ を出す
 function setRightTab(tab) { if (rightTab === tab) return; rightTab = tab || ''; render(); }
@@ -1834,6 +1849,14 @@ async function renderLive(n) {
       ask.innerHTML = `<div class="q">${esc(DEMO ? 'Allow Bash: npm test?' : (d.doing || T('判断を待っています')))}</div><div class="opts">
         <button data-k="1" class="primary">1 ${T('はい')}</button><button data-k="2">2 ${T('はい、今後も')}</button><button data-k="esc">Esc ${T('いいえ')}</button></div>`;
       ask.querySelectorAll('button').forEach(b => b.onclick = async () => { const r = await sendTo(d, b.dataset.k === 'esc' ? {key: 'esc'} : {text: b.dataset.k, enter: false}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 400); });
+    } else if (d.state === '起動中?' && isAppTab(d.tab) && d.trust_ask) {
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">${T('このフォルダはまだ信頼の答えが記録されていません。「このフォルダを信頼しますか」で止まっているかもしれません')}</div><div class="opts">
+        <button data-t="yes" class="primary">${T('はい、信頼する')}</button><button data-t="no">${T('いいえ（終了）')}</button><button data-t="look">${T('端末を見る')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = async () => {
+        if (b.dataset.t === 'look') { toApp({type: 'focus', tab: d.tab}); return; }
+        if (b.dataset.t === 'yes') { await sendTo(d, {key: 'down'}); await new Promise(r => setTimeout(r, 120)); }
+        const r = await sendTo(d, {key: 'enter'}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 800); });
     } else if (d.state === '起動中?' && isAppTab(d.tab)) {
       // 記録がまだ無い = 起動途中か、初回の確認画面(Chrome 連携・テーマ・ログインなど)で止まっている。
       // 画面はアプリの端末なので盤からは読めない。先に進めるキーだけ出し、中身は端末で見てもらう

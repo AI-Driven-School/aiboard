@@ -1847,7 +1847,7 @@ def cs05(ctx):
     return " / ".join(notes) + "(入れ子 pid 300 を選ばない)"
 
 
-@case("CS-06", "状態の真理値表: 作業中・返答待ち・確認待ち・起動中?・確認画面で停止(画面/設定の両方)・codex 4 種・他のジョブ・終了")
+@case("CS-06", "状態の真理値表: 作業中・返答待ち・確認待ち・起動中?・確認画面で停止(画面で確かめた時だけ)・信頼の答え無しの印・codex 4 種・他のジョブ・終了")
 def cs06(ctx):
     import cs
     def stub(**kw):   # classify が外へ出る関数を全部差し替える(実プロセス・実ログを見に行かせない)
@@ -1903,7 +1903,7 @@ def cs06(ctx):
     tab(13, ["npm run dev"], "他のジョブ", "🔵")
     tab(14, [], "終了(古い題名)", "⚪")
     # アプリ自身の端末(win=0)は画面を読めない。設定に「信頼する」の答えが無ければ、確認で止まっていると見なす
-    tab(15, [CL], "確認画面で停止", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")
+    tab(15, [CL], "起動中?", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")   # 画面を読めない端末では断定しない(印だけ付ける)
     tab(16, [CL], "起動中?", "🔴", None, None, "", None, win=0)   # 信頼済みなら、画面を読めなくても「起動中?」
     tab(17, [CL], "起動中?", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")   # 起動 10 秒以内は記録待ち(codex 反証 2026-09-19)
     keep = stub(session_record=lambda pid: recs.get(pid),
@@ -2135,8 +2135,9 @@ def bd17(ctx):
     check(r["bundles"] >= 1, f"束が 1 つも無い(無人実行 {r['n_una']} 件)")
     check(r["members"] == 0, f"畳んだはずの無人実行が {r['members']} 枚出ている")
     check(r["bundles"] < r["n_una"], f"束 {r['bundles']} 枚 / 無人実行 {r['n_una']} 件(減っていない)")
-    check(r["opened"] == r["before"] + r["biggest"],
-          f"束を押しても中身が出ない {r['before']}→{r['opened']}(中身 {r['biggest']} 件のはず)")
+    shown = min(r["biggest"], 200) + (1 if r["biggest"] > 200 else 0)   # 200 件まで ＋「さらに N 件」
+    check(r["opened"] == r["before"] + shown,
+          f"束を押した時の枚数 {r['before']}→{r['opened']}(中身 {r['biggest']} 件 → 出すのは {shown} 枚のはず)")
     check(r["closed"] == r["before"], f"もう一度押しても畳まれない {r['opened']}→{r['closed']}")
     return (f"無人実行 {r['n_una']} 件 → 束 {r['bundles']} 枚・中身は 0 枚(全カード {r['before']} 枚)"
             f"・押すと {r['opened']} 枚に開き、もう一度で戻る・検索中は {r['searched']} 枚")
@@ -2179,6 +2180,9 @@ def dg03(ctx):
           const justBefore = mk(g.at - 30, true);                                   // 任せる 30 秒前に始まった別の会話
           const exact = mk(g.at + 3000, true); exact.s.deleg = g.id; exact.s.cwd = '/tmp/elsewhere';   // id が一致(場所も時刻も違う)
           const r = board.delegResult(Object.assign({}, g), [after, exact], []);
+          const endedExact = board.delegResult(Object.assign({}, g, {sid: 'x' + (g.at + 5000)}), [], [mk(g.at + 5000, false)]);
+          const p1 = mk(g.at + 500, false), p2 = mk(g.at + 30, false); p1.t = g.at + 20; p2.t = g.at + 9999;   // t と start が食い違う
+          const nearest = (board.delegResult(g, [], [p1, p2]).node || {}).id;
           return {none: board.delegResult(g, [], []).label,
                   onlyBefore: board.delegResult(g, [before], []).label,
                   justBefore: board.delegResult(g, [justBefore], []).label,
@@ -2186,14 +2190,21 @@ def dg03(ctx):
                   livePicked: (board.delegResult(g, [after], []).node || {}).id,
                   past: board.delegResult(g, [], [past]).label,
                   otherCwd: board.delegResult(Object.assign({}, g, {cwd: '/tmp/other'}), [after], []).label,
-                  exactPicked: (r.node || {}).id, exactLabel: r.label, exactFlag: r.exact}; }"""
+                  exactPicked: (r.node || {}).id, exactLabel: r.label, exactFlag: r.exact,
+                  endedExact: endedExact.exact, endedLabel: endedExact.label, nearest}; }"""
         return pg.evaluate(js, {"id": "dg-uat-id", "at": at, "cwd": "/tmp/dg-uat", "text": "x", "ai": "Claude"}), errs
     v, errs = with_page(ctx, fn, "?lang=ja")
     check(not errs, f"ページエラー {errs[:1]}")
     check(v["none"] == "結果待ち" and v["onlyBefore"] == "結果待ち", f"任せる前の会話を結果にした {v}")
     check("作業中" in v["live"] and v["livePicked"] and "推定" in v["live"], f"任せた後の会話を結果にできない/推定の印が無い {v}")
     check(v["justBefore"] == "結果待ち", f"任せる直前に始まった別の会話を結果にした {v['justBefore']!r}")
-    check(v["exactPicked"] == "x" + str(at + 3000) and v["exactFlag"] and "推定" not in v["exactLabel"], f"id の一致を最優先していない {v}")
+    check(v["exactPicked"] and abs(float(v["exactPicked"][1:]) - (at + 3000)) < 1 and v["exactFlag"] and "推定" not in v["exactLabel"], f"id の一致を最優先していない {v}")
+    check(v["endedExact"] and "推定" not in v["endedLabel"], f"終わった後に一致が外れて推定へ落ちた {v['endedLabel']!r}")
+    check(v["nearest"] and abs(float(v["nearest"][1:]) - (at + 30)) < 1, f"過去の会話を開始時刻の近い順に選んでいない {v['nearest']}(at+30 のはず)")
+    # 一致したら控えに sid を残す
+    st, lk, _ = http("/api/delegations", "POST", {"op": "link", "key": key, "id": d["rows"][0].get("id", ""), "sid": "sid-uat-12345"}, headers=origin)
+    st, d2, _ = http(f"/api/delegations?key={key}")
+    check(lk.get("linked") == 1 and d2["rows"][0].get("sid") == "sid-uat-12345", f"控えに sid が残らない {lk} {d2['rows'][0]}")
     check("終了" in v["past"], f"終わった会話の結果 {v['past']!r}")
     check(v["otherCwd"] == "結果待ち", f"別の場所の会話を結果にした {v['otherCwd']!r}")
     # 案件の画面に「任せた仕事」として出るか(実在する枠で確かめる)
@@ -3144,6 +3155,9 @@ def sc02(ctx):
     check(o.job_missed(old_job, now=at6 + 300) is None, "まだ走らせられる時間なのに見送り扱い")
     check(o.job_missed(dict(old_job, last_run=at6 + 5), now=at6 + 7200) is None, "走った日を見送り扱い")
     check(o.job_missed(dict(daily, created=at6 + 3600), now=at6 + 7200) is None, "作る前の時刻を見送り扱い")
+    at23 = day + 23 * 3600
+    late = {"prompt": "x", "at": "23:00", "enabled": True, "last_run": 0, "created": at23 - 86400}
+    check(o.job_missed(late, now=at23 + 5400) == at23, "23:00 の予約を翌 0:30 に開いた時、昨夜の見送りを言わない")
     return f"{len(rows)} 通りすべて期待どおり(時刻・重複・古い分・間隔・停止)"
 
 

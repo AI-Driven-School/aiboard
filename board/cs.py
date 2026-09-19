@@ -641,14 +641,20 @@ def classify(tabs, procs):
                 started = proc_start(pid)
                 young = started is not None and time.time() - started < 10
                 untrusted = (not young) and not trusted_cwd(t["cwd"])
-                screen = "" if untrusted or t["win"] == 0 else screen_text(t["win"], t["tab"])
-                if untrusted or "trust this folder" in screen:
+                screen = "" if t["win"] == 0 else screen_text(t["win"], t["tab"])
+                m = re.search(r"--resume\s+(\S+)", procs[pid]["cmd"])
+                if "trust this folder" in screen:
+                    # 画面で確かめた(iTerm): 断定してよい
                     t["state"], t["mark"] = "確認画面で停止", "🔴"
-                    m = re.search(r"--resume\s+(\S+)", procs[pid]["cmd"])
                     t["topic"] = "フォルダ信頼の確認で止まって未起動" + (f"（resume {m.group(1)[:8]}）" if m else "")
                     t["trust_ask"] = t["cwd"]
                 else:
+                    # 画面を読めない(アプリの端末)か、画面に出ていない: 断定しない。
+                    # 設定に信頼の答えが無ければ「かもしれない」として答えるボタンを出す(codex 再反証 2026-09-19)
                     t["state"], t["mark"] = "起動中?", "🔴"
+                    if untrusted:
+                        t["trust_ask"] = t["cwd"]
+                        t["topic"] = "起動中か、フォルダ信頼の確認で止まっている可能性" + (f"（resume {m.group(1)[:8]}）" if m else "")
         elif codex:
             root = outermost_ai(procs, codex)   # 親が codex でなくても、間に bash を挟んだ入れ子がある
             t["state"], t["mark"] = "codex", "🟩"

@@ -420,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                     st = os.stat(tr); etag = f"{st.st_size}-{int(st.st_mtime)}"
                 except OSError:
                     etag = ""
-                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for", "limit")}
+                base = {k: s.get(k) for k in ("tab", "sid", "state", "mark", "ai", "model_style", "client", "project", "doing", "task", "state_for", "limit", "trust_ask")}
                 if etag and q.get("etag") == etag:
                     return self._json(200, dict(base, ok=True, same=True, etag=etag))
                 tl = []
@@ -535,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "reason": str(e)})
         if path == "/api/delegations":
             try:
+                if body.get("op") == "link":
+                    return self._json(200, {"ok": True, "linked": overview.link_delegation(str(body.get("key", "")), str(body.get("id", "")), str(body.get("sid", "")))})
                 rec = overview.add_delegation(str(body.get("key", "")), body)
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
