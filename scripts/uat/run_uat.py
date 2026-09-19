@@ -1866,6 +1866,7 @@ def cs06(ctx):
     recs, states, screens, cxs = {}, {}, {}, {}
 
     cwds = {}
+    starts = {}
 
     def tab(n, cmds, state, mark, rec=None, st=None, screen="", cx=None, win=9, cwd="/tmp/uat"):
         tty = f"ttys9{n:02d}"
@@ -1875,6 +1876,8 @@ def cs06(ctx):
         for i, c in enumerate(cmds):
             procs[base + 2 + i] = P(base + 1, 10000, tty, c)
             cwds[base + 2 + i] = cwd
+            if n == 17:
+                starts[base + 2 + i] = time.time() - 3   # 起動 3 秒後
         tabs.append({"win": win, "tab": n, "tty": tty, "title": "claude"})
         exp[n] = (state, mark)
         if rec is not None:
@@ -1902,12 +1905,13 @@ def cs06(ctx):
     # アプリ自身の端末(win=0)は画面を読めない。設定に「信頼する」の答えが無ければ、確認で止まっていると見なす
     tab(15, [CL], "確認画面で停止", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")
     tab(16, [CL], "起動中?", "🔴", None, None, "", None, win=0)   # 信頼済みなら、画面を読めなくても「起動中?」
+    tab(17, [CL], "起動中?", "🔴", None, None, "", None, win=0, cwd="/tmp/untrusted")   # 起動 10 秒以内は記録待ち(codex 反証 2026-09-19)
     keep = stub(session_record=lambda pid: recs.get(pid),
                 tab_state=lambda sid: states.get(sid, {}),
                 find_transcript=lambda sid: "",
                 screen_text=lambda w, t, tty=None: screens.get((w, t), ""),
                 proc_cwd=lambda pid: cwds.get(pid, "/tmp/uat"),
-                proc_start=lambda pid: 1_700_000_000,
+                proc_start=lambda pid: starts.get(pid, 1_700_000_000),
                 trusted_cwd=lambda cwd, ttl=20: cwd != "/tmp/untrusted",
                 codex_session=lambda cwd, started, pids=(): cxs.get(procs[min(pids)]["tty"], {}))
     try:
@@ -1923,7 +1927,7 @@ def cs06(ctx):
     check(d[13]["mem"] == 500 + 900 + 10000, f"他のジョブのメモリ {d[13]['mem']}")
     check(d[14]["mem"] == 0 and d[14]["sid"] == "tty:ttys914", f"終了タブ {d[14]['mem']} {d[14]['sid']}")
     check("信頼" in d[7]["topic"] and "abc123de" in d[7]["topic"], f"確認画面の説明に resume 先が無い {d[7]['topic']!r}")
-    check(d[15]["trust_ask"] == "/tmp/untrusted" and not d[16]["trust_ask"], f"信頼の確認の印 {d[15]['trust_ask']!r} / {d[16]['trust_ask']!r}")
+    check(d[15]["trust_ask"] == "/tmp/untrusted" and not d[16]["trust_ask"] and not d[17]["trust_ask"], f"信頼の確認の印 {d[15]['trust_ask']!r} / {d[16]['trust_ask']!r} / {d[17]['trust_ask']!r}")
     return f"{len(exp)} 行すべて期待どおり(状態 {len(set(exp.values()))} 種)"
 
 
@@ -2172,17 +2176,24 @@ def dg03(ctx):
             s: {cwd: '/tmp/dg-uat', started: started, state: '作業中', doing: '索引を作り直しています'},
             r: {cwd: '/tmp/dg-uat', start: started, last_prompt: '照合まで終えた'}});
           const before = mk(g.at - 3600, true), after = mk(g.at + 120, true), past = mk(g.at + 60, false);
+          const justBefore = mk(g.at - 30, true);                                   // 任せる 30 秒前に始まった別の会話
+          const exact = mk(g.at + 3000, true); exact.s.deleg = g.id; exact.s.cwd = '/tmp/elsewhere';   // id が一致(場所も時刻も違う)
+          const r = board.delegResult(Object.assign({}, g), [after, exact], []);
           return {none: board.delegResult(g, [], []).label,
                   onlyBefore: board.delegResult(g, [before], []).label,
+                  justBefore: board.delegResult(g, [justBefore], []).label,
                   live: board.delegResult(g, [after], []).label,
                   livePicked: (board.delegResult(g, [after], []).node || {}).id,
                   past: board.delegResult(g, [], [past]).label,
-                  otherCwd: board.delegResult(Object.assign({}, g, {cwd: '/tmp/other'}), [after], []).label}; }"""
-        return pg.evaluate(js, {"at": at, "cwd": "/tmp/dg-uat", "text": "x", "ai": "Claude"}), errs
+                  otherCwd: board.delegResult(Object.assign({}, g, {cwd: '/tmp/other'}), [after], []).label,
+                  exactPicked: (r.node || {}).id, exactLabel: r.label, exactFlag: r.exact}; }"""
+        return pg.evaluate(js, {"id": "dg-uat-id", "at": at, "cwd": "/tmp/dg-uat", "text": "x", "ai": "Claude"}), errs
     v, errs = with_page(ctx, fn, "?lang=ja")
     check(not errs, f"ページエラー {errs[:1]}")
     check(v["none"] == "結果待ち" and v["onlyBefore"] == "結果待ち", f"任せる前の会話を結果にした {v}")
-    check("作業中" in v["live"] and v["livePicked"], f"任せた後の会話を結果にできない {v}")
+    check("作業中" in v["live"] and v["livePicked"] and "推定" in v["live"], f"任せた後の会話を結果にできない/推定の印が無い {v}")
+    check(v["justBefore"] == "結果待ち", f"任せる直前に始まった別の会話を結果にした {v['justBefore']!r}")
+    check(v["exactPicked"] == "x" + str(at + 3000) and v["exactFlag"] and "推定" not in v["exactLabel"], f"id の一致を最優先していない {v}")
     check("終了" in v["past"], f"終わった会話の結果 {v['past']!r}")
     check(v["otherCwd"] == "結果待ち", f"別の場所の会話を結果にした {v['otherCwd']!r}")
     # 案件の画面に「任せた仕事」として出るか(実在する枠で確かめる)

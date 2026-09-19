@@ -576,7 +576,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
   '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
@@ -763,17 +763,21 @@ async function renderProject(frameKey) {
   $('#pBody').querySelectorAll('.pjrow[data-open]').forEach(el => el.onclick = () => select(el.dataset.open));
 }
 function delegResult(g, live, past) {
-  // 任せた後にその場所で始まった会話を、いちばん近いものから 1 つ選ぶ(±10 分以内)。無ければ「結果待ち」
-  const cands = [...live, ...past].filter(n => {
+  // 一致: 「任せる」で起こした端末は控えの id を持つ(アプリの端末台帳 → セッション)。これが本命
+  // 推定: id で引けない時(iTerm で動かした・アプリを閉じた後)は、任せた"後"に同じ場所で始まった会話を近い順に(10 分以内)。
+  //       推定は「推定」と出す(codex の反証 2026-09-19: 同じフォルダで手で開いた別の会話を結果と誤認し得る)
+  const exact = g.id ? live.find(n => (n.s || {}).deleg === g.id) : null;
+  const pick = exact || [...live, ...past].filter(n => {
     const s0 = n.s || n.r || {};
     const started = n.live ? (s0.started || n.t) : ((s0.start != null) ? s0.start : n.t);
-    return (!g.cwd || s0.cwd === g.cwd) && started != null && started >= g.at - 60 && started <= g.at + 600;
-  }).sort((a, b) => Math.abs(((a.s || a.r || {}).started || a.t) - g.at) - Math.abs(((b.s || b.r || {}).started || b.t) - g.at));
-  const n = cands[0];
-  if (!n) return {node: null, label: T('結果待ち')};
+    return g.cwd && s0.cwd === g.cwd && started != null && started >= g.at && started <= g.at + 600;
+  }).sort((a, b) => Math.abs(((a.s || a.r || {}).started || a.t) - g.at) - Math.abs(((b.s || b.r || {}).started || b.t) - g.at))[0];
+  const n = pick;
+  if (!n) return {node: null, label: T('結果待ち'), exact: false};
   const s0 = n.s || n.r || {};
-  if (n.live) return {node: n, label: `${TS(s0.state || '')}${s0.doing ? ' · ' + String(s0.doing).slice(0, 30) : ''}`};
-  return {node: n, label: `${T('終了')} · ${String(s0.last_prompt || s0.title || '').slice(0, 30)}`};
+  const tag = exact ? '' : ` (${T('推定')})`;
+  if (n.live) return {node: n, exact: !!exact, label: `${TS(s0.state || '')}${s0.doing ? ' · ' + String(s0.doing).slice(0, 30) : ''}${tag}`};
+  return {node: n, exact: !!exact, label: `${T('終了')} · ${String(s0.last_prompt || s0.title || '').slice(0, 30)}${tag}`};
 }
 async function openDelegate(frameKey) {
   // 案件に仕事を任せる: 空いている AI を選び、共通の指示つきで新しい端末を起こして依頼文を渡す。
@@ -794,7 +798,8 @@ async function openDelegate(frameKey) {
   await runDelegation(frameKey, one);
 }
 async function runDelegation(frameKey, body) {
-  toApp(Object.assign({type: 'delegate'}, body));
+  body = Object.assign({id: 'd' + Date.now() + Math.random().toString(36).slice(2, 6)}, body);   // 控えと端末を同じ id で結ぶ
+  toApp(Object.assign({type: 'delegate', deleg: body.id}, body));
   try { await getJSON('/api/delegations', {method: 'POST', body: JSON.stringify(body)}); } catch (e) { say(String(e), true); }
   if ($('#pTitle') && $('#pTitle').dataset.kind === 'project') renderProject(frameKey);   // 任せた分をすぐ出す
 }

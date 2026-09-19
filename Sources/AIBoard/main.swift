@@ -48,6 +48,7 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
     var tty = ""
     var pid: Int = 0
     var sid = ""                // 盤が教えてくれる(復元に使う)
+    var deleg = ""              // 「任せる」で起こした端末の控えの id(結果の突き合わせを推定でなく一致で行う)
     var alive = true
     weak var manager: PaneManager?
 
@@ -345,7 +346,7 @@ final class PaneManager {
     var terminating = false
     func publish() {
         let list: [[String: Any]] = panes.filter { !$0.tty.isEmpty }.map {
-            ["pane": $0.id, "tty": $0.tty, "title": $0.title, "kind": $0.kind, "cwd": $0.cwd, "pid": $0.pid] }
+            ["pane": $0.id, "tty": $0.tty, "title": $0.title, "kind": $0.kind, "cwd": $0.cwd, "pid": $0.pid, "deleg": $0.deleg] }
         write(["updated": Date().timeIntervalSince1970, "app_pid": Int(ProcessInfo.processInfo.processIdentifier),
                "panes": list, "notify_auth": NotifyAuth.status], to: PANES_FILE)
         if terminating { return }   // 終了時に端末が 1 枚ずつ閉じるたびに書き直すと、保存した一覧が空になる
@@ -953,8 +954,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 cmd = env + "command claude " + sys + "\"$(cat \(shellQuote(ask)))\""
             }
             showTerminal()
-            pm.open(kind: isCodex ? "codex" : "claude", cwd: dir, command: cmd)
-            if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
+            let pane = pm.open(kind: isCodex ? "codex" : "claude", cwd: dir, command: cmd)
+            if let dg = b["deleg"] as? String, dg.range(of: "^[A-Za-z0-9_-]{1,40}$", options: .regularExpression) != nil { pane.deleg = dg; pm.publish() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(pane.view) }
         case "run":
             // 設定画面から: ログインなど各 CLI のコマンドをアプリの端末で動かす(認証は CLI 自身が行う。AIBoard は資格情報を触らない)
             guard let cmd = b["command"] as? String, !cmd.isEmpty, cmd.count < 600,

@@ -38,6 +38,8 @@
 // sessionStorage だとホーム画面から開き直すたびに消えるので localStorage に置く。切るには設定で合言葉を作り直す
 let key = new URLSearchParams(location.search).get('k') || '';
 try { if (key) localStorage.setItem('k', key); else key = localStorage.getItem('k') || ''; } catch (e) {}
+// 合言葉を URL に残さない(履歴・共有・スクリーンショットに写るので)。読んだらすぐ消す
+if (location.search.indexOf('k=') >= 0) { try { history.replaceState(null, '', location.pathname); } catch (e) {} }
 const H = {'X-Overview': '1', 'X-Key': key};
 const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 function say(t, bad) { const m = document.querySelector('#msg'); m.hidden = false; m.textContent = t; m.style.color = bad ? 'var(--red)' : ''; setTimeout(() => { m.hidden = true; }, 4000); }

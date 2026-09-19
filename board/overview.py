@@ -769,7 +769,8 @@ def add_delegation(key, row, keep=100):
         raise ValueError("案件の名前が不正")
     if not isinstance(row, dict):
         raise ValueError("控えの形が不正")
-    rec = {"at": time.time(),
+    rec = {"id": str(row.get("id") or f"d{int(time.time() * 1000)}")[:40],
+           "at": time.time(),
            "text": str(row.get("text", ""))[:4000],
            "ai": str(row.get("ai", ""))[:40],
            "profile": str(row.get("profile", ""))[:40],
@@ -1086,6 +1087,7 @@ def sessions(procs=None, with_official=True):
         out.append({
             "tab": f"{t['win']}-{t['tab']}",
             "tty": t.get("tty", ""),
+            "deleg": t.get("deleg", ""),      # 「任せる」で起こした端末なら、その控えの id
             "sid": t.get("sid", ""),
             "state": t["state"], "mark": t["mark"],
             "ai": t.get("ai", ""), "model": t.get("model", ""), "account": t.get("account", ""),

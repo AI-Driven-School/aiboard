@@ -194,7 +194,7 @@ def app_panes():
     except (OSError, ValueError, KeyError, TypeError):
         return []
     return [{"win": 0, "tab": int(p["pane"]), "tty": str(p["tty"]).replace("/dev/", ""),
-             "title": str(p.get("title", "")), "app": True}
+             "title": str(p.get("title", "")), "app": True, "deleg": str(p.get("deleg") or "")}
             for p in d.get("panes", []) if p.get("tty")]
 
 
@@ -635,8 +635,12 @@ def classify(tabs, procs):
                     texts=(prompt, topic, first_user_prompt(tr) if tr else "")))
             else:
                 t["cwd"] = proc_cwd(pid)
-                # 信頼の確認で止まっているか。設定に答えが無ければ確認中(アプリの端末は画面を読めないのでこれが正)
-                untrusted = not trusted_cwd(t["cwd"])
+                # 信頼の確認で止まっているか。設定に答えが無ければ確認中(アプリの端末は画面を読めないのでこれが正)。
+                # ただし起動直後は記録がまだ無いだけなので、10 秒は「起動中?」のまま待つ
+                # (codex の反証 2026-09-19: 記録が遅れる数秒を「確認画面で停止」と誤認していた)
+                started = proc_start(pid)
+                young = started is not None and time.time() - started < 10
+                untrusted = (not young) and not trusted_cwd(t["cwd"])
                 screen = "" if untrusted or t["win"] == 0 else screen_text(t["win"], t["tab"])
                 if untrusted or "trust this folder" in screen:
                     t["state"], t["mark"] = "確認画面で停止", "🔴"
