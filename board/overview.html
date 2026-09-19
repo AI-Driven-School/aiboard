@@ -576,7 +576,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
   '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
@@ -584,14 +584,14 @@ const EN = {
   '環境変数にある': 'set in the environment', '無い': 'missing', 'AIBoard は鍵を保存しません。盤サーバを起こすシェルの環境変数に置いてください。': 'AIBoard never stores the key. Put it in the environment of the shell that starts the board server.',
   '直近': 'Last', '正常': 'ok', '規則へ戻した': 'fell back to rules', 'まだ呼んでいません': 'not called yet', '試す': 'Try', '試しています…': 'Trying…',
   'モデルは使えず規則へ戻りました': 'The model could not be used; fell back to rules', '選べました': 'Picked',
-  '外部の決定モデルに、伏せ字にした題名・依頼の先頭・フォルダ名を渡します（会話の全文は渡しません）。「外部のサーバを通らない」ではなくなります。よろしいですか？':
+  '外部の決定モデルに、題名・依頼の先頭・フォルダ名を渡します（鍵の形は伏せます。会話の全文は渡しませんが、顧客名や案件名は外に出ます）。「外部のサーバを通らない」ではなくなります。よろしいですか？':
     'Redacted titles, the start of requests and folder names will be sent to an external model (never the full conversation). AIBoard will no longer be "nothing leaves this Mac". Continue?',
   '判定器の候補（設定→束ね方で確定できます）': 'Suggested by the judge (confirm in Settings → Grouping)', '右の端末で打つ': 'Type in the right terminal', '右の端末に同じセッションを出しています': 'The right terminal shows this same session', 'この会話は右の端末には出ていません': 'This conversation is not in the right terminal', '右の端末に出ています': 'Shown in the right terminal', 'あなたの番です': 'Your turn', '上限で止まっています': 'Stopped at the usage limit', 'あなたが動かないと進まないもの': 'Waiting on you', '判断待ちの音': 'Sound when it needs you', '鳴らす': 'On', '鳴らさない': 'Off', '通知を切っていても鳴ります（8 秒に 1 回まで）': 'Plays even when notifications are off (at most once per 8s)',
   '遠隔（同じ Wi-Fi の中だけ）': 'Remote (same Wi-Fi only)', 'スマホから判断待ちに答える': 'Answer from your phone',
   '入れています': 'on', '切ってあります': 'off', '切る': 'Turn off', '開く場所': 'Open at',
   'LAN の住所が取れません': 'no LAN address', '切りました': 'Turned off',
-  '入れると、同じ Wi-Fi の中からだけ、合言葉つきで「判断待ちの一覧」と「返事」だけが使えます。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。':
-    'When on, devices on the same Wi-Fi can see what is waiting and answer it, with a key. Stopping, starting and settings stay local. Nothing goes through an outside server.',
+  '入れると、同じ Wi-Fi（や自分の VPN）の中から、合言葉つきで「判断待ちの一覧」と「返事」が使えます。返事＝その AI の端末に文字を打つことなので、合言葉を持つ人は AI に指示できます。合言葉はパスワードとして扱ってください（切って入れ直すと作り直されます）。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。':
+    'When on, devices on the same Wi-Fi (or your own VPN) can see what is waiting and answer it, with a key. An answer is text typed into that agent\u2019s terminal, so whoever has the key can instruct your agents: treat it like a password (turn Remote off and on to regenerate it). Stopping, starting and settings stay local. Nothing goes through an outside server.',
   '同じ Wi-Fi の中から、合言葉を知っている端末だけが「判断待ちの一覧」と「返事」を使えるようになります。よろしいですか？':
     'Devices on this Wi-Fi that know the key will be able to see what is waiting and answer it. Continue?',
   '入れました（盤サーバを開き直すと有効になります）': 'Turned on (restart the board server to take effect)',
@@ -716,7 +716,8 @@ async function renderProject(frameKey) {
       ${myJobs.length ? `<div class="pjlist">${myJobs.map(j => `<div class="pjrow">
         <div class="pjw">${j.enabled ? esc(hhmm(j.next_at)) : T('止めています')}</div>
         <div class="pjt">${esc(DEMO ? pick(DEMO_TASKS, 'sc' + j.id) : String(j.prompt).slice(0, 80))}</div>
-        <div class="pjs">${esc(j.ai)}${j.every ? ` · ${j.every}${T('分ごと')}` : ` · ${esc(j.at)}`}
+        ${j.missed_at ? `<div class="warn" style="font-size:11.5px">${esc(hhmm(j.missed_at))} ${T('の分は、その時刻にアプリが開いていなかったので走っていません')}</div>` : ''}
+        <div class="pjs">${esc(j.ai)}${j.every ? ` · ${j.every}${T('分ごと（閉じていた間の分は 1 回にまとめて走ります）')}` : ` · ${esc(j.at)}`}
           <button data-sc-toggle="${esc(j.id)}">${j.enabled ? T('止める') : T('再開')}</button>
           <button data-sc-del="${esc(j.id)}">${T('消す')}</button></div></div>`).join('')}</div>` : ''}
       <div class="opts"><input id="scPrompt" placeholder="${esc(T('例: 今日の失敗したジョブをまとめて'))}" style="flex:1">
@@ -1576,7 +1577,7 @@ async function renderSettings(refresh) {
       <div class="opts">${jd.backend !== 'rules' ? `<button id="jdSave">${T('保存')}</button><button id="jdTry">${T('試す')}</button>` : ''}<span id="jdMsg" class="legend"></span></div>`;
     const post = async (body) => { try { return await getJSON('/api/judge', {method: 'POST', body: JSON.stringify(body)}); } catch (e) { return {ok: false, reason: String(e)}; } };
     box.querySelectorAll('button[data-jd]').forEach(b => b.onclick = async () => {
-      if (b.dataset.jd === 'external' && !confirm(T('外部の決定モデルに、伏せ字にした題名・依頼の先頭・フォルダ名を渡します（会話の全文は渡しません）。「外部のサーバを通らない」ではなくなります。よろしいですか？'))) return;
+      if (b.dataset.jd === 'external' && !confirm(T('外部の決定モデルに、題名・依頼の先頭・フォルダ名を渡します（鍵の形は伏せます。会話の全文は渡しませんが、顧客名や案件名は外に出ます）。「外部のサーバを通らない」ではなくなります。よろしいですか？'))) return;
       const r = await post({backend: b.dataset.jd}); if (!r.ok) say(r.reason, true); renderSettings(true); });
     if ($('#jdSave')) $('#jdSave').onclick = async () => {
       const body = jd.backend === 'local' ? {local_url: $('#jdLocalUrl').value, local_model: $('#jdLocalModel').value} : {external_url: $('#jdExtUrl').value, external_model: $('#jdExtModel').value};
@@ -1593,7 +1594,7 @@ async function renderSettings(refresh) {
     const box = $('#rmBox'); if (!box) return;
     const on = !!(rm && rm.enabled);
     box.innerHTML = `<div class="h"><b>${T('スマホから判断待ちに答える')}</b><span class="st"><span class="dot ${on ? 'ok' : ''}"></span>${on ? T('入れています') : T('切ってあります')}</span></div>
-      <div class="sub">${T('入れると、同じ Wi-Fi の中からだけ、合言葉つきで「判断待ちの一覧」と「返事」だけが使えます。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。')}</div>
+      <div class="sub">${T('入れると、同じ Wi-Fi（や自分の VPN）の中から、合言葉つきで「判断待ちの一覧」と「返事」が使えます。返事＝その AI の端末に文字を打つことなので、合言葉を持つ人は AI に指示できます。合言葉はパスワードとして扱ってください（切って入れ直すと作り直されます）。終了・起動・設定の変更は遠隔からはできません。外部のサーバは通りません。')}</div>
       ${on && !DEMO ? `<div class="kvrow"><span>${T('開く場所')}</span><span>${(rm.addrs || []).map(a => `<div><code>http://${esc(a.ip)}:${location.port || 8791}/m?k=${esc(rm.token)}</code> <span class="sub">${a.kind === 'tailscale' ? T('Tailscale（外出先から。自分で張った VPN）') : a.kind === 'lan' ? T('同じ Wi-Fi から') : esc(a.iface)}</span></div>`).join('') || T('LAN の住所が取れません')}<span class="sub">${T('外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。')}</span><br><span class="sub">${T('スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）')}</span></span></div>` : ''}
       <div class="opts">${on ? `<button id="rmOff">${T('切る')}</button>` : `<button class="primary" id="rmOn">${T('入れる')}</button>`}</div>`;
     const setRemote = async (enabled) => {

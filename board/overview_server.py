@@ -374,7 +374,7 @@ class Handler(BaseHTTPRequestHandler):
                 # 予約の一覧(次に走る時刻つき)。走らせるのはアプリ側
                 rows = []
                 for j in overview.read_schedule():
-                    rows.append(dict(j, next_at=overview.job_next_at(j), due=overview.job_due(j)))
+                    rows.append(dict(j, next_at=overview.job_next_at(j), due=overview.job_due(j), missed_at=overview.job_missed(j)))
                 self._json(200, {"ok": True, "jobs": rows, "min_every": overview.SCHEDULE_MIN_EVERY})
             elif path == "/api/delegations":
                 key = q.get("key", "")

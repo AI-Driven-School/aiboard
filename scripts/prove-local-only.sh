@@ -69,7 +69,7 @@ echo "sampled socket rows: $TOTAL" | tee -a "$OUT"
 if [ "$TOTAL" -eq 0 ]; then
   echo "RESULT: INCONCLUSIVE — sampled 0 socket rows (app or board server not running, or lsof was denied). Start AIBoard and run again." | tee -a "$OUT"
   RC=2
-elif [ -z "$EXT" ]; then echo "RESULT: 0 connections to anything other than this Mac (127.0.0.1 / ::1) in $TOTAL sampled rows" | tee -a "$OUT"; RC=0
+elif [ -z "$EXT" ]; then echo "RESULT: 0 connections to anything other than this Mac (127.0.0.1 / ::1) in $TOTAL sampled rows (sampled once a second: a connection shorter than that can be missed — this is an observation, not a proof)" | tee -a "$OUT"; RC=0
 else echo "RESULT: external connections found:" | tee -a "$OUT"; echo "$EXT" | tee -a "$OUT"; RC=1; fi
 rm -f "$OUT.raw"
 echo "end $(date '+%F %T')" | tee -a "$OUT"

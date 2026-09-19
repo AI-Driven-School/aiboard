@@ -2446,6 +2446,8 @@ def rm02(ctx):
             bad[name] = (ok, why)
     check(not bad, f"判定が違う(実際, 理由) {bad}")
     check(o.remote_config()["enabled"] is False, "既定で遠隔が入っている(既定は切ってあること)")
+    t1 = o.remote_set(True)["token"]; o.remote_set(False); t2 = o.remote_set(True)["token"]; o.remote_set(False)
+    check(t1 and t2 and t1 != t2 and not o.remote_config()["token"], "切って入れ直しても合言葉が変わらない/切っても残る")
     return f"{len(rows)} 通りすべて期待どおり(既定は切・合言葉は完全一致・遠隔は一覧と返事だけ)"
 
 
@@ -2836,16 +2838,42 @@ def jd03(ctx):
         o._JUDGE_CACHE.clear()
         sess = [{"sid": "s1", "tab": "9-1", "state": "確認待ち", "state_for": 100, "project": "A", "task": "a", "ai": "Claude", "client": None, "cwd": "/tmp/a"},
                 {"sid": "s2", "tab": "9-2", "state": "確認待ち", "state_for": 10, "project": "B", "task": "b", "ai": "Claude", "client": None, "cwd": "/tmp/b"}]
-        att = o.attention(sess)
+        t0 = time.time(); att = o.attention(sess); first_ms = (time.time() - t0) * 1000
+        check([x["sid"] for x in att][:2] == ["s1", "s2"], f"初回は規則のまま返す(待たない)はず {[x['sid'] for x in att]}")
+        for _ in range(40):
+            time.sleep(0.1)
+            att = o.attention(sess)
+            if att[0].get("judged"):
+                break
         check([x["sid"] for x in att][:2] == ["s2", "s1"] and att[0].get("judged") == "local", f"先頭の選び直し {[x['sid'] for x in att]} {att[0].get('judged')}")
         n0 = len(seen); o.attention(sess)
         check(len(seen) == n0, "同じ顔ぶれなのにもう一度モデルを呼んだ(20 秒は前の答えを使う)")
+        # 遅いモデルでも盤は待たない
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "s2"}', delay=3)
+        judge.set_config({"local_url": url}); o._JUDGE_CACHE.clear()
+        t0 = time.time(); o.attention([dict(x, sid=x["sid"] + "x") for x in sess]); slow_ms = (time.time() - t0) * 1000
+        check(slow_ms < 300, f"遅いモデルに盤が待たされた {slow_ms:.0f}ms")
+        # 「どれでもない」は印で分かる
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "none"}')
+        judge.set_config({"local_url": url}); o._JUDGE_CACHE.clear()
+        for _ in range(40):
+            time.sleep(0.1)
+            att = o.attention([dict(x, sid=x["sid"] + "n") for x in sess])
+            if att[0].get("judged"):
+                break
+        check(att[0].get("judged") == "none", f"none が区別できない {att[0].get('judged')}")
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "s2"}')
+        judge.set_config({"local_url": url}); o._JUDGE_CACHE.clear()
         # 顧客の候補(顧客の定義があるときだけ)
         defs = o.client_defs()
         if defs:
             srv.shutdown(); srv, url, seen = _stub_model(json.dumps({"id": defs[0]["id"]}))
             judge.set_config({"local_url": url}); o._JUDGE_CACHE.clear()
             out = o.judge_clients([dict(s) for s in sess])
+            for _ in range(40):
+                if out[0].get("client_suggest"):
+                    break
+                time.sleep(0.1); out = o.judge_clients([dict(s) for s in sess])
             check(out[0].get("client_suggest", {}).get("id") == defs[0]["id"], f"顧客の候補 {out[0].get('client_suggest')}")
             check("client" not in seen[-1]["body"] or True, "")
         # 証明スクリプト
@@ -2861,7 +2889,7 @@ def jd03(ctx):
         judge.set_config({"backend": keep["backend"], "local_url": keep["local_url"], "external_url": keep["external_url"]})
         o._JUDGE_CACHE.clear()
         srv.shutdown()
-    return f"先頭の選び直し(s2 を先に)・同じ顔ぶれは呼び直さない・顧客の候補 {'あり' if defs else '(定義なしで省略)'}・証明スクリプトが外部/規則を書き分ける"
+    return f"初回は待たずに規則({first_ms:.0f}ms)→裏の答えで s2 を先に・遅いモデル(3秒)でも {slow_ms:.0f}ms・none は印で区別・同じ顔ぶれは呼び直さない・顧客の候補 {'あり' if defs else '(定義なしで省略)'}・証明スクリプトが外部/規則を書き分ける"
 
 
 @case("JD-04", "判定器の設定画面: 規則が既定で選ばれ、手元/外部の切替と「試す」が API に届く(外部は確認つき)")
@@ -3095,6 +3123,12 @@ def sc02(ctx):
     nxt2 = o.job_next_at(dict(daily, last_run=at6 + 10), now=at6 + 600)
     check(abs(nxt2 - (at6 + 86400)) < 61, f"走った後の次 {time.strftime('%m-%d %H:%M', time.localtime(nxt2))}")
     check(o.job_next_at(dict(daily, enabled=False)) is None, "止めた予約に次の時刻が出る")
+    # 見送った分は「走らなかった」と分かる(黙って飛ばさない)
+    old_job = dict(daily, created=at6 - 86400)
+    check(o.job_missed(old_job, now=at6 + 7200) == at6, "2 時間後に開いた時、6:00 の分を見送ったと言わない")
+    check(o.job_missed(old_job, now=at6 + 300) is None, "まだ走らせられる時間なのに見送り扱い")
+    check(o.job_missed(dict(old_job, last_run=at6 + 5), now=at6 + 7200) is None, "走った日を見送り扱い")
+    check(o.job_missed(dict(daily, created=at6 + 3600), now=at6 + 7200) is None, "作る前の時刻を見送り扱い")
     return f"{len(rows)} 通りすべて期待どおり(時刻・重複・古い分・間隔・停止)"
 
 

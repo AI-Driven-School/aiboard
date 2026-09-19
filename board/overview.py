@@ -476,9 +476,10 @@ def remote_set(enabled, token=None):
     except (OSError, ValueError):
         cfg = {}
     if enabled:
-        cfg["remote"] = {"enabled": True, "token": token or (cfg.get("remote") or {}).get("token") or secrets.token_urlsafe(24)}
+        # 入れるたびに合言葉を作り直す(切って入れ直せば、前の合言葉を知る端末は締め出される)
+        cfg["remote"] = {"enabled": True, "token": token or secrets.token_urlsafe(24)}
     else:
-        cfg["remote"] = {"enabled": False, "token": (cfg.get("remote") or {}).get("token", "")}
+        cfg["remote"] = {"enabled": False, "token": ""}
     tmp = f"{p}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=1)
@@ -723,6 +724,23 @@ def job_due(job, now=None, grace=3600):
     if now - today > grace:
         return False
     return last < today
+
+
+def job_missed(job, now=None, grace=3600):
+    """時刻の予約が、アプリが閉じていた等で走らなかった日の時刻(走らせずに見送った分)。無ければ None。
+    「1 時間より古い分は走らせない」を黙ってやると、利用者は走らなかったことに気づけない(codex の反証 2026-09-19)。"""
+    if not job.get("enabled", True) or job.get("every"):
+        return None
+    now = now if now is not None else time.time()
+    at = str(job.get("at") or "")
+    if not re.fullmatch(r"([01]?\d|2[0-3]):[0-5]\d", at):
+        return None
+    lt = time.localtime(now)
+    h, m = (int(x) for x in at.split(":"))
+    today = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday, h, m, 0, 0, 0, -1))
+    if now - today > grace and float(job.get("last_run") or 0) < today and float(job.get("created") or 0) < today:
+        return today
+    return None
 
 
 def job_next_at(job, now=None):
@@ -1156,26 +1174,48 @@ def attention(sess):
 
 
 _JUDGE_CACHE = {}   # (kind, key) -> (時刻, 結果)
+_JUDGE_BUSY = set() # いま裏で問い合わせ中の key
+
+
+def _judge_async(key, kind, options, context, ttl):
+    """判定器の答えを返す。**盤の更新を待たせない**: 手元に新しい答えが無ければ裏で問い合わせ、
+    今回は None(=規則のまま)を返す。次の snapshot で答えが使われる。
+    (codex の反証 2026-09-19: 同期呼び出しだと、顔ぶれが変わるたびに最大 4 秒 snapshot が止まる)"""
+    import threading
+    import judge
+    hit = _JUDGE_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    if key not in _JUDGE_BUSY:
+        _JUDGE_BUSY.add(key)
+
+        def run():
+            try:
+                _JUDGE_CACHE[key] = (time.time(), judge.decide(kind, options, context))
+            finally:
+                _JUDGE_BUSY.discard(key)
+        threading.Thread(target=run, daemon=True).start()
+    return hit[1] if hit else None     # 古い答えがあればそれを、無ければ規則のまま
 
 
 def _judge_priority(items):
-    """判定器が規則以外なら、上位 5 件の中から「最初に見せる 1 件」を選ばせて先頭に置く。
-    盤は 2.5 秒ごとに snapshot を作るので、同じ顔ぶれなら 20 秒は前の答えを使う。"""
+    """判定器が規則以外なら、上位 5 件の中から「最初に見せる 1 件」を選ばせて先頭に置く。"""
     import judge
     if len(items) < 2 or judge.config()["backend"] == "rules":
         return items
     top = items[:5]
     key = ("priority", tuple(x.get("sid") for x in top))
-    hit = _JUDGE_CACHE.get(key)
-    if hit and time.time() - hit[0] < 20:
-        res = hit[1]
-    else:
-        res = judge.decide("priority", [{"id": x.get("sid"), "text": f'{x.get("state")} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
-                           {"count": len(items)})
-        _JUDGE_CACHE[key] = (time.time(), res)
+    res = _judge_async(key, "priority",
+                       [{"id": x.get("sid"), "text": f'{x.get("state")} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
+                       {"count": len(items)}, 20)
+    if not res:
+        return items
     if res.get("id"):
         items = sorted(items, key=lambda x: 0 if x.get("sid") == res["id"] else 1)
         items[0] = {**items[0], "judged": res["by"], "judge_why": res["why"]}
+    else:
+        # 判定器が「どれでもない」と答えた / 失敗した: 並びは規則のまま、そうだったと分かる印を付ける
+        items[0] = {**items[0], "judged": "none" if not res.get("fallback") else "fallback", "judge_why": res.get("why", "")}
     return items
 
 
@@ -1192,14 +1232,9 @@ def judge_clients(sess):
         if s.get("client") or not s.get("ai") or not s.get("sid"):
             continue
         key = ("client", s["sid"])
-        hit = _JUDGE_CACHE.get(key)
-        if hit and time.time() - hit[0] < 300:
-            res = hit[1]
-        else:
-            res = judge.decide("client", opts, {"project": s.get("project_hint") or s.get("project") or "",
-                                                 "cwd": os.path.basename(s.get("cwd") or ""), "task": (s.get("task") or "")[:120]})
-            _JUDGE_CACHE[key] = (time.time(), res)
-        if res.get("id") and not res.get("fallback"):
+        res = _judge_async(key, "client", opts, {"project": s.get("project_hint") or s.get("project") or "",
+                                                  "cwd": os.path.basename(s.get("cwd") or ""), "task": (s.get("task") or "")[:120]}, 300)
+        if res and res.get("id") and not res.get("fallback"):
             c = next((d for d in defs if d["id"] == res["id"]), None)
             if c:
                 s["client_suggest"] = {"id": c["id"], "label": c.get("label") or c["id"], "by": res["by"]}
