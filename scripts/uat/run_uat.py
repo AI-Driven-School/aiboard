@@ -3069,6 +3069,21 @@ utun4: flags=8051<UP,POINTOPOINT> mtu 1280
     return f"差し替え: LAN と Tailscale を見分け、127/169.254 を除く / 実機 {len(real)} 件"
 
 
+@case("AP-17", "端末の環境: AIBoard が Claude Code の中から起動されても、端末で開く claude に「子のセッション」の印を渡さない")
+def ap17(ctx):
+    mark = os.path.join(tempfile.mkdtemp(dir=ctx["data"]), "env.txt")
+    js = send_until("0-1", "env > " + mark)
+    extra = {"CLAUDECODE": "1", "CLAUDE_CODE_CHILD_SESSION": "uat-parent", "CLAUDE_CODE_SESSION_ID": "uat", "CLAUDE_PID": "1"}
+    r = run_app_js(ctx, "return await " + js, dict(extra, AIBOARD_FAST_SHELL="1"), wait="8")
+    check(r.get("ok"), f"{r}")
+    check(os.path.exists(mark), "端末で env が走らない")
+    env = dict(l.split("=", 1) for l in open(mark).read().splitlines() if "=" in l)
+    leaked = [k for k in extra if k in env]
+    check(not leaked, f"子のセッションの印が端末に漏れている {leaked}")
+    check(env.get("AIBOARD_PANE") == "1" and env.get("TERM_PROGRAM") == "AIBoard", "端末の印が無い")
+    return f"親の印 {len(extra)} 個を消して始まる(AIBOARD_PANE・TERM_PROGRAM は付く)"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o
@@ -6607,11 +6622,13 @@ def _re01_run(ctx, data, work, cfg, prof):
       const want = %s;
       const mine = () => (board.snap().sessions || []).find(x => x.tab && x.tab.startsWith('0-') && (x.cwd || '') === want);
       let s = null;
-      for (let i = 0; i < 40 && !(s = mine()); i++) await nap(1500);                  // 端末が出るまで
+      for (let i = 0; i < 120 && !(s = mine()); i++) await nap(1500);                  // 端末が出るまで
       if (!s) return {ok: false, why: 'セッションが盤に出ない', tabs: (board.snap().sessions || []).map(x => [x.tab, x.cwd])};
-      for (let i = 0; i < 40; i++) {                                                  // claude が起きて記録を作るまで
+      for (let i = 0; i < 120; i++) {                                                 // claude が起きて記録を作るまで
         s = mine() || s;
         if ((s.ai || '').startsWith('Claude') && s.sid) break;
+        // 初回の確認画面(Chrome 連携など)は Esc で抜ける = 使わない側。盤の「起動中?」のボタンと同じ道
+        if (i %% 8 === 7) window.webkit.messageHandlers.aiboard.postMessage({type: 'send', tab: s.tab, key: 'esc'});
         await nap(1500);
       }
       if (!(s.ai || '').startsWith('Claude') || !s.sid) {
@@ -6635,7 +6652,9 @@ def _re01_run(ctx, data, work, cfg, prof):
               diag: {loops: loops, conv: Object.keys(last || {}), reason: (last || {}).reason}}; })()""" % (
         json.dumps(cmd), json.dumps(work), json.dumps(work))
     env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
-               AIBOARD_JS_TEST=mark, AIBOARD_JS="return await " + js.strip(), AIBOARD_JS_WAIT="6")
+               AIBOARD_JS_TEST=mark, AIBOARD_JS="return await " + js.strip(), AIBOARD_JS_WAIT="6",
+               # 見たいのは「盤→本物の AI→返事」。利用者の .zshrc の起動(混雑時 1 分超)は AP-06 が別に見る
+               AIBOARD_FAST_SHELL="1", AIBOARD_NO_ASK="1")
     subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
                    env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
     check(os.path.exists(mark), "アプリが結果を書かなかった")

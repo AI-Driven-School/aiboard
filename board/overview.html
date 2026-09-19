@@ -576,7 +576,7 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', '起動の途中か、初回の確認画面で止まっているかもしれません': 'Still starting, or stopped at a first-run prompt', '（いいえ・閉じる）': '(no / dismiss)', '（既定を選ぶ）': '(accept default)', '端末を見る': 'Look at the terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
   '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
@@ -863,7 +863,7 @@ function nodeList() {
     else n.parentId = null;
   });
   // 無人実行(claude -p / SDK)は日ごと・持ち場ごとに 1 枚へ畳む。実測 5,904 枚で 1 フレーム 35ms だったため
-  if (filters.unatt) {
+  if (filters.unatt && !NOFOLD) {   // ?nofold=1 は計測用(畳む前と同じ条件で比べる)
     const groups = {};
     nodes.forEach(n => {
       if (!n.unattended || n.bundle || isChild(n)) return;
@@ -1737,6 +1737,7 @@ function tlHtml(tl) {
 // ---------------- 会話ビュー(カードを押した時の既定) ----------------
 // 端末の生の画面ではなく、記録から「依頼 / 返答 / 操作」を時系列で並べ、下に 1 行の入力欄。
 // 判断待ちの時だけ選択肢のボタンを出す(Claude Code の許可確認は数字キーで選ぶ)。本物の端末は「端末」ボタンかダブルクリック。
+const NOFOLD = new URLSearchParams(location.search).get('nofold') === '1';
 let convWho = '';   // 吹き出しの名前に使う「いま見ている AI」
 let rightTab = '';  // 右の端末でいま見えている端末(アプリが知らせる)。そのカードに ⇄ を出す
 function setRightTab(tab) { if (rightTab === tab) return; rightTab = tab || ''; render(); }
@@ -1833,6 +1834,15 @@ async function renderLive(n) {
       ask.innerHTML = `<div class="q">${esc(DEMO ? 'Allow Bash: npm test?' : (d.doing || T('判断を待っています')))}</div><div class="opts">
         <button data-k="1" class="primary">1 ${T('はい')}</button><button data-k="2">2 ${T('はい、今後も')}</button><button data-k="esc">Esc ${T('いいえ')}</button></div>`;
       ask.querySelectorAll('button').forEach(b => b.onclick = async () => { const r = await sendTo(d, b.dataset.k === 'esc' ? {key: 'esc'} : {text: b.dataset.k, enter: false}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 400); });
+    } else if (d.state === '起動中?' && isAppTab(d.tab)) {
+      // 記録がまだ無い = 起動途中か、初回の確認画面(Chrome 連携・テーマ・ログインなど)で止まっている。
+      // 画面はアプリの端末なので盤からは読めない。先に進めるキーだけ出し、中身は端末で見てもらう
+      ask.hidden = false;
+      ask.innerHTML = `<div class="q">${T('起動の途中か、初回の確認画面で止まっているかもしれません')}</div><div class="opts">
+        <button data-k="esc">Esc ${T('（いいえ・閉じる）')}</button><button data-k="enter">Enter ${T('（既定を選ぶ）')}</button><button data-k="look" class="primary">${T('端末を見る')}</button></div>`;
+      ask.querySelectorAll('button').forEach(b => b.onclick = async () => {
+        if (b.dataset.k === 'look') { toApp({type: 'focus', tab: d.tab}); return; }
+        const r = await sendTo(d, {key: b.dataset.k}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 800); });
     } else if (d.state === '確認画面で停止') {
       // 新しいフォルダで開いた claude は、最初に「このフォルダを信頼しますか」で止まる。ここから答えられるようにする
       ask.hidden = false;

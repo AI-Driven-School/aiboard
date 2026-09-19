@@ -75,7 +75,12 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
         //  zsh が "source path" という名前のコマンドを探し、端末が即終了していた。2026-09-18 実測)
         // 自己試験だけ、起動の速いシェルにできる(利用者の .zshrc は機械が混んでいると 1 分かかる。2026-09-18 実測)
         let sh = ProcessInfo.processInfo.environment["AIBOARD_FAST_SHELL"] != nil ? "/bin/zsh -f" : "/bin/zsh -il"
-        let script = "#!" + sh + "\nexport AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\nexec " + sh + "\n"
+        // AIBoard 自身が Claude Code の中から起動されると、その印(CLAUDECODE・CLAUDE_CODE_CHILD_SESSION など)が
+        // 端末に受け継がれ、ここで開いた claude は「子のセッション」として記録を書かない＝盤から見えなくなる(2026-09-19 実測)。
+        // 端末は独立したセッションなので、印は消してから始める。アカウントの指定(CLAUDE_CONFIG_DIR)は消さない
+        let scrub = "unset CLAUDECODE CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_CODE_SESSION_ID " +
+                    "CLAUDE_CODE_SESSION_ATTENDED CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_DISABLE_TERMINAL_TITLE CLAUDE_PID CLAUDE_EFFORT\n"
+        let script = "#!" + sh + "\n" + scrub + "export AIBOARD_PANE=\(id) TERM_PROGRAM=AIBoard\ncd " + shellQuote(dir) + "\n" + body + "\nexec " + sh + "\n"
         if path.contains(" ") {   // 空白を含む置き場だと command が分割されるので /tmp に逃がす
             let alt = "/tmp/aiboard-\(getuid())"
             try? FileManager.default.createDirectory(atPath: alt, withIntermediateDirectories: true)
