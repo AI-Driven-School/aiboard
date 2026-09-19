@@ -32,6 +32,30 @@ RESULTS = []
 CASE_TIMEOUT = int(os.environ.get("UAT_CASE_TIMEOUT", "240"))
 
 
+def load_now():
+    try:
+        return os.getloadavg()[0]
+    except OSError:
+        return 0.0
+
+
+def load_factor():
+    """機械の混み具合で待ち時間を伸ばす。実測: load 54 で対話 zsh の起動が 64 秒(普段の 10 倍)。
+    ここを固定にしていたせいで、混んでいる時だけ落ちる試験が残っていた。"""
+    la = load_now()
+    cpus = os.cpu_count() or 8
+    return max(1.0, min(4.0, 1.0 + la / max(4.0, cpus)))
+
+
+def case_timeout():
+    return int(CASE_TIMEOUT * load_factor())
+
+
+# 混んでいる時だけ落ちることがある試験(アプリを起こす・実シェルを待つもの)。1 度だけやり直す
+RETRY_WHEN_BUSY = {"AP-04", "AP-05", "AP-06", "AP-07", "AP-08", "AP-09", "AP-16", "AP-17", "AS-01", "AS-02", "AS-03",
+                   "LK-01", "LK-02", "LK-03", "SV-19", "NT-02", "BD-17", "DG-03", "SC-03", "HK-09"}
+
+
 def case(cid, title, kind="auto"):
     def deco(fn):
         fn.cid, fn.title, fn.kind = cid, title, kind
@@ -7159,6 +7183,200 @@ def _pid_alive(pid):
         return False
 
 
+def _real_session_js(cmd, work, extra):
+    """使い捨ての本物セッションを起こし、claude が会話に入るまで待ってから extra を実行する JS を作る。"""
+    return """(async () => {
+      const nap = ms => new Promise(r => setTimeout(r, ms));
+      const P = m => window.webkit.messageHandlers.aiboard.postMessage(m);
+      P({type: 'run', title: 'uat', command: %s, cwd: %s});
+      const want = %s;
+      const mine = () => (board.snap().sessions || []).find(x => x.tab && x.tab.startsWith('0-') && (x.cwd || '') === want);
+      let s = null;
+      for (let i = 0; i < 120 && !(s = mine()); i++) await nap(1500);
+      if (!s) return {ok: false, why: 'セッションが盤に出ない'};
+      for (let i = 0; i < 120; i++) {
+        s = mine() || s;
+        if ((s.ai || '').startsWith('Claude') && s.sid) break;
+        if (i %% 8 === 7) P({type: 'send', tab: s.tab, key: 'esc'});     // 初回の確認画面は使わない側で抜ける
+        await nap(1500);
+      }
+      if (!(s.ai || '').startsWith('Claude') || !s.sid) return {ok: false, why: 'claude が起きない'};
+      await nap(4000);
+      %s
+    })()""" % (json.dumps(cmd), json.dumps(work), json.dumps(work), extra)
+
+
+def _hook_into_profile(cfg, on=True):
+    """使い捨てのアカウントに、試験の間だけ hook を入れる/外す(判断待ちを盤に出すために要る)。
+    元の settings.json は控えを取って必ず戻す。"""
+    p = os.path.join(cfg, "settings.json")
+    bak = p + ".uat-bak"
+    if on:
+        try:
+            d = json.load(open(p, encoding="utf-8"))
+        except (OSError, ValueError):
+            d = {}
+        if os.path.exists(p) and not os.path.exists(bak):
+            shutil.copy2(p, bak)
+        cmd = "python3 " + os.path.join(BOARD, "hooks", "tab-status.py")
+        entry = {"hooks": [{"type": "command", "command": cmd, "timeout": 5, "async": True}]}
+        h = dict(d.get("hooks") or {})
+        for ev in ("SessionStart", "UserPromptSubmit", "PreToolUse", "Notification", "Stop", "SessionEnd"):
+            rows = [x for x in (h.get(ev) or []) if cmd not in json.dumps(x)]
+            h[ev] = rows + [entry]
+        d["hooks"] = h
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, p)
+    else:
+        if os.path.exists(bak):
+            shutil.copy2(bak, p)
+            os.remove(bak)
+        elif os.path.exists(p):
+            os.remove(p)
+
+
+@case("RE-02", "本物の判断待ちに、盤のボタンで答えられる(使い捨てのセッションに許可を求めさせて 1 を押す)")
+def re02(ctx):
+    if not os.environ.get("UAT_REAL"):
+        return "SKIP: 本物の AI を動かす試験(UAT_REAL=1 のときだけ)"
+    prof, cfg, why = _real_account()
+    if not prof:
+        return "SKIP: 使えるアカウントが無い(" + why + ")"
+    data = ctx["data"]
+    open(os.path.join(data, "hook-declined"), "w").close()
+    work = os.path.realpath(os.path.join(tempfile.mkdtemp(dir=data), "work"))
+    os.makedirs(work, exist_ok=True)
+    mark = os.path.join(work, "approved.txt")
+    _trust(cfg, work, True)     # _trust は設定の置き場を受ける(中で .claude.json を足す)
+    _hook_into_profile(cfg, True)   # 判断待ちを盤に出すには、そのアカウントに hook が要る(試験の間だけ)
+    out = os.path.join(data, "js-re02.json")
+    cmd = ("CLAUDE_CONFIG_DIR=" + cfg + "; export CLAUDE_CONFIG_DIR; cd " + work
+           + "; command claude --model claude-haiku-4-5-20251001")
+    extra = """
+      // 許可を求めさせる: 道具を使う依頼を 1 つ送る(既定の許可設定では Claude が「いいですか」と聞く)
+      P({type: 'send', tab: s.tab, text: %s, enter: true});
+      let waiting = null;
+      for (let i = 0; i < 160; i++) {                      // 判断待ちになるまで(hook が知らせる)
+        await nap(1000);
+        const x = (board.snap().sessions || []).find(y => y.sid === s.sid);
+        if (x && x.state === '確認待ち') { waiting = x; break; }
+      }
+      if (!waiting) {
+        // 何が起きたのかを、その会話の記録から持ってくる(推測で報告しない)
+        let tl = [];
+        try { tl = ((await fetch('/api/conv?tab=' + encodeURIComponent(s.tab), {headers: {'X-Overview': '1'}}).then(x => x.json())).timeline || [])
+                    .slice(-6).map(e => [e.kind, (e.text || '').slice(0, 60)]); } catch (e) {}
+        return {ok: false, why: '判断待ちにならない', state: ((board.snap().sessions || []).find(y => y.sid === s.sid) || {}).state, tl};
+      }
+      const askedBy = (waiting.ui || {}).action;
+      // 盤の会話ビューを開き、そこのボタン「1 はい」を押す(人がやるのと同じ道)
+      board.select(s.sid);
+      for (let i = 0; i < 40 && !document.querySelector('#cvAsk button'); i++) await nap(250);
+      const btn = document.querySelector('#cvAsk button.primary');
+      if (!btn) return {ok: false, why: '判断待ちのボタンが出ない'};
+      btn.click();
+      let done = false;
+      for (let i = 0; i < 60; i++) {                        // 許可した結果、道具が動いたか
+        await nap(2000);
+        const r = await fetch('/api/exists-uat', {headers: {'X-Overview': '1'}}).catch(() => null);
+        const x = (board.snap().sessions || []).find(y => y.sid === s.sid);
+        if (x && x.state !== '確認待ち') { done = true; break; }
+      }
+      return {ok: true, sid: s.sid, tab: s.tab, action: askedBy, left: done,
+              state: ((board.snap().sessions || []).find(y => y.sid === s.sid) || {}).state};
+    """ % json.dumps(f"Bash ツールで次を実行して: echo APPROVED > {mark}")
+    js = _real_session_js(cmd, work, extra)
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await " + js.strip(), AIBOARD_JS_WAIT="6",
+               AIBOARD_FAST_SHELL="1", AIBOARD_NO_ASK="1")
+    try:
+        subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
+        check(os.path.exists(out), "アプリが結果を書かなかった")
+        r = json.load(open(out))
+        check(r.get("ok"), f"JS が動かなかった {r}")
+        v = r["value"]
+        check(v.get("ok"), f"{v.get('why')} / いまの状態 {v.get('state')} / 会話の末尾 {v.get('tl')}")
+        check(v.get("action") == "answer", f"真理値表の一手が「答える」でない: {v.get('action')}")
+        for _ in range(40):
+            if os.path.exists(mark):
+                break
+            time.sleep(0.5)
+        check(os.path.exists(mark), f"「1 はい」を押したのに道具が動いていない(状態 {v.get('state')})")
+        check(open(mark).read().strip() == "APPROVED", open(mark).read()[:60])
+    finally:
+        _trust(cfg, work, False)
+        _hook_into_profile(cfg, False)
+    return f"{prof} の本物のセッションが許可を求め、盤の「1 はい」で実行された(状態 {v.get('state')})"
+
+
+@case("RE-03", "本物のセッションを盤から終了できる(メモリ一覧の 2 回押し)。端末は残り、盤から消え、記録は残る")
+def re03(ctx):
+    if not os.environ.get("UAT_REAL"):
+        return "SKIP: 本物の AI を動かす試験(UAT_REAL=1 のときだけ)"
+    prof, cfg, why = _real_account()
+    if not prof:
+        return "SKIP: 使えるアカウントが無い(" + why + ")"
+    data = ctx["data"]
+    open(os.path.join(data, "hook-declined"), "w").close()
+    work = os.path.realpath(os.path.join(tempfile.mkdtemp(dir=data), "work"))
+    os.makedirs(work, exist_ok=True)
+    _trust(cfg, work, True)
+    out = os.path.join(data, "js-re03.json")
+    cmd = ("CLAUDE_CONFIG_DIR=" + cfg + "; export CLAUDE_CONFIG_DIR; cd " + work
+           + "; command claude --model claude-haiku-4-5-20251001")
+    extra = """
+      const sid = s.sid, tab = s.tab;
+      // まず 1 往復させる(記録が残るのは会話をした後)
+      P({type: 'send', tab: s.tab, text: '1+1 は? 数字だけで', enter: true});
+      for (let i = 0; i < 60; i++) {
+        await nap(2000);
+        const conv = await fetch('/api/conv?tab=' + encodeURIComponent(tab), {headers: {'X-Overview': '1'}}).then(x => x.json()).catch(() => ({}));
+        if ((conv.timeline || []).some(e => e.kind === '返答')) break;
+      }
+      const pidOf = () => ((board.snap().sessions || []).find(y => y.sid === sid) || {}).pid;
+      const pid0 = pidOf();
+      if (!pid0) return {ok: false, why: 'pid が取れない'};
+      // メモリ一覧を開き、この会話の「終了」を 2 回押す(人がやるのと同じ道)
+      document.querySelector('#btnMem').click();
+      for (let i = 0; i < 40 && !document.querySelector(`.memrow button[data-stop="${tab}"]`); i++) await nap(250);
+      const b = document.querySelector(`.memrow button[data-stop="${tab}"]`);
+      if (!b) return {ok: false, why: 'メモリ一覧に出ない', rows: [...document.querySelectorAll('.memrow button[data-stop]')].map(x => x.dataset.stop)};
+      b.click(); await nap(400); b.click();
+      let gone = false;
+      for (let i = 0; i < 60; i++) {
+        await nap(1000);
+        const x = (board.snap().sessions || []).find(y => y.sid === sid);
+        if (!x || !x.ai || !x.pid) { gone = true; break; }
+      }
+      return {ok: true, sid, tab, pid0, gone, after: (board.snap().sessions || []).find(y => y.sid === sid) || null};
+    """
+    js = _real_session_js(cmd, work, extra)
+    env = dict(os.environ, OVERVIEW_PORT=str(PORT), AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1", AIBOARD_BOARD=BOARD,
+               AIBOARD_JS_TEST=out, AIBOARD_JS="return await " + js.strip(), AIBOARD_JS_WAIT="6",
+               AIBOARD_FAST_SHELL="1", AIBOARD_NO_ASK="1")
+    try:
+        subprocess.run([os.path.join(ROOT, "build", "AIBoard.app", "Contents", "MacOS", "AIBoard")],
+                       env=env, capture_output=True, text=True, timeout=CASE_TIMEOUT - 20)
+        check(os.path.exists(out), "アプリが結果を書かなかった")
+        r = json.load(open(out))
+        check(r.get("ok"), f"JS が動かなかった {r}")
+        v = r["value"]
+        check(v.get("ok"), f"{v.get('why')} {v.get('rows')}")
+        check(v.get("gone"), f"2 回押しても終わらない(pid {v.get('pid0')} / いま {v.get('after')})")
+        check(not _pid_alive(v["pid0"]), f"pid {v['pid0']} が生きたまま")
+        # 端末は残っている(アプリの端末台帳にその tab がある)・記録も残る
+        panes = (r.get("panes") or [])
+        check(any(p.get("tab") == v["tab"] for p in panes), f"終了で端末まで閉じた {panes}")
+        tr = [f for f in glob.glob(os.path.join(cfg, "projects", "*", v["sid"] + ".jsonl"))]
+        check(tr and os.path.getsize(tr[0]) > 0, "記録が残っていない(「過去」から再開できない)")
+    finally:
+        _trust(cfg, work, False)
+    return f"{prof} の本物のセッションを 2 回押しで終了(pid {v['pid0']})・端末は残る・記録 {os.path.basename(tr[0]) if tr else '-'} は残る"
+
+
 @case("RE-01", "本物のセッションに、盤から送って返事が返る(使い捨てのセッションを自分で作る・止めるのは MM-05 が使い捨てプロセスで確かめる)")
 def re01(ctx):
     if not os.environ.get("UAT_REAL"):
@@ -7252,13 +7470,13 @@ def _re01_run(ctx, data, work, cfg, prof):
 
 # ------------------------------------------------------------------ 実行
 MANUAL = [
-    ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない。もう一度 Enter で送られる"),
-    ("MA-02", "通知を押す: 出た通知をクリックすると、その端末が前に出る(出す・届く・押した先の処理は NT-02 で自動)"),
-    ("MA-03", "判断待ちのボタン: 実セッションが許可を求めた時、会話ビューの 1 / 2 / Esc が効く(RE-02 待ち)"),
-    ("MA-05", "終了: 不要なセッションをメモリ一覧で 2 回押しして終了。端末は残り、盤から消え、「過去」から再開できる"),
-    ("MA-06", "別アカウントで続き: 上限に当たったセッションで他アカウントのボタンを押し、続きが開く(ログイン済みアカウントで)"),
-    ("MA-09", "右の端末で開く(別の端末で動いていた会話): 押すと元の端末の AI が終わり、右の端末で同じ会話が続きから開いて、そのまま打てる"),
+    ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない(本物の IME は人の手。合成は CV-02)"),
+    ("MA-02", "通知を押す: 出た通知をクリックすると、その端末が前に出る(出す・届く・押した先の処理は NT-02 で自動。押す操作だけ人)"),
+    ("MA-06", "別アカウントで続き: 上限に当たったセッションで他アカウントのボタンを押し、続きが開く(2 つ目の実アカウントが要る)"),
+    ("MA-09", "右の端末で開く(別の端末で動いていた会話): iTerm の実セッションを右へ移す(利用者の iTerm を触るので人の手)"),
 ]
+# 自動になったもの: MA-03→RE-02(本物の判断待ちに盤で答える) / MA-04→RE-01 / MA-05→RE-03(本物を盤から終了) /
+#                  MA-07→SV-19 / MA-08・MA-10→AP-16 / MA-02 の配信→NT-02・NT-03
 # 自動になったもの: MA-04→RE-01 / MA-07→SV-19 / MA-08・MA-10→AP-16 / MA-02 の配信→NT-02・NT-03
 
 
@@ -7282,17 +7500,31 @@ def main():
         if only and fn.cid not in only:
             continue
         t0 = time.time()
-        try:
-            signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(Fail(f"時間切れ({CASE_TIMEOUT}秒)")))
-            signal.alarm(CASE_TIMEOUT)   # 1 件が固まっても残りを走らせる
-            ev = fn(ctx) or ""
-            status = "SKIP" if str(ev).startswith("SKIP") else "PASS"
-        except Fail as e:
-            status, ev = "FAIL", str(e)
-        except Exception as e:
-            status, ev = "ERROR", f"{type(e).__name__}: {e}"
-        finally:
-            signal.alarm(0)
+        status, ev, tries = None, "", 0
+        while tries < 2:
+            tries += 1
+            lim = case_timeout()
+            try:
+                signal.signal(signal.SIGALRM, lambda *a: (_ for _ in ()).throw(Fail(f"時間切れ({lim}秒・load {load_now():.0f})")))
+                signal.alarm(lim)     # 1 件が固まっても残りを走らせる(混んでいる時は伸ばす)
+                ev = fn(ctx) or ""
+                status = "SKIP" if str(ev).startswith("SKIP") else "PASS"
+            except Fail as e:
+                status, ev = "FAIL", str(e)
+            except Exception as e:
+                status, ev = "ERROR", f"{type(e).__name__}: {e}"
+            finally:
+                signal.alarm(0)
+            # 機械が混んでいる時だけ、アプリを起こす試験を 1 度だけやり直す(隠さず「再試行で通った」と書く)
+            if status == "PASS" or tries > 1 or load_now() < 8 or fn.cid not in RETRY_WHEN_BUSY:
+                break
+            print(f"      …load {load_now():.0f} で失敗。1 度だけやり直す: {str(ev)[:80]}", flush=True)
+            first = str(ev)[:120]
+            time.sleep(5)
+        else:
+            pass
+        if tries > 1 and status == "PASS":
+            ev = f"{ev}（1 回目は load {load_now():.0f} で失敗: {first}）"
         RESULTS.append({"id": fn.cid, "title": fn.title, "status": status, "evidence": str(ev)[:600], "sec": round(time.time() - t0, 1)})
         print(f"{status:5} {fn.cid} {fn.title} ({RESULTS[-1]['sec']}s)\n      {str(ev)[:300]}", flush=True)
     # 後片付け: 試験サーバは自分で止める(ポートで引いた overview_server.py --serve だけ)
