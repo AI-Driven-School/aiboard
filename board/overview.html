@@ -109,6 +109,7 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 .c-badge.need{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
 .c-badge.lim{background:#9747FF;color:#fff}
 .c-badge.auth{background:var(--red);color:#fff;animation:badgepulse 1.6s ease-in-out infinite}
+.c-badge.billing{background:#9747FF;color:#fff}
 @keyframes badgepulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
 @media (prefers-reduced-motion:reduce){.c-badge.need{animation:none}}
 .c-par{font:600 11px var(--mono);color:#0B0B0B;background:#7DD3FC;border-radius:8px;padding:0 5px}
@@ -1086,9 +1087,11 @@ function render() {
     const title = n.live ? (n.task || n.s.topic || n.project || '') : (n.title || n.r.first_prompt || '');
     const doing = n.live ? (stKey === 'limited' ? '' : TD(n.doing)) : (n.r.last_prompt || '');
     // こっちが持っている(あなたが動かないと進まない)ものにバッジ
+    // 印は真理値表(board/decide.py)が決める。古い盤サーバ相手のときだけ、以前の導き方に落ちる
     const stop = n.live && n.s.auth_lost && n.s.auth_lost.fix !== 'wait' ? n.s.auth_lost : null;
-    const mine = n.live ? (stop ? (stop.fix === 'billing' ? 'lim' : 'auth') : n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '') : '';
-    const badge = mine ? `<span class="c-badge ${mine}" title="${esc(stop ? T(stop.label) : mine === 'auth' ? T('ログインが切れて止まっています') : mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${stop && stop.fix === 'billing' ? '¥' : mine === 'auth' ? '🔑' : mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
+    const mine = n.live ? ((n.s.ui && n.s.ui.badge !== undefined) ? n.s.ui.badge
+      : (stop ? (stop.fix === 'billing' ? 'billing' : 'auth') : n.state === '確認待ち' ? 'need' : ((n.state === '返答待ち' || n.state === 'codex 返答待ち') && !(n.s.loop && n.s.loop.wake)) ? 'turn' : (n.s.limit && n.s.limit.active) ? 'lim' : '')) : '';
+    const badge = mine ? `<span class="c-badge ${mine}" title="${esc(stop ? T(stop.label) : mine === 'auth' ? T('ログインが切れて止まっています') : mine === 'need' ? T('判断を待っています') : mine === 'lim' ? T('上限で止まっています') : T('あなたの番です'))}">${mine === 'billing' ? '¥' : mine === 'auth' ? '🔑' : mine === 'need' ? '!' : mine === 'lim' ? '⏸' : '●'}</span>` : '';
     items.push(['n:' + n.id, `<div class="card ${cls} k-${stKey}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:${mc}" title="${esc(title)}">
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>

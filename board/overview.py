@@ -1231,6 +1231,7 @@ def sessions(procs=None, with_official=True):
             # ログインが切れて止まっているか(実測で最多の止まり方。盤に出ていなかった)
             "auth_lost": (claude_auth_error(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None),
         })
+        out[-1]["ui"] = ui_of(out[-1], t)      # 真理値表(board/decide.py)が決めた見せ方と次の一手
     if with_official:
         agents = official_agents()
         for x in out:   # hook が無い/まだ書かれていないセッションは、公式の状態で補う
@@ -1245,8 +1246,35 @@ def sessions(procs=None, with_official=True):
         seen_tty = {x.get("tty") for x in out}
         for b in background_sessions(agents):
             if b["sid"] not in {x.get("sid") for x in out}:
+                b["ui"] = ui_of(b)
                 out.append(b)
     return [apply_group(x) for x in out]
+
+
+def ui_of(s, t=None):
+    """セッション 1 本を真理値表の入力に直して、見せ方と次の一手を決める(board/decide.py)。"""
+    import decide
+    lim = s.get("limit") or {}
+    stop = ""
+    if s.get("auth_lost"):
+        stop = s["auth_lost"].get("kind") or ""
+    elif lim.get("active"):
+        stop = {"5h": "five_hour", "usage": "five_hour", "weekly": "seven_day"}.get(lim.get("kind"), "five_hour")
+    hook = ""
+    if s.get("state") == "確認待ち":
+        hook = "waiting"
+    elif s.get("mark") in ("🟢", "🟩"):
+        hook = "working"
+    elif s.get("state") in ("返答待ち", "codex 返答待ち"):
+        hook = "replied"
+    return decide.decide({
+        "proc": bool(s.get("pid")) or bool(s.get("background")),
+        "stop": stop, "hook": hook,
+        "loop": bool((s.get("loop") or {}).get("wake")),
+        "trusted": (False if s.get("trust_ask") else None),
+        "idle": s.get("idle"),
+        "others": 0,        # 並行は snapshot 側で数える(ここでは 1 本しか見えない)
+    })
 
 
 def parallel_groups(sess):
@@ -1885,6 +1913,7 @@ def snapshot(with_macmini=True):
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
         "notify": {"auth": cs.app_notify_auth()},
         "parallel": parallel_groups(sess),
+        "truth_table": [r[0] for r in __import__("decide").ROWS],
         "sound": sound_on(),
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},

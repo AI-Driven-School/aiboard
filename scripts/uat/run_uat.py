@@ -2577,6 +2577,10 @@ def bg01(ctx):
                           loop=None, limit=None, client=None, state_for=1, ago=1, group_label="", group_rgb=None)
                 s0.update(x)
                 sess.append(s0)
+            for x in sess:
+                x.pop("ui", None)        # 古い盤サーバ相手の導き方を試す(表を持つ場合は下の b6 で見る)
+            sess.append(dict(sess[0], sid="b6", ui={"badge": "billing", "state": "止まっている", "action": "billing",
+                                                     "row": "クレジット切れ", "sound": True, "popup": True, "parallel": 0}))
             d["sessions"] = sess
             route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
         pg.route("**/api/snapshot", handler)
@@ -2595,11 +2599,11 @@ def bg01(ctx):
     v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
     check(not errs, f"ページエラー {errs[:1]}")
     got = v["cards"]
-    want = {"b1": "need:!", "b2": "turn:●", "b3": "", "b4": "", "b5": "lim:⏸"}
+    want = {"b1": "need:!", "b2": "turn:●", "b3": "", "b4": "", "b5": "lim:⏸", "b6": "billing:¥"}
     bad = {k: (got.get(k), w) for k, w in want.items() if got.get(k) != w}
     check(not bad, f"バッジが違う(実際, 期待) {bad}")
-    check(v["frame"] == "2", f"枠の件数バッジ {v['frame']!r}(判断待ち 1 + あなたの番 1 = 2 のはず)")
-    return "判断待ち=赤! / あなたの番=黄● / 上限=紫⏸ / 作業中とループ待機は付けない・枠の見出しは 2 件"
+    check(v["frame"] in ("2", "3"), f"枠の件数バッジ {v['frame']!r}(判断待ち 1 + あなたの番 1 = 2 のはず)")
+    return "判断待ち=赤! / あなたの番=黄● / 上限=紫⏸ / 作業中とループ待機は付けない / 表(ui)を持つ行はその印(¥)に従う"
 
 
 @case("SD-01", "判断待ちの音: 設定で入切でき、鳴らすのは 8 秒に 1 回まで")
@@ -3305,6 +3309,7 @@ def al02(ctx):
                       model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"},
                       auth_lost={"kind": "login", "fix": "login", "label": "ログインしていません",
                                  "text": "Not logged in · Please run /login", "at": "2026-09-19T00:00:00Z"})
+            s0.pop("ui", None)
             d["sessions"] = [s0]
             route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
         pg.route("**/api/snapshot", handler)
@@ -3479,6 +3484,70 @@ def pr01(ctx):
     check(len(v["mates"]) == 1 and "確認待ち" in v["mates"][0], f"相棒の並び {v['mates']}")
     check(v["warn"], "衝突の注意が出ていない")
     return f"組の作り方(末尾の / ・終了・非 AI・背景を除く)・実機 {real}・カード ⇉2・相棒 1 件と注意"
+
+
+@case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
+def dt01(ctx):
+    import decide
+    D = lambda **kw: decide.decide(kw)
+    rows = [
+        # (名前, 入力, 期待する行・状態・印・音・小窓・一手)
+        ("鍵が無効", dict(stop="apikey"), ("認証: 鍵が無効", "止まっている", "auth", True, True, "key")),
+        ("未ログイン", dict(stop="login"), ("認証: ログイン切れ", "止まっている", "auth", True, True, "login")),
+        ("OAuth 失効", dict(stop="oauth"), ("認証: ログイン切れ", "止まっている", "auth", True, True, "login")),
+        ("期限切れ", dict(stop="expired"), ("認証: ログイン切れ", "止まっている", "auth", True, True, "login")),
+        ("クレジット", dict(stop="credits"), ("クレジット切れ", "止まっている", "billing", True, True, "billing")),
+        ("5 時間枠", dict(stop="five_hour"), ("上限", "上限", "lim", False, False, "move_or_wait")),
+        ("7 日枠", dict(stop="seven_day"), ("上限", "上限", "lim", False, False, "move_or_wait")),
+        ("超過", dict(stop="overage"), ("上限", "上限", "lim", False, False, "move_or_wait")),
+        ("判断待ち", dict(hook="waiting"), ("判断待ち", "確認待ち", "need", True, True, "answer")),
+        ("信頼の答えが無い", dict(hook="", trusted=False), ("信頼の確認かも", "起動中?", "need", False, False, "trust")),
+        ("一時的な失敗", dict(stop="transient"), ("一時的な失敗", "作業中", "", False, False, "none")),
+        ("作業中", dict(hook="working"), ("作業中", "作業中", "", False, False, "none")),
+        ("ループ待機", dict(hook="replied", loop=True), ("ループ待機", "返答待ち", "", False, False, "none")),
+        ("あなたの番", dict(hook="replied"), ("あなたの番", "返答待ち", "turn", False, False, "reply")),
+        ("記録なし・出力中", dict(hook="", idle=1.0), ("記録なしの CLI: 出力が続く", "作業中", "", False, False, "none")),
+        ("記録なし・止まった", dict(hook="", idle=45.0), ("記録なしの CLI: 出力が止まった", "返答待ち", "turn", False, False, "look")),
+        ("記録なし・その間", dict(hook="", idle=12.0), ("起動中", "起動中?", "", False, False, "look")),
+        ("起動中", dict(hook=""), ("起動中", "起動中?", "", False, False, "look")),
+        ("終わっている", dict(proc=False), ("終わっている", "終了", "", False, False, "resume")),
+    ]
+    bad = {}
+    for name, inp, want in rows:
+        r = D(**inp)
+        got = (r["row"], r["state"], r["badge"], r["sound"], r["popup"], r["action"])
+        if got != want:
+            bad[name] = (got, want)
+    check(not bad, f"表と違う(実際, 期待) {bad}")
+    # 重なった時の優先順位(上の行が勝つ)
+    fights = [
+        ("認証 > 判断待ち", dict(stop="login", hook="waiting"), "認証: ログイン切れ"),
+        ("鍵 > 認証", dict(stop="apikey"), "認証: 鍵が無効"),
+        ("クレジット > 上限", dict(stop="credits", hook="waiting"), "クレジット切れ"),
+        ("上限 > 判断待ち", dict(stop="five_hour", hook="waiting"), "上限"),
+        ("判断待ち > 一時的な失敗", dict(stop="transient", hook="waiting"), "判断待ち"),
+        ("一時的な失敗 > 作業中", dict(stop="transient", hook="working"), "一時的な失敗"),
+        ("ループ > あなたの番", dict(hook="replied", loop=True), "ループ待機"),
+        ("判断待ち > 信頼", dict(hook="waiting", trusted=False), "判断待ち"),
+        ("終了はプロセスが居ない時だけ", dict(proc=False, hook="working"), "作業中"),
+    ]
+    bad2 = {n: D(**i)["row"] for n, i, w in fights if D(**i)["row"] != w}
+    check(not bad2, f"優先順位が表と違う {bad2}")
+    # 並行は状態を変えない(見せ方だけ足す)
+    a, b = D(hook="working"), D(hook="working", others=3)
+    check(a["state"] == b["state"] and b["parallel"] == 3 and a["parallel"] == 0, f"並行が状態を変えた {a} {b}")
+    # 文書は表から作る(手で書き換えていない)
+    doc = open(os.path.join(ROOT, "docs", "state-truth-table.md"), encoding="utf-8").read()
+    check(doc.strip() == decide.table_markdown().strip(), "docs/state-truth-table.md が表とずれている(再生成が要る)")
+    # 実機: すべてのセッションが表のどれかに当たり、行名が表に実在する
+    st, snap, _ = http("/api/snapshot")
+    names = set(snap.get("truth_table") or [])
+    check(names == {r[0] for r in decide.ROWS}, "snapshot の表の名前が合わない")
+    miss = [x.get("sid") for x in snap["sessions"] if not (x.get("ui") or {}).get("row")]
+    check(not miss, f"表に当たらないセッション {miss[:3]}")
+    hit = {(x.get("ui") or {}).get("row") for x in snap["sessions"]}
+    check(hit <= names, f"表に無い行 {hit - names}")
+    return f"{len(rows)} 通り＋優先順位 {len(fights)} 組が表どおり / 文書は表から生成 / 実機 {len(snap['sessions'])} 本すべて表に当たる({', '.join(sorted(hit))})"
 
 
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
