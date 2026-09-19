@@ -1768,8 +1768,8 @@ def cs01(ctx):
     try:
         cs.APP_PANES = p
         write({"app_pid": alive.pid, "panes": panes})
-        exp = [{"win": 0, "tab": 1, "tty": "ttys900", "title": "shell", "app": True},
-               {"win": 0, "tab": 2, "tty": "ttys901", "title": "", "app": True}]
+        exp = [{"win": 0, "tab": 1, "tty": "ttys900", "title": "shell", "app": True, "deleg": ""},
+               {"win": 0, "tab": 2, "tty": "ttys901", "title": "", "app": True, "deleg": ""}]
         got = cs.app_panes()
         check(got == exp, f"生きているアプリ: {got}")
         write({"app_pid": gone.pid, "panes": panes})
@@ -2001,11 +2001,11 @@ def nt03(ctx):
     def fn(pg, errs, bl):
         out = {}
         for auth, shown in (("denied", True), ("notDetermined", True), ("authorized", False), ("", False)):
-            pg.evaluate("""(a) => { board.snap().notify = {auth: a}; board.toolbar(); }""", auth)
-            pg.wait_for_timeout(250)
-            w = pg.query_selector("#notifyWarn")
-            out[auth or "(空)"] = {"shown": bool(w and not w.get_attribute("hidden") and w.is_visible()),
-                                   "text": (w.inner_text() if w else ""), "expect": shown}
+            # 描き直し(2.5 秒ごと)と競合しないよう、書き換えと読み取りを同じ処理の中で行う
+            got = pg.evaluate("""(a) => { board.snap().notify = {auth: a}; board.toolbar();
+                const w = document.querySelector('#notifyWarn');
+                return {shown: !!w && !w.hidden && w.getBoundingClientRect().width > 0, text: w ? w.textContent : ''}; }""", auth)
+            out[auth or "(空)"] = dict(got, expect=shown)
         pg.evaluate("board.setToApp(m => { window.__sent = (window.__sent || []).concat([m]); })")
         # 盤は 2.5 秒ごとに本物の snapshot で描き直す(このページには通知の状態が無い→隠れる)ので、
         # 出した直後に同じ処理の中で押す(人がクリックするのと同じ onclick)
