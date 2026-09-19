@@ -124,9 +124,12 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
     }
 
     /// 端末のプロセスは libghostty が起こすので pid は見えない。このアプリの子(login ラッパー)のうち、
-    /// 引数に pane-<id>.sh を持つものの tty を取る。起動直後は居ないことがあるので数回試す。
+    /// 引数に pane-<id>.sh を持つものの tty を取る。起動直後は居ないことがあるので、端末が生きている限り探し続ける。
+    /// 以前は約 10 秒で諦めていたため、機械が混んでいる時(load 30〜80)は tty が空のまま＝台帳に載らず、
+    /// その端末は盤から永久に見えなかった(2026-09-19 実測)。最初の 15 秒は 1.5 秒ごと、その後は 5 秒ごと。
     private func resolveTty(attempt: Int) {
-        DispatchQueue.global().asyncAfter(deadline: .now() + (attempt == 0 ? 0.6 : 1.5)) { [weak self] in
+        let delay = attempt == 0 ? 0.6 : (attempt < 10 ? 1.5 : 5.0)
+        DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/ps")
             p.arguments = ["-ww", "-o", "pid=,ppid=,tty=,command=", "-u", String(getuid())]
@@ -146,7 +149,7 @@ final class Pane: NSObject, TerminalSurfaceTitleDelegate, TerminalSurfaceCloseDe
             }
             DispatchQueue.main.async {
                 if let (pid, tty) = found { self.pid = pid; self.tty = tty; self.manager?.publish() }
-                else if attempt < 6 { self.resolveTty(attempt: attempt + 1) }
+                else if let m = self.manager, m.panes.contains(where: { $0 === self }), attempt < 400 { self.resolveTty(attempt: attempt + 1) }   // 閉じた端末は探さない
             }
         }
     }

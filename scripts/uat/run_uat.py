@@ -6602,7 +6602,7 @@ def _pid_alive(pid):
         return False
 
 
-@case("RE-01", "本物のセッションに、盤から送って返事が返り、盤から止められる(使い捨てのセッションを自分で作る)")
+@case("RE-01", "本物のセッションに、盤から送って返事が返る(使い捨てのセッションを自分で作る・止めるのは MM-05 が使い捨てプロセスで確かめる)")
 def re01(ctx):
     if not os.environ.get("UAT_REAL"):
         return "SKIP: 本物の AI を動かす試験(UAT_REAL=1 のときだけ。わずかに利用枠を使う)"
