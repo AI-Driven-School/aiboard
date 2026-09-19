@@ -3095,6 +3095,161 @@ def ap17(ctx):
     return f"親の印 {len(extra)} 個を消して始まる(AIBOARD_PANE・TERM_PROGRAM は付く)"
 
 
+@case("OA-01", "記録を持たない CLI(Gemini/Grok/Cursor)の状態: 端末に文字が出ていれば作業中、止まっていればこちらの番")
+def oa01(ctx):
+    import cs
+    # tty の更新時刻が出力に追従することを、実物で確かめる(前提の確認)
+    real = [t for t in {l.split()[0] for l in subprocess.run(["/bin/ps", "-axo", "tty=,command="], capture_output=True, text=True).stdout.splitlines() if l.startswith("ttys")}]
+    vals = [cs.tty_idle(t) for t in real]
+    check(any(v is not None and v < 5 for v in vals) and any(v is not None and v > 60 for v in vals),
+          f"動いている端末と放置された端末の差が出ない(前提が崩れている) {sorted(v for v in vals if v is not None)[:6]}")
+    check(cs.tty_idle("nope") is None and cs.tty_idle("") is None, "形の違う tty で落ちる/何か返す")
+
+    def stub(**kw):
+        keep = {n: getattr(cs, n) for n in ("session_record", "tab_state", "find_transcript", "screen_text", "proc_cwd",
+                                            "proc_start", "codex_session", "model_from_transcript", "last_user_prompt",
+                                            "first_user_prompt", "trusted_cwd", "tty_idle", "_clients")}
+        for n in keep:
+            setattr(cs, n, lambda *a, **k: (_ for _ in ()).throw(AssertionError("外部を見に行った")))
+        cs._clients = None
+        for n, v in kw.items():
+            setattr(cs, n, v)
+        return keep
+    P = lambda ppid, rss, tty, cmd: {"ppid": ppid, "rss": rss, "tty": tty, "cmd": cmd}
+    rows = [(1, "/opt/homebrew/bin/gemini", 1.0, "作業中", "🟢"), (2, "/opt/homebrew/bin/grok", 45.0, "返答待ち", "🟡"),
+            (3, "/Users/x/.local/bin/cursor-agent", 12.0, "作業中", "🟢"), (4, "/opt/homebrew/bin/gemini", None, "他の AI", "🔵")]
+    procs, tabs, idles = {}, [], {}
+    for n, cmd, idle, _, _ in rows:
+        tty = f"ttys8{n:02d}"
+        procs[100 + n * 10] = P(1, 500, tty, "/usr/bin/login -fp x")
+        procs[101 + n * 10] = P(100 + n * 10, 900, tty, "-zsh")
+        procs[102 + n * 10] = P(101 + n * 10, 30000, tty, cmd)
+        tabs.append({"win": 9, "tab": n, "tty": tty, "title": "x"})
+        idles[tty] = idle
+    keep = stub(session_record=lambda pid: None, tab_state=lambda sid: {}, find_transcript=lambda sid: "",
+                screen_text=lambda *a, **k: "", proc_cwd=lambda pid: "/tmp/uat", proc_start=lambda pid: time.time() - 600,
+                trusted_cwd=lambda cwd, ttl=20: True, tty_idle=lambda tty: idles.get(str(tty)))
+    try:
+        got = {t["tab"]: (t["state"], t["mark"], t.get("doing", ""), t.get("idle")) for t in cs.classify(tabs, procs)}
+    finally:
+        for n, v in keep.items():
+            setattr(cs, n, v)
+    bad = {n: (got[n][:2], (st, mk)) for n, _, _, st, mk in rows if got[n][:2] != (st, mk)}
+    check(not bad, f"判定が違う(実際, 期待) {bad}")
+    check("Gemini" in got[1][2] and "止まっている" in got[2][2] and "45秒" in got[2][2], f"理由の文 {got[1][2]!r} {got[2][2]!r}")
+    check(got[4][3] is None and got[4][2] == "", f"端末が分からない時は断定しない {got[4]}")
+    return "出力 1 秒=作業中 / 45 秒=返答待ち(理由つき) / 12 秒=作業中 / 端末不明=他の AI。前提(tty の更新時刻)も実機で確認"
+
+
+@case("UU-01", "利用状況: 自分のログから窓の使用量を数え、上限に当たった時の量を母数として学習し、% は目安として出す")
+def uu01(ctx):
+    import importlib
+    import usage as U
+    importlib.reload(U)
+    import datetime
+    cfg = tempfile.mkdtemp(dir=ctx["data"])
+    proj = os.path.join(cfg, "projects", "p1")
+    os.makedirs(proj)
+    now = time.time()
+    iso = lambda off: datetime.datetime.utcfromtimestamp(now - off).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    J = lambda d: json.dumps(d, ensure_ascii=False)
+    lines = []
+    for off, inp, out in ((60, 100, 10), (3600, 200, 20), (6 * 3600, 999999, 0)):     # 3 つ目は 5 時間枠の外
+        lines.append(J({"type": "assistant", "timestamp": iso(off), "message": {"usage": {"input_tokens": inp, "output_tokens": out}}}))
+    lines.append(J({"type": "user", "timestamp": iso(30), "message": {"role": "user", "content": "x"}}))   # 依頼は数えない
+    lines.append("{壊れた行")
+    open(os.path.join(proj, "a.jsonl"), "w").write("\n".join(lines) + "\n")
+    U._CACHE.clear()
+    five = U.window_usage(cfg, "five_hour", now=now)
+    check(five["requests"] == 2 and five["tokens"] == 330, f"5 時間枠の集計 {five}")
+    seven = U.window_usage(cfg, "seven_day", now=now, ttl=0)
+    check(seven["requests"] == 3 and seven["tokens"] == 1000329, f"7 日枠の集計 {seven}")
+    st = U.status(cfg, now=now)
+    check(st["windows"]["five_hour"]["percent"] is None, "母数が無いのに % を出した")
+    # 上限に当たった記録があれば、その時の量を母数として学習する
+    lines.append(J({"type": "assistant", "timestamp": iso(20), "isApiErrorMessage": True,
+                    "quotaLimits": {"status": "rejected", "rateLimitType": "five_hour", "resetsAt": int(now + 1800)},
+                    "message": {"usage": {"input_tokens": 70, "output_tokens": 0}}}))
+    open(os.path.join(proj, "a.jsonl"), "w").write("\n".join(lines) + "\n")
+    U._CACHE.clear()
+    st = U.status(cfg, now=now)
+    w = st["windows"]["five_hour"]
+    check(w["tokens"] == 400 and w["cap_tokens"] == 400 and w["percent"] == 100, f"学習 {w}")
+    check(w["resets_at"] == int(now + 1800), f"解除時刻 {w['resets_at']}")
+    # 使用量が減っても母数は下がらない(次の窓では % が下がる)
+    U._CACHE.clear()
+    later = U.status(cfg, now=now + 4 * 3600)
+    w2 = later["windows"]["five_hour"]
+    check(w2["cap_tokens"] == 400 and (w2["percent"] or 0) < 100, f"母数が下がった/% が下がらない {w2}")
+    # 末尾しか読まない(大きなログでも全部読まない)
+    check(U.TAIL_BYTES <= 8_000_000, "末尾読みの上限が大きすぎる")
+    big = os.path.join(proj, "big.jsonl")
+    with open(big, "w") as f:
+        f.write(("x" * 999 + "\n") * 8000)      # 8MB の雑音
+        f.write(J({"type": "assistant", "timestamp": iso(10), "message": {"usage": {"input_tokens": 5, "output_tokens": 5}}}) + "\n")
+    U._CACHE.clear()
+    t0 = time.time(); five2 = U.window_usage(cfg, "five_hour", now=now, ttl=0); el = time.time() - t0
+    check(five2["tokens"] == 410 and el < 3, f"大きなログの扱い {five2} {el:.1f}s")
+    # 実機: 盤の口は待たせない(裏で数える)
+    t0 = time.time(); st_, d, _ = http("/api/usage"); api_ms = (time.time() - t0) * 1000
+    check(st_ == 200 and "accounts" in d and "公式の使用率ではありません" in d.get("note", ""), f"/api/usage {str(d)[:120]}")
+    check(api_ms < 1500, f"/api/usage が待たされる {api_ms:.0f}ms")
+    return f"窓の集計(壊れた行・依頼・窓外を除く)・母数の学習(400)・% は目安・母数は下がらない・8MB のログでも {el:.1f}s・API {api_ms:.0f}ms"
+
+
+@case("PT-01", "他の OS でも動く道: tmux のパネルを端末として拾い、tmux send-keys で送り、/proc の代わりも用意してある")
+def pt01(ctx):
+    import cs
+    if not shutil.which("tmux"):
+        return "SKIP: tmux が無い"
+    sock = os.path.join(tempfile.mkdtemp(dir=ctx["data"]), "s")
+    sess = "aiboard-uat-" + str(int(time.time()))
+    mark = os.path.join(ctx["data"], f"tmux-{time.time_ns()}.txt")
+    env = dict(os.environ, TMUX="")
+    real_run = subprocess.run   # 差し替え中に自分を呼ばないよう、素の run を掴んでおく
+    run = lambda *a: real_run(["tmux", "-S", sock, *a], capture_output=True, text=True, timeout=20, env=env)
+    run("new-session", "-d", "-s", sess, "/bin/zsh", "-f")
+    try:
+        for _ in range(20):
+            out = run("list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}").stdout
+            if out.strip():
+                break
+            time.sleep(0.5)
+        check(out.strip(), "tmux のパネルが作れない")
+        tty, target = out.split("\t")[0], out.split("\t")[1]
+        # 盤の読み取り: tmux_panes() が同じ形(win=8・tty・tmux)で返す
+        keep = cs.subprocess.run
+        cs.subprocess.run = lambda a, **k: run(*a[1:]) if a and a[0] == "tmux" else real_run(a, **k)
+        try:
+            rows = cs.tmux_panes()
+        finally:
+            cs.subprocess.run = keep
+        mine = [r for r in rows if r["tty"] == tty.replace("/dev/", "")]
+        check(mine and mine[0]["win"] == 8 and mine[0]["tmux"] == target, f"tmux のパネルを拾えない {rows[:2]}")
+        # 送信: tmux send-keys で本当にシェルが実行する
+        import overview_server as osv
+        keep2 = osv.subprocess.run
+        osv.subprocess.run = lambda a, **k: run(*a[1:]) if a and a[0] == "tmux" else real_run(a, **k)
+        try:
+            ok, why = osv._tmux_send(target, f"echo TMUX_OK > {mark}", True, None)
+        finally:
+            osv.subprocess.run = keep2
+        check(ok, f"tmux send-keys が失敗 {why}")
+        for _ in range(40):
+            if os.path.exists(mark):
+                break
+            time.sleep(0.25)
+        check(os.path.exists(mark) and open(mark).read().strip() == "TMUX_OK", f"tmux のシェルが実行していない({os.path.exists(mark)})")
+    finally:
+        run("kill-session", "-t", sess)
+    # Linux の代替路が用意してあること(この Mac では通らないので、関数の存在と形だけ)
+    check(hasattr(cs, "_open_files_proc") and cs.IS_MAC is (sys.platform == "darwin"), "Linux 用の代替が無い")
+    src = open(os.path.join(BOARD, "cs.py"), encoding="utf-8").read()
+    check('"/bin/ps"' not in src, "ps を絶対パスで呼んでいる(Linux で見つからない)")
+    check("/proc/{int(pid)}/cwd" in src and "/proc/{int(pid)}" in src, "cwd と開始時刻の Linux 版が無い")
+    return f"tmux: 拾える({target})・send-keys でシェルが実行した / ps は PATH から / cwd・開始時刻・開いているファイルに /proc の道がある"
+
+
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")
 def sc01(ctx):
     import overview as o

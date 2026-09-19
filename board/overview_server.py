@@ -134,6 +134,24 @@ SEND_KEYS = {"enter": "\r", "esc": "\x1b", "ctrl-c": "\x03", "up": "\x1b[A", "do
 SEND_LOG = aiboard_paths.data("send.log")
 
 
+def _tmux_send(target, text, enter, key):
+    """tmux のパネルへ送る(Linux の端末はこれ)。iTerm の AppleScript と同じ役割。"""
+    if key == "esc":
+        args = ["tmux", "send-keys", "-t", target, "Escape"]
+    elif key == "enter":
+        args = ["tmux", "send-keys", "-t", target, "Enter"]
+    elif key in ("up", "down"):
+        args = ["tmux", "send-keys", "-t", target, key.capitalize()]
+    else:
+        args = ["tmux", "send-keys", "-t", target, "-l", text]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=10)
+    if r.returncode != 0:
+        return False, (r.stderr.strip() or "tmux send-keys が失敗")[:160]
+    if not key and enter:
+        subprocess.run(["tmux", "send-keys", "-t", target, "Enter"], capture_output=True, text=True, timeout=10)
+    return True, ""
+
+
 def send_to_tab(body):
     """盤から iTerm のタブへ文字かキーを送る。{tab, sid, text?|key?, enter?}
 
@@ -157,6 +175,17 @@ def send_to_tab(body):
     if now["sid"] != sid:
         return False, f"タブ {tab} の中身が入れ替わっている(送らなかった)。盤を更新してやり直す"
     payload = SEND_KEYS[key] if key is not None else text
+    if str(tab).startswith("8-") or not cs.IS_MAC:
+        # tmux のパネル(Linux の端末・mac でも tmux を使っている時)
+        target = next((p.get("tmux") for p in cs.tmux_panes() if p["tty"] == now.get("tty", "")), None)
+        if not target:
+            return False, "tmux のパネルが見つからない(閉じられた)"
+        ok, why = _tmux_send(target, text or "", bool(body.get("enter", True)), key)
+        with open(SEND_LOG, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "tab": tab, "sid": sid, "key": key,
+                                "text": text if key is None else None, "via": "tmux", "target": target,
+                                "rc": 0 if ok else 1, "err": why}, ensure_ascii=False) + "\n")
+        return ok, (why or "送った")
     # 宛先は tty で指す(タブ番号は位置ずれする)。見つからなければ送らない
     chars = ", ".join(str(ord(c)) for c in payload)
     nl = "YES" if (key is None and body.get("enter", True)) else "NO"
@@ -330,6 +359,16 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/usage":
+                # アカウントごとの利用状況(自分のログから数えた量＋学習した母数に対する目安の %)
+                import usage
+                rows = {}
+                for a in (_login.get("data") or overview.login_status()):
+                    if a.get("ai") != "Claude" or not a.get("config_dir"):
+                        continue
+                    rows[a["profile"]] = {"config_dir": a["config_dir"], "usage": usage.status_async(a["config_dir"])}
+                self._json(200, {"ok": True, "accounts": rows, "note": "公式の使用率ではありません。使った量は自分の会話ログから数えたもの、"
+                                                                      "% は前に上限に当たった時の使用量を 100% とした目安です"})
             elif path == "/api/judge":
                 import judge
                 self._json(200, {"ok": True, **judge.status()})

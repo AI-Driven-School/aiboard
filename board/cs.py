@@ -31,6 +31,7 @@ import time
 import unicodedata
 
 HOME = os.path.expanduser("~")
+IS_MAC = sys.platform == "darwin"   # 盤サーバは Linux でも動く(iTerm の代わりに tmux、lsof の代わりに /proc)
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import aiboard_paths  # noqa: E402
 try:
@@ -142,7 +143,30 @@ def go_tty(tty):
 _LAST_ITERM = {"rows": [], "t": 0, "fail_t": 0}
 
 
+def tmux_panes():
+    """tmux の窓を、iTerm のタブと同じ形で返す(win=8、tab=通し番号)。Linux ではこれが端末の出どころ。
+
+    tmux が無い・動いていなければ空。送信は tmux send-keys(overview_server 側)。
+    """
+    try:
+        r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode != 0:
+        return []
+    rows = []
+    for i, line in enumerate(r.stdout.splitlines(), 1):
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0].startswith("/dev/"):
+            rows.append({"win": 8, "tab": i, "tty": parts[0].replace("/dev/", ""),
+                         "title": parts[2] if len(parts) > 2 else "", "tmux": parts[1]})
+    return rows
+
+
 def iterm_sessions():
+    if not IS_MAC:
+        return tmux_panes() + app_panes()   # iTerm は mac だけ。他の OS では tmux
     # iTerm の tell ブロック内では `tab` がタブ文字でなく「タブ」オブジェクトになるので、区切りは外で作る
     script = '''
     set TB to ASCII character 9
@@ -198,6 +222,21 @@ def app_panes():
             for p in d.get("panes", []) if p.get("tty")]
 
 
+def tty_idle(tty):
+    """その端末に最後に文字が出てから何秒経ったか。端末のデバイスの更新時刻を見るだけ(実測で出力に追従する)。
+
+    状態の記録を持たない CLI(Gemini / Grok / Cursor)でも「動いているのか、こちらを待っているのか」を
+    これで見分ける。分からなければ None。
+    """
+    t = str(tty or "").replace("/dev/", "")
+    if not re.fullmatch(r"ttys\d+", t):
+        return None
+    try:
+        return max(0.0, time.time() - os.stat("/dev/" + t).st_mtime)
+    except OSError:
+        return None
+
+
 def app_notify_auth():
     """アプリが記録した通知の許可の状態(authorized / denied / notDetermined …)。アプリが動いていなければ空。
 
@@ -214,7 +253,7 @@ def app_notify_auth():
 
 
 def processes():
-    out = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,rss=,tty=,command="],
+    out = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,tty=,command="],
                          capture_output=True, text=True).stdout
     procs = {}
     for line in out.splitlines():
@@ -410,12 +449,18 @@ def short_model(model):
 
 
 def proc_start(pid):
-    r = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+    r = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
                        env={**os.environ, "LC_ALL": "C"})
     try:
         return time.mktime(time.strptime(r.stdout.strip(), "%a %b %d %H:%M:%S %Y"))
     except ValueError:
-        return None
+        pass
+    if not IS_MAC:      # Linux: /proc の作成時刻(ps の書式が違うため)
+        try:
+            return os.stat(f"/proc/{int(pid)}").st_ctime
+        except (OSError, ValueError):
+            return None
+    return None
 
 
 def codex_rollout_path(cwd, started):
@@ -439,6 +484,22 @@ def codex_rollout_path(cwd, started):
     return best
 
 
+def _open_files_proc(pids):
+    """Linux: /proc/<pid>/fd から開いているファイルを読む(lsof の代わり)。"""
+    out = []
+    for p in pids:
+        d = f"/proc/{p}/fd"
+        try:
+            for fd in os.listdir(d):
+                try:
+                    out.append(os.readlink(os.path.join(d, fd)))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return out
+
+
 def codex_rollout_by_lsof(pids):
     """codex のプロセスが実際に開いている記録(rollout)を返す。推定でなく確定。
 
@@ -447,8 +508,12 @@ def codex_rollout_by_lsof(pids):
     """
     if not pids:
         return None
-    r = subprocess.run(["lsof", "-p", ",".join(str(p) for p in pids), "-Fn"], capture_output=True, text=True)
-    hits = [l[1:] for l in r.stdout.splitlines() if l.startswith("n") and re.search(r"/rollout-[^/]+\.jsonl$", l)]
+    if not IS_MAC:
+        names = _open_files_proc(pids)
+    else:
+        r = subprocess.run(["lsof", "-p", ",".join(str(p) for p in pids), "-Fn"], capture_output=True, text=True)
+        names = [l[1:] for l in r.stdout.splitlines() if l.startswith("n")]
+    hits = [n for n in names if re.search(r"/rollout-[^/]+\.jsonl$", n)]
     return max(hits, key=os.path.getmtime) if hits else None
 
 
@@ -516,6 +581,11 @@ def model_from_transcript(path):
 
 
 def proc_cwd(pid):
+    if not IS_MAC:      # Linux: lsof を入れなくても読める
+        try:
+            return os.readlink(f"/proc/{int(pid)}/cwd")
+        except (OSError, ValueError):
+            return ""
     r = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture_output=True, text=True)
     for line in r.stdout.splitlines():
         if line.startswith("n"):
@@ -565,6 +635,15 @@ def trusted_cwd(cwd, ttl=20):
 
 
 # ---------------------------------------------------------------- 判定 ----
+# 記録を持たない CLI の見分け方: 出力が OTHER_AI_BUSY 秒以内なら作業中、OTHER_AI_TURN 秒以上止まったらこちらの番
+OTHER_AI_BUSY = 5
+OTHER_AI_TURN = 30
+
+
+def fmt_idle(sec):
+    return f"{int(sec)}秒" if sec < 60 else f"{sec / 60:.0f}分"
+
+
 def classify(tabs, procs):
     by_tty = {}
     for pid, v in procs.items():
@@ -577,7 +656,7 @@ def classify(tabs, procs):
         t.update(state="終了(古い題名)", mark="⚪", mem=0, ago=None, cwd="", topic="", pid=None,
                  ai="", doing="", sid="", task="", model="", model_id="", model_style=None,
                  account="", transcript="", state_since=None, started=None, client=None, subagents={},
-                 trust_ask="")
+                 trust_ask="", idle=None)
         topic = re.sub(r"^[✳◐◑◒◓⠂⠐·\s]+", "", t["title"])
         topic = re.sub(r"\s*\([^)]*\)\s*$", "", topic)
         topic = re.sub(r"^\[ [.!] \] Action Required \| ", "", topic)
@@ -685,9 +764,19 @@ def classify(tabs, procs):
             oth = [p for p in pids if other_ai(procs[p]["cmd"])]
             root = outermost_ai(procs, oth)
             label = other_ai(procs[root]["cmd"])
-            t.update(state="他の AI", mark="🔵", ai=label, model="", model_id="", model_style=model_style(""),
+            # 状態の記録が無い CLI は、端末に文字が出ているかで見分ける(唯一取れる一次情報)
+            idle = tty_idle(t.get("tty"))
+            if idle is None:
+                state, mark, doing = "他の AI", "🔵", ""
+            elif idle < OTHER_AI_BUSY:
+                state, mark, doing = "作業中", "🟢", f"{label}: 出力が続いている"
+            elif idle >= OTHER_AI_TURN:
+                state, mark, doing = "返答待ち", "🟡", f"{label}: 出力が {fmt_idle(idle)} 止まっている"
+            else:
+                state, mark, doing = "作業中", "🟢", f"{label}: 出力が {fmt_idle(idle)} 止まっている"
+            t.update(state=state, mark=mark, ai=label, model="", model_id="", model_style=model_style(""),
                      pid=root, mem=descendants_rss(procs, root), cwd=proc_cwd(root), started=proc_start(root),
-                     doing="", task="", topic=label)
+                     doing=doing, task="", topic=label, idle=idle, state_since=(time.time() - idle) if idle is not None else None)
         elif len(pids) > 1:
             # zsh 以外のジョブがある(ssh・npm run dev など)
             # iTerm はシェルを login 経由で起動するので、login とシェル自身はジョブに数えない

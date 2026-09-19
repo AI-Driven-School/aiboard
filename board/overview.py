@@ -1128,6 +1128,7 @@ def sessions(procs=None, with_official=True):
             "tab": f"{t['win']}-{t['tab']}",
             "tty": t.get("tty", ""),
             "deleg": t.get("deleg", ""),      # 「任せる」で起こした端末なら、その控えの id
+            "idle": t.get("idle"),            # 端末に最後に文字が出てからの秒数(記録を持たない CLI の判断に使う)
             "sid": t.get("sid", ""),
             "state": t["state"], "mark": t["mark"],
             "ai": t.get("ai", ""), "model": t.get("model", ""), "account": t.get("account", ""),

@@ -5,22 +5,27 @@
 
 ## 1. 一度だけ: Developer ID 証明書を作る（あなたの操作・2 分）
 
-Radineer（チーム K7CD7UAWWC）の Apple Developer Program は有効なので、**追加の支払いは要りません**。
-いまアカウントにあるのは開発用 2 枚と配布用（App Store 用）2 枚だけで、外部配布用の Developer ID がありません。
+API では作れません（`403 This operation can only be performed by the Account Holder.` 2026-09-19 に再確認）。
+**Xcode を使う道と、ブラウザだけの道**のどちらでもよく、後者の方が速いです。
 
-1. Xcode を開く → `Settings…` → `Accounts`
-2. Apple ID を選び、右下の **Manage Certificates…**
-3. 左下の **＋** → **Developer ID Application**
-4. チームが複数出たら **RADINEER, LIMITED LIABILITY COMPANY (K7CD7UAWWC)** を選ぶ
+### ブラウザだけ（推奨・CSR は作成済み）
 
-作れたか確認:
+1. `zsh scripts/make-devid-csr.sh`（もう作ってあります: `~/aiboard-private/signing/devid.csr`）
+2. https://developer.apple.com/account/resources/certificates/add を開く
+3. **Developer ID Application** を選ぶ → 上の CSR を上げる → `.cer` をダウンロード
+4. `zsh scripts/install-devid-cert.sh ~/Downloads/developerID_application.cer`
+   （秘密鍵と組にして鍵束に入れ、`security find-identity` で見えることまで確かめます）
+
+### Xcode を使う道
+
+1. Xcode → `Settings…` → `Accounts` → Apple ID → **Manage Certificates…**
+2. 左下 **＋** → **Developer ID Application**（チームは RADINEER, LIMITED LIABILITY COMPANY (K7CD7UAWWC)）
+
+どちらでも、できたか確認:
 
 ```sh
 security find-identity -v -p codesigning | grep "Developer ID Application"
 ```
-
-（Xcode を使わない場合は `dist/` 手順ではなく、developer.apple.com → Certificates → ＋ → Developer ID Application で
-`~/aiboard/../devid.csr` を上げても作れます。CSR は `scripts/release.sh` とは独立です。）
 
 ## 2. あとは自動
 
