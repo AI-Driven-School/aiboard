@@ -330,6 +330,9 @@ class Handler(BaseHTTPRequestHandler):
                                  "frame-ancestors 'none'; form-action 'none'; base-uri 'none'")
                 self.end_headers()
                 self.wfile.write(body)
+            elif path == "/api/judge":
+                import judge
+                self._json(200, {"ok": True, **judge.status()})
             elif path == "/api/remote":
                 c = overview.remote_config()
                 self._json(200, {"ok": True, "enabled": c["enabled"], "token": c["token"] if c["enabled"] else "",
@@ -476,6 +479,18 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as e:
                 return self._json(400, {"ok": False, "reason": str(e)})
             return self._json(200, {"ok": True, "chars": n})
+        if path == "/api/judge":
+            import judge
+            try:
+                if body.get("op") == "try":
+                    # 設定を試す: 決まった候補で 1 回だけ呼び、選べたか・何ミリ秒か・失敗の理由を返す(結果は使わない)
+                    t0 = time.time()
+                    res = judge.decide("priority", [{"id": "a", "text": "確認待ち 25分 案件A 本番の切替"},
+                                                    {"id": "b", "text": "返答待ち 2分 案件B 索引の作り直し"}], {"count": 2})
+                    return self._json(200, {"ok": True, "result": res, "ms": int((time.time() - t0) * 1000), **judge.status()})
+                return self._json(200, {"ok": True, **judge.set_config(body), "last": judge.LAST})
+            except ValueError as e:
+                return self._json(400, {"ok": False, "reason": str(e)})
         if path == "/api/sound":
             return self._json(200, {"ok": True, "sound": overview.sound_set(bool(body.get("on")))})
         if path == "/api/remote":

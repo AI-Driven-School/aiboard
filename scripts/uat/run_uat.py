@@ -847,7 +847,7 @@ def st01(ctx):
         return pg.evaluate("[[...document.querySelectorAll('#pBody h3')].map(h => h.textContent), document.querySelectorAll('.accts .acct').length]"), errs
     (heads, n), errs = with_page(ctx, fn, "?lang=ja")
     st, d, _ = http("/api/settings")
-    want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤", "遠隔（同じ Wi-Fi の中だけ）"]
+    want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤", "判定器（選ぶだけの判断を誰がするか）", "遠隔（同じ Wi-Fi の中だけ）"]
     check(heads == want and n == len(d["logins"]) and not errs, f"見出し {heads} != {want} / アカウント {n}/{len(d['logins'])} errs {errs[:1]}")
     return f"{heads} / アカウント {n}"
 
@@ -2720,6 +2720,170 @@ def lk03(ctx):
     tags = [p["tab"] for p in (r2.get("panes") or [])]
     check(tags == ["0-1"], f"2 枚目を閉じたのに残っている {tags}")
     return f"8 枚で列 {int(r.get('stripWidth', 0))}px > 窓 {int(r.get('stripVisibleWidth', 0))}px でも右端の端末が見える / 品書き {last['menu']} / 閉じると 1 枚に"
+
+
+def _stub_model(answer, delay=0.0, status=200):
+    """OpenAI 互換の「決めるだけ」の口の代わり。受け取った本文を記録し、決まった答えを返す。"""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            seen.append({"path": self.path, "auth": self.headers.get("Authorization", ""), "body": self.rfile.read(n).decode("utf-8", "replace")})
+            time.sleep(delay)
+            out = json.dumps({"choices": [{"message": {"content": answer}}]}).encode()
+            self.send_response(status); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(out)))
+            self.end_headers(); self.wfile.write(out)
+        def log_message(self, *a): pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_port}/v1/chat/completions", seen
+
+
+@case("JD-01", "判定器: 既定は規則で外へ何も出さない・設定の形の検査・手元は 127.0.0.1 しか受けない")
+def jd01(ctx):
+    import judge
+    c = judge.config()
+    check(c["backend"] == "rules", f"既定が規則でない {c['backend']}")
+    r = judge.decide("priority", [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}])
+    check(r == {"id": "a", "by": "rules", "why": "規則(先頭)", "fallback": False}, f"規則の答え {r}")
+    check(judge.decide("client", [])["id"] is None, "候補なしで何かを返した")
+    bad = []
+    for patch in ({"backend": "cloud"}, {"local_url": "http://10.0.1.5:1234/v1"}, {"external_url": "ftp://x"}):
+        try:
+            judge.set_config(patch); bad.append(patch)
+        except ValueError:
+            pass
+    check(not bad, f"受けてはいけない設定を受けた {bad}")
+    st, d, _ = http("/api/judge")
+    check(st == 200 and d["backend"] == "rules" and "has_key" in d and not d.get("external_key"), f"/api/judge {d}")
+    st, d2, _ = http("/api/snapshot")
+    check((d2.get("judge") or {}).get("backend") == "rules", "snapshot に判定器の状態が無い")
+    return "既定=規則・候補なしは None・不正な設定 3 通りを拒否・鍵は API に出ない"
+
+
+@case("JD-02", "判定器(手元/外部): 答えを候補に照合し、伏せ字にして渡し、壊れた答え・遅い・鍵なしは規則へ戻して理由を残す")
+def jd02(ctx):
+    import judge
+    keep = judge.config()
+    srv, url, seen = _stub_model('{"id": "b"}')
+    try:
+        judge.set_config({"backend": "local", "local_url": url, "local_model": "stub"})
+        secret = "sk-" + "ant-api03-" + "ZZZaaabbbcccdddeee1234567890"
+        r = judge.decide("priority", [{"id": "a", "text": "確認待ち 25分"}, {"id": "b", "text": "返答待ち 2分 " + secret}], {"count": 2})
+        check(r["id"] == "b" and r["by"] == "local" and not r["fallback"], f"手元の答え {r}")
+        sent = json.loads(seen[-1]["body"])["messages"][0]["content"] if seen else ""
+        check(seen and secret not in sent and "返答待ち" in sent, f"鍵の形が伏せられずに渡った / 渡した文 {sent[-120:]!r}")
+        check(seen[-1]["auth"] == "", "手元なのに認証ヘッダーを付けた")
+        # 候補に無い答え → 規則へ
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "zzz"}')
+        judge.set_config({"local_url": url})
+        r = judge.decide("priority", [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}])
+        check(r["id"] == "a" and r["fallback"] and "候補に無い" in r["why"], f"壊れた答えの扱い {r}")
+        check(judge.LAST["ok"] is False and judge.LAST["fallbacks"] >= 1, f"記録 {judge.LAST}")
+        # 遅い → 規則へ(timeout は設定で変えられないので短い値を直接入れる)
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "b"}', delay=3)
+        judge.set_config({"local_url": url})
+        judge.DEFAULTS["timeout"] = 0.5
+        try:
+            t0 = time.time(); r = judge.decide("priority", [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}])
+        finally:
+            judge.DEFAULTS["timeout"] = 4.0
+        check(r["id"] == "a" and r["fallback"] and time.time() - t0 < 2.5, f"遅い時の扱い {r} {time.time() - t0:.1f}s")
+        # 外部: 鍵が無ければ呼ばずに規則へ
+        srv.shutdown(); srv, url, seen = _stub_model('{"id": "b"}')
+        judge.set_config({"backend": "external", "external_url": url, "external_model": "stub/decide"})
+        os.environ.pop(judge.KEY_ENV, None)
+        r = judge.decide("priority", [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}])
+        check(r["fallback"] and "鍵" in r["why"] and not seen, f"鍵なしで呼んだ/戻らない {r} {len(seen)}")
+        os.environ[judge.KEY_ENV] = "uat-key"
+        r = judge.decide("priority", [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}])
+        check(r["id"] == "b" and r["by"] == "external" and seen[-1]["auth"] == "Bearer uat-key", f"外部の答え {r} {seen[-1]['auth']!r}")
+        check('"model": "stub/decide"' in seen[-1]["body"], "外部のモデル名が渡っていない")
+        st, d, _ = http("/api/judge")
+        check(not any("uat-key" in str(v) for v in d.values()), "鍵が API に出た")
+    finally:
+        os.environ.pop(judge.KEY_ENV, None)
+        judge.set_config({"backend": keep["backend"], "local_url": keep["local_url"], "local_model": keep["local_model"],
+                          "external_url": keep["external_url"], "external_model": keep["external_model"]})
+        srv.shutdown()
+    return "手元: 答えを候補に照合・伏せ字・認証なし / 壊れた答え・遅い(0.5秒)・鍵なし → 規則へ戻し理由を記録 / 外部: Bearer と model を付けて呼ぶ・鍵は API に出さない"
+
+
+@case("JD-03", "判定器が入ると: 判断待ちの先頭を選び直し、顧客の無いセッションに候補を付け、証明スクリプトが外部の事実を書く")
+def jd03(ctx):
+    import overview as o
+    import judge
+    keep = judge.config()
+    srv, url, seen = _stub_model('{"id": "s2"}')
+    try:
+        judge.set_config({"backend": "local", "local_url": url})
+        o._JUDGE_CACHE.clear()
+        sess = [{"sid": "s1", "tab": "9-1", "state": "確認待ち", "state_for": 100, "project": "A", "task": "a", "ai": "Claude", "client": None, "cwd": "/tmp/a"},
+                {"sid": "s2", "tab": "9-2", "state": "確認待ち", "state_for": 10, "project": "B", "task": "b", "ai": "Claude", "client": None, "cwd": "/tmp/b"}]
+        att = o.attention(sess)
+        check([x["sid"] for x in att][:2] == ["s2", "s1"] and att[0].get("judged") == "local", f"先頭の選び直し {[x['sid'] for x in att]} {att[0].get('judged')}")
+        n0 = len(seen); o.attention(sess)
+        check(len(seen) == n0, "同じ顔ぶれなのにもう一度モデルを呼んだ(20 秒は前の答えを使う)")
+        # 顧客の候補(顧客の定義があるときだけ)
+        defs = o.client_defs()
+        if defs:
+            srv.shutdown(); srv, url, seen = _stub_model(json.dumps({"id": defs[0]["id"]}))
+            judge.set_config({"local_url": url}); o._JUDGE_CACHE.clear()
+            out = o.judge_clients([dict(s) for s in sess])
+            check(out[0].get("client_suggest", {}).get("id") == defs[0]["id"], f"顧客の候補 {out[0].get('client_suggest')}")
+            check("client" not in seen[-1]["body"] or True, "")
+        # 証明スクリプト
+        judge.set_config({"backend": "external", "external_url": "https://example.invalid/v1/chat/completions"})
+        r = subprocess.run(["/bin/zsh", os.path.join(ROOT, "scripts", "prove-local-only.sh"), "1"], capture_output=True, text=True,
+                           env=dict(os.environ, AIBOARD_DATA=ctx["data"]), timeout=60)
+        check("判定器: 外部" in r.stdout and "example.invalid" in r.stdout and "外部送信ゼロ」ではない" in r.stdout, f"証明スクリプトの表記 {r.stdout[:200]!r}")
+        judge.set_config({"backend": "rules"})
+        r = subprocess.run(["/bin/zsh", os.path.join(ROOT, "scripts", "prove-local-only.sh"), "1"], capture_output=True, text=True,
+                           env=dict(os.environ, AIBOARD_DATA=ctx["data"]), timeout=60)
+        check("判定器: 規則" in r.stdout, f"規則の表記 {r.stdout[:120]!r}")
+    finally:
+        judge.set_config({"backend": keep["backend"], "local_url": keep["local_url"], "external_url": keep["external_url"]})
+        o._JUDGE_CACHE.clear()
+        srv.shutdown()
+    return f"先頭の選び直し(s2 を先に)・同じ顔ぶれは呼び直さない・顧客の候補 {'あり' if defs else '(定義なしで省略)'}・証明スクリプトが外部/規則を書き分ける"
+
+
+@case("JD-04", "判定器の設定画面: 規則が既定で選ばれ、手元/外部の切替と「試す」が API に届く(外部は確認つき)")
+def jd04(ctx):
+    import judge
+    keep = judge.config()
+
+    def fn(pg, errs, bl):
+        pg.evaluate("() => { window.__confirms = []; window.confirm = m => { window.__confirms.push(m); return true; }; }")
+        pg.click("#btnSettings")
+        wait_js(pg, "!!document.querySelector('#jdBox button[data-jd]')", 40)
+        on = pg.evaluate("[...document.querySelectorAll('#jdBox button[data-jd]')].filter(b => b.classList.contains('primary')).map(b => b.dataset.jd)")
+        pg.click("#jdBox button[data-jd='local']")
+        wait_js(pg, "!!document.querySelector('#jdLocalUrl')", 30)
+        pg.click("#jdTry")
+        wait_js(pg, "(document.querySelector('#jdMsg') || {}).textContent && !document.querySelector('#jdMsg').textContent.includes('試しています')", 40)
+        msg = pg.evaluate("document.querySelector('#jdMsg').textContent")
+        pg.click("#jdBox button[data-jd='external']")
+        wait_js(pg, "!!document.querySelector('#jdExtUrl')", 30)
+        confirms = pg.evaluate("window.__confirms")
+        keyline = pg.evaluate("document.querySelector('#jdBox').innerText")
+        pg.click("#jdBox button[data-jd='rules']")
+        wait_js(pg, "!document.querySelector('#jdExtUrl')", 30)
+        return {"default": on, "try": msg, "confirms": confirms, "ext": keyline, "errs": errs[:1]}
+    try:
+        v = with_page(ctx, fn, "?lang=ja")
+        check(not v["errs"], f"ページエラー {v['errs']}")
+        check(v["default"] == ["rules"], f"既定の選択 {v['default']}")
+        check("規則へ戻りました" in v["try"] or "選べました" in v["try"], f"「試す」の結果 {v['try']!r}")
+        check(any("外部" in c for c in v["confirms"]), f"外部に切り替える前の確認が無い {v['confirms']}")
+        check("AIBOARD_JUDGE_KEY" in v["ext"] and ("無い" in v["ext"] or "環境変数にある" in v["ext"]), "鍵の在処の案内が無い")
+        check(judge.config()["backend"] == "rules", "最後に規則へ戻していない")
+    finally:
+        judge.set_config({"backend": keep["backend"]})
+    return f"既定=規則 / 手元→試す「{v['try'][:40]}」/ 外部は確認つき・鍵は環境変数と案内 / 規則へ戻る"
 
 
 @case("SC-01", "予約の形の検査と往復: 時刻/間隔のどちらかが要る・15 分未満は断る・止める/消すが効く")

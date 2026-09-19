@@ -1124,7 +1124,58 @@ def attention(sess):
         if why:
             items.append({**s, "why": why, "rank": rank})
     items.sort(key=lambda x: (x["rank"], -(x.get("state_for") or 0)))
+    return _judge_priority(items)
+
+
+_JUDGE_CACHE = {}   # (kind, key) -> (時刻, 結果)
+
+
+def _judge_priority(items):
+    """判定器が規則以外なら、上位 5 件の中から「最初に見せる 1 件」を選ばせて先頭に置く。
+    盤は 2.5 秒ごとに snapshot を作るので、同じ顔ぶれなら 20 秒は前の答えを使う。"""
+    import judge
+    if len(items) < 2 or judge.config()["backend"] == "rules":
+        return items
+    top = items[:5]
+    key = ("priority", tuple(x.get("sid") for x in top))
+    hit = _JUDGE_CACHE.get(key)
+    if hit and time.time() - hit[0] < 20:
+        res = hit[1]
+    else:
+        res = judge.decide("priority", [{"id": x.get("sid"), "text": f'{x.get("state")} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
+                           {"count": len(items)})
+        _JUDGE_CACHE[key] = (time.time(), res)
+    if res.get("id"):
+        items = sorted(items, key=lambda x: 0 if x.get("sid") == res["id"] else 1)
+        items[0] = {**items[0], "judged": res["by"], "judge_why": res["why"]}
     return items
+
+
+def judge_clients(sess):
+    """顧客の付いていないセッションに、判定器で候補を付ける(client_suggest。自動では付けない)。"""
+    import judge
+    if judge.config()["backend"] == "rules":
+        return sess
+    defs = client_defs()
+    if not defs:
+        return sess
+    opts = [{"id": c["id"], "text": f'{c.get("label") or c["id"]} {" ".join((c.get("keywords") or [])[:6])}'} for c in defs]
+    for s in sess:
+        if s.get("client") or not s.get("ai") or not s.get("sid"):
+            continue
+        key = ("client", s["sid"])
+        hit = _JUDGE_CACHE.get(key)
+        if hit and time.time() - hit[0] < 300:
+            res = hit[1]
+        else:
+            res = judge.decide("client", opts, {"project": s.get("project_hint") or s.get("project") or "",
+                                                 "cwd": os.path.basename(s.get("cwd") or ""), "task": (s.get("task") or "")[:120]})
+            _JUDGE_CACHE[key] = (time.time(), res)
+        if res.get("id") and not res.get("fallback"):
+            c = next((d for d in defs if d["id"] == res["id"]), None)
+            if c:
+                s["client_suggest"] = {"id": c["id"], "label": c.get("label") or c["id"], "by": res["by"]}
+    return sess
 
 
 def _group_summary(rows):
@@ -1639,12 +1690,13 @@ def settings_info():
 def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()
-    sess = sessions(procs)
+    sess = judge_clients(sessions(procs))   # 判定器が規則以外なら、顧客の候補を付ける(規則なら何もしない)
     cl, pr = grouped(sess)
     snap = {
         "time": time.time(),
         "sessions": sess,
         "attention": attention(sess),
+        "judge": __import__("judge").status(),
         "clients": cl,
         "projects": pr,
         "machine": machine(procs),

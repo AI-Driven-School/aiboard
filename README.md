@@ -59,6 +59,7 @@ AIBoard.app (Swift/AppKit)
 ## Privacy: local only
 
 - The board server listens on `127.0.0.1` only, checks `Host` and `Origin`, and rejects cross-site writes.
+- A second opt-in exception, also off by default: the **judge** (Settings). Pick-one decisions — which waiting session to show first, which client a session belongs to — are made by rules. You can switch them to a local model (127.0.0.1 only, e.g. LM Studio) or to an external decision model (e.g. TypeSafe Jev via OpenRouter). External sends redacted titles, the start of requests and folder names — never the full conversation — and the key is read from `AIBOARD_JUDGE_KEY` in the environment, never stored. `scripts/prove-local-only.sh` prints which judge is active.
 - One opt-in exception, off by default: **Remote (same Wi-Fi only)** in Settings. Turning it on binds the board server to the LAN and lets a device that knows the generated key open `/m` — a small page listing what is waiting and answering it. Nothing else is reachable remotely (no stopping, starting, or settings), and nothing goes through an outside server. `scripts/prove-local-only.sh` prints whether it is on.
 - The board page is served with a Content-Security-Policy of `default-src 'self'; connect-src 'self'` — the browser engine itself blocks any request to another host.
 - Secrets that appear in transcripts (API keys, tokens) are masked before display.

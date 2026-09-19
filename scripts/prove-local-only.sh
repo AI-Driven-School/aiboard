@@ -17,6 +17,19 @@ try:
 except Exception:
     print('off')
 ")
+JUDGE=$(python3 -c "
+import json
+try:
+    j = (json.load(open('$CFG')).get('judge') or {})
+    print(j.get('backend') or 'rules', j.get('external_url') or '')
+except Exception:
+    print('rules')
+")
+case "$JUDGE" in
+  external*) echo "判定器: 外部の決定モデル(${JUDGE#external }) — 伏せ字にした題名・依頼の先頭・フォルダ名が外へ出る。「外部送信ゼロ」ではない" | tee -a "$OUT" ;;
+  local*)    echo "判定器: 手元のモデル(127.0.0.1 のみ)" | tee -a "$OUT" ;;
+  *)         echo "判定器: 規則(外へ出さない)" | tee -a "$OUT" ;;
+esac
 if [ "$REMOTE" = "on" ]; then
   echo "遠隔: 入(同じ LAN から /m と一覧・返事のみ・合言葉つき。待ち受けは 0.0.0.0)" | tee -a "$OUT"
 else
