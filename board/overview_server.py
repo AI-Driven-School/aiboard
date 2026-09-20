@@ -76,14 +76,28 @@ def snapshot_cached(max_age=None):
     return data
 
 
+_FP = {"val": None, "full": 0, "skipped": 0}
+
+
 def snapshot_loop():
+    """2.5 秒ごとに見に行くが、**入力が何も変わっていなければ作り直さない**。
+
+    作り直しは 1 回 0.1〜0.8 秒(iTerm への問い合わせ・記録の読み直し)。入力の指紋は 5ms で取れるので、
+    何も起きていない間はそれだけで済む(2026-09-20)。10 秒に 1 回は必ず作り直す(経過時間の表示のため)。
+    """
     while True:
         t = time.time()
         if t - _snap.get("asked", 0) < 20:     # 盤を誰も開いていない間は調べない
             try:
-                data = overview.snapshot()
-                with _lock:
-                    _snap.update(t=time.time(), data=data)
+                cur = _snap.get("data") or {}
+                fp = overview.inputs_fingerprint(sess=cur.get("sessions"))
+                if fp != _FP["val"] or t - _FP["full"] > 10 or not cur:
+                    data = overview.snapshot()
+                    with _lock:
+                        _snap.update(t=time.time(), data=data)
+                    _FP.update(val=overview.inputs_fingerprint(sess=data.get("sessions")), full=time.time())
+                else:
+                    _FP["skipped"] += 1
             except Exception as e:
                 _snap["error"] = f"{type(e).__name__}: {e}"
         time.sleep(max(1.0, 2.5 - (time.time() - t)))
@@ -152,6 +166,14 @@ def _tmux_send(target, text, enter, key):
     return True, ""
 
 
+def _after_touch():
+    """送信・停止・端末を開いた直後は、タブ一覧を取り直す(4 秒の使い回しを待たせない)。"""
+    try:
+        cs.tabs_dirty()
+    except AttributeError:
+        pass
+
+
 def send_to_tab(body):
     """盤から iTerm のタブへ文字かキーを送る。{tab, sid, text?|key?, enter?}
 
@@ -185,6 +207,7 @@ def send_to_tab(body):
             f.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "tab": tab, "sid": sid, "key": key,
                                 "text": text if key is None else None, "via": "tmux", "target": target,
                                 "rc": 0 if ok else 1, "err": why}, ensure_ascii=False) + "\n")
+        _after_touch()
         return ok, (why or "送った")
     # 宛先は tty で指す(タブ番号は位置ずれする)。見つからなければ送らない
     chars = ", ".join(str(ord(c)) for c in payload)
@@ -198,6 +221,7 @@ def send_to_tab(body):
         f.write(json.dumps({"t": time.strftime("%Y-%m-%d %H:%M:%S"), "tab": tab, "sid": sid, "key": key,
                             "text": text if key is None else None, "enter": nl, "rc": r.returncode,
                             "err": r.stderr.strip()[:200]}, ensure_ascii=False) + "\n")
+    _after_touch()
     return (r.returncode == 0), (r.stderr.strip()[:200] or "送った")
 
 
@@ -247,6 +271,7 @@ def stop_session(body, wait=3.0):
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     msg = {"dry": f"試しのみ: pid {pid} に送る", "exited": "終了した", "already gone": "既に終わっていた",
            "still running": f"{wait:.0f} 秒待っても終わらない(強制終了はしていない)", "permission denied": "権限が無く送れなかった"}[rec["result"]]
+    _after_touch()
     return rec["result"] in ("dry", "exited", "already gone"), msg, pid
 
 

@@ -17,11 +17,13 @@ snapshot() の中身:
 
 失敗・未測定は ok=False と reason を持たせ、正常と混ぜない。
 """
+import functools
 import glob
 import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -966,7 +968,17 @@ def project_hint(tools, cwd, min_hits=3):
     return name if n >= min_hits else ""
 
 
+@functools.lru_cache(maxsize=512)
+def _cron_next_cached(expr, minute, horizon_days):
+    return _cron_next(expr, minute * 60, horizon_days)
+
+
 def cron_next(expr, after, horizon_days=8):
+    """5 欄の cron の次の発火。答えは 1 分の間は変わらないので覚えておく(毎回作り直すと更新 1 回で 49ms)。"""
+    return _cron_next_cached(expr, int(after // 60), horizon_days)
+
+
+def _cron_next(expr, after, horizon_days=8):
     """5 欄の cron(数値・*・*/n・a-b・a,b)の次の発火(ローカル時刻の epoch)。範囲内に無ければ None。"""
     import datetime as _dt
     parts = expr.split()
@@ -1072,28 +1084,59 @@ def extensions_info(refresh=False):
     return {"skills": skills, "plugins": plugins, "servers": servers, "health": _EXT["health"], "checked_at": _EXT["t"]}
 
 
-_AGENTS = {"t": 0, "val": []}
+_BIN = {}
 
 
-def official_agents(max_age=5):
+def bin_path(name):
+    """CLI の実体の場所を 1 回だけ引いて覚える。
+
+    `zsh -l -c ...` は毎回ログインシェル(.zshrc 等)を読むので、`claude agents --json` が
+    **340〜374ms** かかっていた(2026-09-20 実測。更新 1 回で最も重い)。場所さえ分かれば直接呼べる。
+    """
+    if name in _BIN:
+        return _BIN[name]
+    path = shutil.which(name) or ""
+    if not path:
+        try:
+            r = subprocess.run(["/bin/zsh", "-lc", "command -v " + name], capture_output=True, text=True,
+                               timeout=20, stdin=subprocess.DEVNULL)
+            path = (r.stdout.strip().splitlines() or [""])[-1] if r.returncode == 0 else ""
+        except (subprocess.TimeoutExpired, OSError):
+            path = ""
+    _BIN[name] = path if path.startswith("/") else ""
+    return _BIN[name]
+
+
+_AGENTS = {"t": 0, "val": [], "wait": 5.0}
+AGENTS_MIN, AGENTS_MAX = 5.0, 20.0
+
+
+def official_agents(max_age=None):
     """`claude agents --json` の一覧(公式の状態源)。hook が無くても状態が分かる。
 
     返す項目: pid(対話セッション)・id(背景セッション)・status(busy/waiting/idle)・waitingFor・state・cwd・name。
-    0.5 秒ほどかかるので 5 秒使い回す。CLI が無い/失敗しても盤は止めない(空で返す)。
+
+    **呼ぶたびに Node が起動して 1 回 275ms の CPU を使う**(2026-09-20 実測)。5 秒ごとに呼ぶと
+    それだけで CPU の 5% を常時使ってしまうので、**中身が前と同じなら間隔を倍にする**(5→10→20 秒で頭打ち)。
+    変わったら 5 秒に戻すので、動きがある間は細かく、止まっている間は静かになる。
+    代償: 静かな時に背景セッションが「判断待ち」に変わると、気づくのが最大 20 秒遅れる。
     """
     now = time.time()
-    if now - _AGENTS["t"] < max_age:
+    if now - _AGENTS["t"] < (_AGENTS["wait"] if max_age is None else max_age):
         return _AGENTS["val"]
     out = []
     try:
-        r = subprocess.run(["zsh", "-l", "-c", "command claude agents --json"], capture_output=True, text=True, timeout=15, cwd=HOME)
+        claude = bin_path("claude")
+        argv = [claude, "agents", "--json"] if claude else ["zsh", "-l", "-c", "command claude agents --json"]
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=15, cwd=HOME, stdin=subprocess.DEVNULL)
         if r.returncode == 0 and r.stdout.strip().startswith("["):
             out = [x for x in json.loads(r.stdout) if isinstance(x, dict)]
     except (subprocess.TimeoutExpired, OSError, ValueError):
         out = _AGENTS["val"]   # 取れなかった時は前の値(古いと分かるように t は進めない)
         _AGENTS["val"] = out
         return out
-    _AGENTS.update(t=now, val=out)
+    same = [json.dumps(x, sort_keys=True) for x in out] == [json.dumps(x, sort_keys=True) for x in _AGENTS["val"]]
+    _AGENTS.update(t=now, val=out, wait=min(AGENTS_MAX, _AGENTS["wait"] * 2) if same else AGENTS_MIN)
     return out
 
 
@@ -1432,8 +1475,25 @@ def _run(cmd, timeout=10):
         return "", str(e), -1
 
 
-def machine(procs=None):
-    """メモリの使用率・圧縮・スワップ・内訳と、JetsamEvent(メモリ不足の強制終了)の回数。"""
+_MACHINE = {"t": 0, "data": None}
+
+
+def machine(procs=None, ttl=10):
+    """メモリの使用率・圧縮・スワップ・内訳。**10 秒は使い回す**。
+
+    中身は vm_stat・sysctl・memory_pressure の 4 プロセス(約 95ms)と全プロセスの分類(約 51ms)で、
+    更新 1 回ぶんの 1/4 を占めていた(2026-09-20 実測)。メモリの棒は 2.5 秒ごとに描き直す必要が無い。
+    """
+    if procs is not None:
+        return _machine(procs)          # 明示的に渡された時は、その表で作る(使い回すと別の表の答えを返してしまう)
+    if _MACHINE["data"] and time.time() - _MACHINE["t"] < ttl:
+        return _MACHINE["data"]
+    data = _machine(None)
+    _MACHINE.update(t=time.time(), data=data)
+    return data
+
+
+def _machine(procs=None):
     out = {"ok": True, "reason": ""}
     vm, err, rc = _run(["vm_stat"])
     if rc != 0:
@@ -1988,6 +2048,48 @@ def settings_info():
             "claude_settings": os.path.join(HOME, ".claude", "settings.json"), "codex_config": os.path.join(HOME, ".codex", "config.toml")}
 
 
+def inputs_fingerprint(procs=None, sess=None):
+    """盤の中身を決める「入力」の指紋。変わっていなければ、作り直しても同じものが出る。
+
+    入力はこれだけ: 端末に居るプロセスの顔ぶれ / hook が書く状態ファイル / 会話の記録 /
+    端末そのものの更新時刻(記録を持たない CLI 用) / iTerm 一覧と agents を取り直した時刻 / 設定。
+    どれも stat だけで見るので数 ms。これで、何も起きていない間は作り直しを丸ごと省ける。
+    """
+    parts = []
+    procs = procs if procs is not None else cs.processes()
+    parts.append(tuple(sorted((p, v["tty"]) for p, v in procs.items() if v.get("tty") != "??")))
+    for pat in (os.path.join(HOME, ".claude", "sessions", "*.json"),
+                os.path.join(HOME, ".claude-profiles", "*", "sessions", "*.json")):
+        for f in glob.glob(pat):
+            try:
+                st = os.stat(f)
+                parts.append((f, st.st_mtime_ns, st.st_size))
+            except OSError:
+                pass
+    for s in (sess or []):
+        for f in (s.get("transcript"), s.get("rollout")):
+            if not f:
+                continue
+            try:
+                st = os.stat(f)
+                parts.append((f, st.st_mtime_ns, st.st_size))
+            except OSError:
+                pass
+        if s.get("tty") and not s.get("transcript"):
+            try:
+                parts.append((s["tty"], os.stat("/dev/" + s["tty"]).st_mtime_ns))
+            except OSError:
+                pass
+    for f in (cs.APP_PANES, aiboard_paths.data("config.json"), aiboard_paths.data("schedule.json")):
+        try:
+            parts.append((f, os.stat(f).st_mtime_ns))
+        except OSError:
+            pass
+    parts.append(("iterm", cs._LAST_ITERM.get("at", 0)))
+    parts.append(("agents", _AGENTS["t"]))
+    return hash(tuple(parts))
+
+
 def snapshot(with_macmini=True):
     t0 = time.time()
     procs = cs.processes()
@@ -2006,7 +2108,7 @@ def snapshot(with_macmini=True):
         "git": {**__import__("gitinfo").config(), "last_error": __import__("gitinfo").LAST["error"]},
         "clients": cl,
         "projects": pr,
-        "machine": machine(procs),
+        "machine": machine(),
         "macmini": macmini() if with_macmini else {"ok": False, "reason": "未取得"},
         "notify": {"auth": cs.app_notify_auth()},
         "parallel": parallel_groups(sess),

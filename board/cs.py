@@ -21,6 +21,8 @@
 読むだけの部分(cs / cs dead / cs watch / cs web)は何も変更しない。
 顧客の判定は ~/.claude/tools/clients.py の classify() に任せる(ここでは判定を書かない)。
 """
+import ctypes
+import ctypes.util
 import glob
 import json
 import os
@@ -146,7 +148,7 @@ _LAST_ITERM = {"rows": [], "t": 0, "fail_t": 0}
 _TMUX = {"t": 0, "rows": []}
 
 
-def tmux_panes(ttl=1.5):
+def tmux_panes(ttl=4.0):
     """tmux の窓を、iTerm のタブと同じ形で返す(win=8、tab=通し番号)。Linux ではこれが端末の出どころ。
 
     mac でも返す: tmux の中で動いている claude は、パネル自身の tty に居るので iTerm の一覧には出てこない。
@@ -174,9 +176,30 @@ def tmux_panes(ttl=1.5):
     return rows
 
 
-def iterm_sessions():
+def tabs_dirty():
+    """タブの顔ぶれが変わったはずの時に呼ぶ(送信・停止・端末を開いた後)。次の問い合わせで取り直す。"""
+    _LAST_ITERM["at"] = 0
+
+
+def iterm_sessions(ttl=8.0):
+    """iTerm のタブ一覧。**8 秒は使い回す**(問い合わせに 285ms かかり、更新 1 回の半分を占めていた)。
+
+    タブの顔ぶれと題名だけがこの遅れの対象で、状態(hook・記録・プロセス)は毎回取り直す。
+    送信・停止の直後は tabs_dirty() で取り直すので、操作した結果は待たされない。
+    """
     if not IS_MAC:
-        return tmux_panes() + app_panes()   # iTerm は mac だけ。他の OS では tmux
+        return _with_tmux(app_panes())          # iTerm は mac だけ。他の OS では tmux
+    if _LAST_ITERM.get("cached") is not None and time.time() - _LAST_ITERM.get("at", 0) < ttl:
+        rows = [dict(r) for r in _LAST_ITERM["cached"]]
+    else:
+        rows = _iterm_rows_now()
+        _LAST_ITERM.update(cached=[dict(r) for r in rows], at=time.time())
+    # アプリ自身の端末は毎回読む(ファイル 1 つ)。使い回しに混ぜると、開いたばかりの端末が 8 秒出てこない
+    return _with_tmux(rows + app_panes())
+
+
+def _iterm_rows_now():
+    """iTerm のタブだけを問い合わせる(アプリの端末・tmux は呼ぶ側で足す)。"""
     # iTerm の tell ブロック内では `tab` がタブ文字でなく「タブ」オブジェクトになるので、区切りは外で作る
     script = '''
     set TB to ASCII character 9
@@ -197,11 +220,11 @@ def iterm_sessions():
     rows = []
     # 失敗した直後は間を空ける(固まった iTerm に 2.5 秒ごとに 8 秒待たされると、盤の更新が止まる)
     if _LAST_ITERM["fail_t"] and time.time() - _LAST_ITERM["fail_t"] < 30:
-        return _with_tmux(list(_LAST_ITERM["rows"]) + app_panes())   # アプリ自身の端末は iTerm と関係ない。落とさない
+        return list(_LAST_ITERM["rows"])   # 問い合わせに失敗: 前の一覧を使う(アプリの端末は呼ぶ側が足す)
     out = osa(script)
     if not out and OSA_ERROR:
         _LAST_ITERM["fail_t"] = time.time()
-        return _with_tmux(list(_LAST_ITERM["rows"]) + app_panes())   # 問い合わせに失敗: iTerm は前回の一覧・アプリの端末は今の一覧
+        return list(_LAST_ITERM["rows"])   # 問い合わせに失敗: iTerm は前回の一覧(アプリの端末は呼ぶ側が足す)
     _LAST_ITERM["fail_t"] = 0
     for line in out.splitlines():
         parts = line.split("\t")
@@ -209,7 +232,7 @@ def iterm_sessions():
             rows.append({"win": int(parts[0]), "tab": int(parts[1]),
                          "tty": parts[2].replace("/dev/", ""), "title": parts[3]})
     _LAST_ITERM.update(rows=list(rows), t=time.time())
-    return _with_tmux(rows + app_panes())
+    return rows
 
 
 def _with_tmux(rows):
@@ -268,7 +291,152 @@ def app_notify_auth():
     return str(d.get("notify_auth") or "")
 
 
-def processes():
+# プロセス表は 2.5 秒ごとに作り直すので、ここが盤サーバの一番の重さだった。
+# `ps -axo` はこの Mac で 763 件・**180〜380ms**(実測 2026-09-20)。中身は同じものが
+# libproc(proc_listpids + proc_pidinfo)なら **1.6〜2.9ms** で取れる。
+# コマンド行と RSS は要る時にだけ引く(端末に居るものだけで足りることが多い)。
+#   照合済み: 共通 547 件で ppid・tty は 1 件も食い違わない。
+#   取れないのは他人(root 等)のプロセス 218 件で、自分のものは 0 件だった。
+#   コマンド行はむしろ ps より正確(引数に改行が入ると ps の出力は行が割れる)。
+# うまく行かない時のために AIBOARD_PS=1 で昔の ps に戻せる。
+try:
+    _libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+except Exception:      # ctypes が使えない環境(考えにくいが)では ps に落ちる
+    _libc = None
+_PROC_ALL_PIDS, _PROC_PIDTBSDINFO, _PROC_PIDTASKINFO = 1, 3, 4
+_CTL_KERN, _KERN_PROCARGS2, _KERN_ARGMAX = 1, 49, 8
+
+
+class _BsdInfo(ctypes.Structure):
+    _fields_ = [("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
+                ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32), ("pbi_ppid", ctypes.c_uint32),
+                ("pbi_uid", ctypes.c_uint32), ("pbi_gid", ctypes.c_uint32),
+                ("pbi_ruid", ctypes.c_uint32), ("pbi_rgid", ctypes.c_uint32),
+                ("pbi_svuid", ctypes.c_uint32), ("pbi_svgid", ctypes.c_uint32), ("rfu_1", ctypes.c_uint32),
+                ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
+                ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32), ("pbi_pjobc", ctypes.c_uint32),
+                ("e_tdev", ctypes.c_uint32), ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
+                ("pbi_start_tvsec", ctypes.c_uint64), ("pbi_start_tvusec", ctypes.c_uint64)]
+
+
+class _TaskInfo(ctypes.Structure):
+    _fields_ = [("pti_virtual_size", ctypes.c_uint64), ("pti_resident_size", ctypes.c_uint64),
+                ("pti_total_user", ctypes.c_uint64), ("pti_total_system", ctypes.c_uint64),
+                ("pti_threads_user", ctypes.c_uint64), ("pti_threads_system", ctypes.c_uint64),
+                ("pti_policy", ctypes.c_int32), ("pti_faults", ctypes.c_int32),
+                ("pti_pageins", ctypes.c_int32), ("pti_cow_faults", ctypes.c_int32),
+                ("pti_messages_sent", ctypes.c_int32), ("pti_messages_received", ctypes.c_int32),
+                ("pti_syscalls_mach", ctypes.c_int32), ("pti_syscalls_unix", ctypes.c_int32),
+                ("pti_csw", ctypes.c_int32), ("pti_threadnum", ctypes.c_int32),
+                ("pti_numrunning", ctypes.c_int32), ("pti_priority", ctypes.c_int32)]
+
+
+class _VinfoStat(ctypes.Structure):
+    _fields_ = [("vst_dev", ctypes.c_uint32), ("vst_mode", ctypes.c_uint16), ("vst_nlink", ctypes.c_uint16),
+                ("vst_ino", ctypes.c_uint64), ("vst_uid", ctypes.c_uint32), ("vst_gid", ctypes.c_uint32),
+                ("vst_atime", ctypes.c_int64), ("vst_atimensec", ctypes.c_int64),
+                ("vst_mtime", ctypes.c_int64), ("vst_mtimensec", ctypes.c_int64),
+                ("vst_ctime", ctypes.c_int64), ("vst_ctimensec", ctypes.c_int64),
+                ("vst_birthtime", ctypes.c_int64), ("vst_birthtimensec", ctypes.c_int64),
+                ("vst_size", ctypes.c_int64), ("vst_blocks", ctypes.c_int64),
+                ("vst_blksize", ctypes.c_int32), ("vst_flags", ctypes.c_uint32),
+                ("vst_gen", ctypes.c_uint32), ("vst_rdev", ctypes.c_uint32), ("vst_qspare", ctypes.c_int64 * 2)]
+
+
+class _VnodeInfo(ctypes.Structure):
+    _fields_ = [("vi_stat", _VinfoStat), ("vi_type", ctypes.c_int), ("vi_pad", ctypes.c_int),
+                ("vi_fsid", ctypes.c_int32 * 2)]
+
+
+class _VnodeInfoPath(ctypes.Structure):
+    _fields_ = [("vip_vi", _VnodeInfo), ("vip_path", ctypes.c_char * 1024)]
+
+
+class _VnodePathInfo(ctypes.Structure):
+    _fields_ = [("pvi_cdir", _VnodeInfoPath), ("pvi_rdir", _VnodeInfoPath)]
+
+
+class _ProcFdInfo(ctypes.Structure):
+    _fields_ = [("proc_fd", ctypes.c_int32), ("proc_fdtype", ctypes.c_uint32)]
+
+
+class _FileInfo(ctypes.Structure):
+    _fields_ = [("fi_openflags", ctypes.c_uint32), ("fi_status", ctypes.c_uint32),
+                ("fi_offset", ctypes.c_int64), ("fi_type", ctypes.c_int32), ("fi_guardflags", ctypes.c_uint32)]
+
+
+class _VnodeFdInfoWithPath(ctypes.Structure):
+    _fields_ = [("pfi", _FileInfo), ("pvip", _VnodeInfoPath)]
+
+
+_PROC_PIDVNODEPATHINFO, _PROC_PIDLISTFDS, _PROC_PIDFDVNODEPATHINFO, _PROX_FDTYPE_VNODE = 9, 1, 2, 1
+_ARGMAX = [0]
+
+
+def _proc_rss(pid):
+    t = _TaskInfo()
+    if _libc.proc_pidinfo(pid, _PROC_PIDTASKINFO, ctypes.c_uint64(0), ctypes.byref(t), ctypes.sizeof(t)) != ctypes.sizeof(t):
+        return 0
+    return t.pti_resident_size // 1024          # ps と同じ KB 単位
+
+
+def _proc_cmd(pid):
+    if not _ARGMAX[0]:
+        v, sz = ctypes.c_int(0), ctypes.c_size_t(4)
+        mib = (ctypes.c_int * 2)(_CTL_KERN, _KERN_ARGMAX)
+        _libc.sysctl(mib, 2, ctypes.byref(v), ctypes.byref(sz), None, 0)
+        _ARGMAX[0] = v.value or 262144
+    mib = (ctypes.c_int * 3)(_CTL_KERN, _KERN_PROCARGS2, pid)
+    size = ctypes.c_size_t(_ARGMAX[0])
+    buf = ctypes.create_string_buffer(_ARGMAX[0])
+    if _libc.sysctl(mib, 3, buf, ctypes.byref(size), None, 0) != 0:
+        return ""
+    raw = buf.raw[:size.value]
+    argc = int.from_bytes(raw[:4], sys.byteorder)
+    parts = raw[4:].split(b"\0")
+    i = 0
+    while i < len(parts) and not parts[i]:
+        i += 1
+    i += 1                                       # 実行ファイルのパス
+    while i < len(parts) and not parts[i]:       # 詰め物
+        i += 1
+    args = []
+    while i < len(parts) and len(args) < argc:
+        args.append(parts[i])
+        i += 1
+    return b" ".join(args).decode("utf-8", "replace")
+
+
+class _Proc(dict):
+    """1 プロセス分。cmd と rss は初めて見た時に引く(全部引くと 547 件で 80ms かかる)。"""
+
+    def __init__(self, pid, ppid, tty):
+        super().__init__(ppid=ppid, tty=tty)
+        self.pid = pid
+
+    def _fill(self, k):
+        v = _proc_cmd(self.pid) if k == "cmd" else _proc_rss(self.pid)
+        self[k] = v
+        return v
+
+    def __missing__(self, k):
+        if k in ("cmd", "rss"):
+            return self._fill(k)
+        raise KeyError(k)
+
+    def get(self, k, default=None):     # .get("cmd") でも引く(既定値で黙って空を返さない)
+        if k in ("cmd", "rss") and k not in self:
+            return self._fill(k)
+        return super().get(k, default)
+
+
+def _tty_name(tdev):
+    if tdev in (0, 0xFFFFFFFF):
+        return "??"
+    return f"ttys{tdev & 0xFFFFFF:03d}" if (tdev >> 24) & 0xFF == 16 else "??"
+
+
+def _processes_ps():
     out = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,tty=,command="],
                          capture_output=True, text=True).stdout
     procs = {}
@@ -278,6 +446,29 @@ def processes():
             procs[int(m.group(1))] = {"ppid": int(m.group(2)), "rss": int(m.group(3)),
                                       "tty": m.group(4), "cmd": m.group(5)}
     return procs
+
+
+def processes():
+    if _libc is None or os.environ.get("AIBOARD_PS") == "1" or not IS_MAC:
+        return _processes_ps()
+    try:
+        n = _libc.proc_listpids(_PROC_ALL_PIDS, 0, None, 0)
+        buf = (ctypes.c_int32 * (n // 4 + 128))()
+        got = _libc.proc_listpids(_PROC_ALL_PIDS, 0, ctypes.byref(buf), ctypes.sizeof(buf))
+        procs = {}
+        info = _BsdInfo()
+        for pid in buf[:max(0, got // 4)]:
+            if pid <= 0:
+                continue
+            if _libc.proc_pidinfo(pid, _PROC_PIDTBSDINFO, ctypes.c_uint64(0),
+                                  ctypes.byref(info), ctypes.sizeof(info)) != ctypes.sizeof(info):
+                continue                         # 他人のプロセス(自分のものは全部取れる)
+            procs[pid] = _Proc(pid, info.pbi_ppid, _tty_name(info.e_tdev))
+        if len(procs) < 20:                      # 何かおかしい: 昔の道に戻る
+            return _processes_ps()
+        return procs
+    except Exception:
+        return _processes_ps()
 
 
 def descendants_rss(procs, pid):
@@ -516,6 +707,33 @@ def _open_files_proc(pids):
     return out
 
 
+def _open_files_libproc(pids):
+    """そのプロセスが開いているファイルの名前。lsof の代わり(同じ答えで桁違いに速い)。使えなければ None。"""
+    if _libc is None or os.environ.get("AIBOARD_PS") == "1":
+        return None
+    try:
+        names = []
+        for pid in pids:
+            n = _libc.proc_pidinfo(int(pid), _PROC_PIDLISTFDS, ctypes.c_uint64(0), None, 0)
+            if n <= 0:
+                continue
+            cnt = n // ctypes.sizeof(_ProcFdInfo) + 16
+            buf = (_ProcFdInfo * cnt)()
+            got = _libc.proc_pidinfo(int(pid), _PROC_PIDLISTFDS, ctypes.c_uint64(0), ctypes.byref(buf), ctypes.sizeof(buf))
+            for fd in buf[:max(0, got // ctypes.sizeof(_ProcFdInfo))]:
+                if fd.proc_fdtype != _PROX_FDTYPE_VNODE:
+                    continue
+                vi = _VnodeFdInfoWithPath()
+                if _libc.proc_pidfdinfo(int(pid), fd.proc_fd, _PROC_PIDFDVNODEPATHINFO,
+                                        ctypes.byref(vi), ctypes.sizeof(vi)) == ctypes.sizeof(vi):
+                    p = vi.pvip.vip_path.decode("utf-8", "replace")
+                    if p:
+                        names.append(p)
+        return names or None
+    except Exception:
+        return None
+
+
 def codex_rollout_by_lsof(pids):
     """codex のプロセスが実際に開いている記録(rollout)を返す。推定でなく確定。
 
@@ -527,8 +745,10 @@ def codex_rollout_by_lsof(pids):
     if not IS_MAC:
         names = _open_files_proc(pids)
     else:
-        r = subprocess.run(["lsof", "-p", ",".join(str(p) for p in pids), "-Fn"], capture_output=True, text=True)
-        names = [l[1:] for l in r.stdout.splitlines() if l.startswith("n")]
+        names = _open_files_libproc(pids)
+        if names is None:        # 使えなければ従来どおり lsof(遅いが確実)
+            r = subprocess.run(["lsof", "-p", ",".join(str(p) for p in pids), "-Fn"], capture_output=True, text=True)
+            names = [l[1:] for l in r.stdout.splitlines() if l.startswith("n")]
     hits = [n for n in names if re.search(r"/rollout-[^/]+\.jsonl$", n)]
     return max(hits, key=os.path.getmtime) if hits else None
 
@@ -602,6 +822,16 @@ def proc_cwd(pid):
             return os.readlink(f"/proc/{int(pid)}/cwd")
         except (OSError, ValueError):
             return ""
+    # lsof は 1 プロセスあたり約 28ms かかり、更新のたびに何回も呼ぶので盤サーバの重さの半分だった
+    # (2026-09-20 実測: classify 372ms のうち 250ms)。libproc なら 0.01ms で、同じ答えが返る(8 件で照合)
+    if _libc is not None and os.environ.get("AIBOARD_PS") != "1":
+        try:
+            v = _VnodePathInfo()
+            if _libc.proc_pidinfo(int(pid), _PROC_PIDVNODEPATHINFO, ctypes.c_uint64(0),
+                                  ctypes.byref(v), ctypes.sizeof(v)) == ctypes.sizeof(v):
+                return v.pvi_cdir.vip_path.decode("utf-8", "replace")
+        except Exception:
+            pass
     r = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], capture_output=True, text=True)
     for line in r.stdout.splitlines():
         if line.startswith("n"):
