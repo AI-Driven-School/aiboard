@@ -136,12 +136,12 @@ SEND_LOG = aiboard_paths.data("send.log")
 
 def _tmux_send(target, text, enter, key):
     """tmux のパネルへ送る(Linux の端末はこれ)。iTerm の AppleScript と同じ役割。"""
-    if key == "esc":
-        args = ["tmux", "send-keys", "-t", target, "Escape"]
-    elif key == "enter":
-        args = ["tmux", "send-keys", "-t", target, "Enter"]
-    elif key in ("up", "down"):
-        args = ["tmux", "send-keys", "-t", target, key.capitalize()]
+    names = {"esc": "Escape", "enter": "Enter", "up": "Up", "down": "Down", "ctrl-c": "C-c",
+             "tab": "Tab", "shift-tab": "BTab", "backspace": "BSpace"}
+    if key:
+        if key not in names:
+            return False, f"tmux に送れないキー: {key}"
+        args = ["tmux", "send-keys", "-t", target, names[key]]
     else:
         args = ["tmux", "send-keys", "-t", target, "-l", text]
     r = subprocess.run(args, capture_output=True, text=True, timeout=10)
@@ -476,7 +476,8 @@ class Handler(BaseHTTPRequestHandler):
                 if tr:
                     tl = overview.timeline_codex(tr, limit=150, with_text=True) if (s.get("ai") or "").startswith("Codex") \
                         else overview.timeline_claude(tr, limit=150, tail_bytes=4_000_000, with_text=True)
-                self._json(200, dict(base, ok=True, etag=etag, timeline=tl))
+                rp = overview.resume_point(tr) if tr and not (s.get("ai") or "").startswith("Codex") else None
+                self._json(200, dict(base, ok=True, etag=etag, timeline=tl, resume=rp))
             elif path == "/api/screen":
                 tab = q.get("tab", "")
                 if not re.fullmatch(r"\d+-\d+", tab):

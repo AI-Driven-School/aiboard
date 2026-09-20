@@ -3639,6 +3639,100 @@ def ms01(ctx):
     return f"ssh 2 回(別名 2)→ 1 台として 1 本 / 死んだ pid は拾わない / 鍵が無効→🔑 / 盤に枠・こちらの番 1 / demo で隠す"
 
 
+@case("LX-01", "tmux のパネル: 盤が拾って(mac でも)、画面の文字を読めて、キーを送れる(Linux の盤・iTerm 以外の端末はこの道)")
+def lx01(ctx):
+    import cs
+    import overview_server as srv
+    if not shutil.which("tmux"):
+        return "SKIP: tmux が入っていない"
+    name = "aiboard-uat-" + str(os.getpid())
+    subprocess.run(["tmux", "new-session", "-d", "-s", name, "sh"], check=True, capture_output=True, timeout=20)
+    try:
+        time.sleep(0.6)
+        cs._TMUX["t"] = 0
+        pane = next((p for p in cs.tmux_panes() if p["tmux"].startswith(name + ":")), None)
+        check(pane, f"作った tmux のパネルを拾えない {cs.tmux_panes()}")
+        # 1) 盤の一覧に入る(mac でも。tmux の中の claude は iTerm の一覧に出てこないため)
+        rows = cs.iterm_sessions()
+        check(any(r["tty"] == pane["tty"] and r["win"] == 8 for r in rows), f"盤の一覧に tmux のパネルが無い(計 {len(rows)})")
+        check(len([r for r in rows if r["tty"] == pane["tty"]]) == 1, "同じ tty を二重に数えた")
+        # 2) 画面の文字を読める(読むだけ)
+        mark = "aiboard-lx-" + str(int(time.time()))
+        subprocess.run(["tmux", "send-keys", "-t", pane["tmux"], "-l", f"echo {mark}"], check=True, capture_output=True, timeout=10)
+        subprocess.run(["tmux", "send-keys", "-t", pane["tmux"], "Enter"], check=True, capture_output=True, timeout=10)
+        got = ""
+        for _ in range(20):
+            time.sleep(0.3)
+            got = cs.tmux_capture(pane["tty"])
+            if got.count(mark) >= 2:
+                break
+        check(got.count(mark) >= 2, f"画面に打った字と出力が見えない: {got[-200:]!r}")
+        st, r = 0, {}
+        for _ in range(20):        # 盤は 2.5 秒ごとに数え直す。作ったばかりのパネルは次の更新まで見えない
+            st, r, _ = http(f"/api/screen?lines=40&tab=8-{pane['tab']}")
+            if st == 200 and r.get("ok") and mark in (r.get("screen") or ""):
+                break
+            time.sleep(0.7)
+        check(st == 200 and r.get("ok") and mark in (r.get("screen") or ""), f"/api/screen が画面を返さない {st} {str(r)[:200]}")
+        # 3) キーを送れる(名前が tmux のものに直っているか。↑ で 1 つ前の命令が戻る)
+        ok, why = srv._tmux_send(pane["tmux"], "", True, "up")
+        check(ok, f"↑ を送れない: {why}")
+        ok, why = srv._tmux_send(pane["tmux"], "", True, "ctrl-c")
+        check(ok, f"Ctrl-C を送れない: {why}")
+        time.sleep(0.5)
+        after = cs.tmux_capture(pane["tty"])
+        check(f"echo {mark}" in after.split(mark)[-1] or after.count(f"echo {mark}") >= 2,
+              f"↑ で前の命令が戻っていない: {after[-200:]!r}")
+        ok, why = srv._tmux_send(pane["tmux"], "", True, "f13")
+        check(not ok and "送れない" in why, f"知らないキーを受けてしまった: {ok} {why}")
+
+        # 4) 画面: 「画面を見る」で出て、キーのボタンが /api/send を叩く(実際には送らない)
+        def route(pg):
+            def snap_h(route_, req):
+                import urllib.request
+                u = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+                dd = json.loads(u.read())
+                base = (dd.get("sessions") or [{}])[0]
+                dd["sessions"] = [dict(base, sid="lx1", tab="8-9", ai="Claude", state="作業中", mark="🟢", cwd="/tmp/lx", pid=4242,
+                                       project="uat", doing="", task="tmux", mem_mb=1, subagents={}, tools=None, loop=None,
+                                       limit=None, client=None, state_for=1, ago=1, group_label="", group_rgb=None,
+                                       auth_lost=None, ui=None, model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"})]
+                dd["parallel"] = {}
+                route_.fulfill(status=200, content_type="application/json", body=json.dumps(dd))
+            pg.route("**/api/snapshot", snap_h)
+            pg.route("**/api/conv*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+                {"ok": True, "etag": "x", "timeline": [], "tab": "8-9", "sid": "lx1", "state": "作業中", "mark": "🟢", "ai": "Claude"})))
+            pg.route("**/api/screen*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+                {"ok": True, "tab": "8-9", "screen": "$ claude\n> 画面の文字\n"})))
+            pg.route("**/api/send", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+                {"ok": True, "sent": json.loads(q.post_data or "{}")})))
+
+        def fn(pg, errs, bl):
+            wait_js(pg, "document.querySelectorAll('.card.live').length >= 1", 40)
+            pg.evaluate("window.__send = []; board.select('lx1')")
+            wait_js(pg, "!!document.querySelector('#cvTermTog')", 30)
+            before = pg.evaluate("document.querySelector('#cvScreen').hidden")
+            pg.evaluate("""() => { const f = window.fetch; window.fetch = (u, o) => { if (String(u).includes('/api/send')) window.__send.push(JSON.parse(o.body)); return f(u, o); }; }""")
+            pg.evaluate("document.querySelector('#cvTermTog').click()")
+            wait_js(pg, "document.querySelector('#cvScreen').textContent.includes('画面の文字')", 30)
+            pg.evaluate("document.querySelector('#cvTermKeys button[data-tk=esc]').click()")
+            wait_js(pg, "window.__send.length >= 1", 20)
+            return {"before": before, "text": pg.evaluate("document.querySelector('#cvScreen').textContent"),
+                    "keys": pg.evaluate("[...document.querySelectorAll('#cvTermKeys button')].map(b => b.dataset.tk)"),
+                    "sent": pg.evaluate("window.__send"),
+                    "label": pg.evaluate("document.querySelector('#cvTermTog').textContent")}, errs
+        v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+        check(not errs, f"ページエラー {errs[:1]}")
+        check(v["before"] is True and "画面の文字" in v["text"], f"画面が出ていない {v}")
+        check(v["keys"] == ["esc", "up", "down", "enter", "ctrl-c"], f"キーの並び {v['keys']}")
+        check(v["sent"] and v["sent"][0].get("key") == "esc" and v["sent"][0].get("tab") == "8-9", f"送った中身 {v['sent']}")
+        check("閉じる" in v["label"], f"ボタンの文言 {v['label']}")
+    finally:
+        subprocess.run(["tmux", "kill-session", "-t", name], capture_output=True, timeout=20)
+        cs._TMUX["t"] = 0
+    return "mac でも tmux のパネルを 1 本として拾う / 画面の文字を /api/screen で読む / ↑・Ctrl-C は tmux の名前に直る・知らないキーは断る / 盤の「画面を見る」とキー 5 個"
+
+
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide

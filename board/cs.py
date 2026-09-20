@@ -143,17 +143,26 @@ def go_tty(tty):
 _LAST_ITERM = {"rows": [], "t": 0, "fail_t": 0}
 
 
-def tmux_panes():
+_TMUX = {"t": 0, "rows": []}
+
+
+def tmux_panes(ttl=1.5):
     """tmux の窓を、iTerm のタブと同じ形で返す(win=8、tab=通し番号)。Linux ではこれが端末の出どころ。
 
-    tmux が無い・動いていなければ空。送信は tmux send-keys(overview_server 側)。
+    mac でも返す: tmux の中で動いている claude は、パネル自身の tty に居るので iTerm の一覧には出てこない。
+    tmux が無い・動いていなければ空。1 回 13ms ほどかかるので、少しの間は使い回す(更新 1 回で何度も呼ばれる)。
+    送信は tmux send-keys(overview_server 側)。
     """
+    if time.time() - _TMUX["t"] < ttl:
+        return list(_TMUX["rows"])
     try:
         r = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{pane_tty}\t#{session_name}:#{window_index}.#{pane_index}\t#{pane_current_command}"],
                            capture_output=True, text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
+        _TMUX.update(t=time.time(), rows=[])
         return []
     if r.returncode != 0:
+        _TMUX.update(t=time.time(), rows=[])
         return []
     rows = []
     for i, line in enumerate(r.stdout.splitlines(), 1):
@@ -161,6 +170,7 @@ def tmux_panes():
         if len(parts) >= 2 and parts[0].startswith("/dev/"):
             rows.append({"win": 8, "tab": i, "tty": parts[0].replace("/dev/", ""),
                          "title": parts[2] if len(parts) > 2 else "", "tmux": parts[1]})
+    _TMUX.update(t=time.time(), rows=list(rows))
     return rows
 
 
@@ -187,11 +197,11 @@ def iterm_sessions():
     rows = []
     # 失敗した直後は間を空ける(固まった iTerm に 2.5 秒ごとに 8 秒待たされると、盤の更新が止まる)
     if _LAST_ITERM["fail_t"] and time.time() - _LAST_ITERM["fail_t"] < 30:
-        return list(_LAST_ITERM["rows"]) + app_panes()   # アプリ自身の端末は iTerm と関係ない。落とさない
+        return _with_tmux(list(_LAST_ITERM["rows"]) + app_panes())   # アプリ自身の端末は iTerm と関係ない。落とさない
     out = osa(script)
     if not out and OSA_ERROR:
         _LAST_ITERM["fail_t"] = time.time()
-        return list(_LAST_ITERM["rows"]) + app_panes()   # 問い合わせに失敗: iTerm は前回の一覧・アプリの端末は今の一覧
+        return _with_tmux(list(_LAST_ITERM["rows"]) + app_panes())   # 問い合わせに失敗: iTerm は前回の一覧・アプリの端末は今の一覧
     _LAST_ITERM["fail_t"] = 0
     for line in out.splitlines():
         parts = line.split("\t")
@@ -199,7 +209,13 @@ def iterm_sessions():
             rows.append({"win": int(parts[0]), "tab": int(parts[1]),
                          "tty": parts[2].replace("/dev/", ""), "title": parts[3]})
     _LAST_ITERM.update(rows=list(rows), t=time.time())
-    return rows + app_panes()
+    return _with_tmux(rows + app_panes())
+
+
+def _with_tmux(rows):
+    """tmux のパネルを足す。同じ tty のものは足さない(iTerm のタブが tmux のクライアントを持っている時)。"""
+    have = {r.get("tty") for r in rows}
+    return rows + [p for p in tmux_panes() if p["tty"] not in have]
 
 
 APP_PANES = aiboard_paths.data("app_panes.json")
@@ -593,8 +609,24 @@ def proc_cwd(pid):
     return ""
 
 
+def tmux_capture(tty, lines=200):
+    """tmux のパネルの画面を読む(Linux の端末はこれ)。読むだけ。"""
+    target = next((p.get("tmux") for p in tmux_panes() if p["tty"] == tty), None)
+    if not target:
+        return ""
+    try:
+        r = subprocess.run(["tmux", "capture-pane", "-p", "-J", "-t", target, "-S", f"-{int(lines)}"],
+                           capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return r.stdout if r.returncode == 0 else ""
+
+
 def screen_text(win, tab, tty=None):
-    ok, out = on_tty(tty or tty_of(f"{win}-{tab}"), "return contents of s")
+    tty = tty or tty_of(f"{win}-{tab}")
+    if win == 8 or not IS_MAC:          # tmux のパネル(mac でも 8-N は tmux)
+        return tmux_capture(tty)
+    ok, out = on_tty(tty, "return contents of s")
     return out if ok else ""
 
 

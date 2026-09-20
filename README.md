@@ -14,7 +14,7 @@ Native macOS · open source (MIT) · local only, no telemetry
 
 ## Why
 
-One agent is easy: you watch the terminal. Many agents are not. On this Mac, right now: **19 sessions running, 11 of them waiting on a human**. Over 30 days, agents stopped and stayed stopped **1,012 times on authentication alone** (plus 509 usage limits) — silently, because a stopped agent prints nothing, and macOS notifications turn out to have been denied on this machine the whole time.
+One agent is easy: you watch the terminal. Many agents are not. On this Mac, right now: **19 sessions running, 11 of them waiting on a human**. Over 30 days there were **1,585 distinct stops** (989 authentication, 495 usage limits) across 1,255 conversations — and after an authentication stop, the human came back to that conversation only **63 times out of 989**. Silently, because a stopped agent prints nothing, and macOS notifications turn out to have been denied on this machine the whole time.
 
 AIBoard does not start work for you. It **picks up the sessions you already have**, decides what state each one is in from published sources (the Claude hook, Codex's rollout, `claude agents --json`, terminal output), and gives you **one next action** per session — with the conversation on the left and a real terminal on the right. What differs from task-runner style tools, and where it loses to them, is written down in **[docs/why.md](docs/why.md)** (Japanese), with the measurements behind each claim.
 
