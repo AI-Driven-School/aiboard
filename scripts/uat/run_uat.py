@@ -863,15 +863,18 @@ def mm03(ctx):
     return f"送信 0 件・表示「{msg}」"
 
 
-@case("ST-01", "設定パネル: アカウント・hook・束ね方・skill と MCP・盤・鍵の棚・判定器・遠隔の 8 区画が出て、アカウント数が API と一致")
+@case("ST-01", "設定パネル: アカウント・hook・束ね方・skill と MCP・盤・自動・鍵の棚・判定器・遠隔の 9 区画が出て、アカウント数が API と一致")
 def st01(ctx):
     def fn(pg, errs, bl):
         pg.click("#btnSettings"); wait_js(pg, "document.querySelectorAll('#pBody .acct').length > 1", 60)
         wait_js(pg, "!/確認中/.test(document.querySelector('#extBox').innerText)", 60)
+        # 「システムが自分でやること」は /api/actions を待って描く。読み終える前に数えると区画が足りない(見かけの揺れ)
+        wait_js(pg, "!/読込中/.test(document.querySelector('#autoBox').innerText)", 60)
         return pg.evaluate("[[...document.querySelectorAll('#pBody h3')].map(h => h.textContent), document.querySelectorAll('.accts .acct').length]"), errs
     (heads, n), errs = with_page(ctx, fn, "?lang=ja")
     st, d, _ = http("/api/settings")
     want = ["AI アカウント", "Claude Code hook", "束ね方（名前・色・顧客）", "skill と MCP", "盤",
+            "システムが自分でやること", "やったこと",
             "鍵の棚（値は AIBoard を通りません）", "判定器（選ぶだけの判断を誰がするか）", "遠隔（同じ Wi-Fi の中だけ）"]
     check(heads == want and n == len(d["logins"]) and not errs, f"見出し {heads} != {want} / アカウント {n}/{len(d['logins'])} errs {errs[:1]}")
     return f"{heads} / アカウント {n}"
