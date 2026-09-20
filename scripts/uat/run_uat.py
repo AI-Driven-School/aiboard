@@ -3750,6 +3750,116 @@ def lx01(ctx):
     return "mac でも tmux のパネルを 1 本として拾う / 画面の文字を /api/screen で読む / ↑・Ctrl-C は tmux の名前に直る・知らないキーは断る / 盤の「画面を見る」とキー 5 個"
 
 
+@case("MG-01", "iTerm で動いている本物の会話を、盤から右の端末へ移せる(使い捨てのセッションを自分で作る。UAT_REAL=1 のときだけ)")
+def mg01(ctx):
+    import cs
+    if os.environ.get("UAT_REAL") != "1":
+        return "SKIP: 本物の AI を動かす試験(UAT_REAL=1 のときだけ。わずかに利用枠を使う)"
+    if not cs.IS_MAC:
+        return "SKIP: iTerm のある mac でだけ"
+    # ここだけは**既定のアカウント**で起こす: アプリの端末は既定の設定で `claude --resume` するので、
+    # 別プロファイルの会話は移した先で開けない(移管の試験にならない)。
+    # そのかわり設定ファイルは一切書かない: 既に信頼済みのこのリポジトリを持ち場にする(信頼の印を足す必要が無い)
+    work = os.path.realpath(ROOT)
+    tty, sid, pid = "", "", 0
+    try:
+      try:
+          cmd = ("cd " + shlex_quote(work) + " && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SSE_PORT "
+                 "-u CLAUDE_CONFIG_DIR command claude --model claude-haiku-4-5-20251001")
+          out = cs.osa('tell application "iTerm"\n tell current window\n  create tab with default profile\n'
+                       '  tell current session\n   write text %s\n   return tty\n  end tell\n end tell\nend tell'
+                       % json.dumps(cmd), timeout=20)
+          check(out.strip().startswith("/dev/"), f"iTerm にタブを作れない: {out[:120]} {cs.OSA_ERROR}")
+          tty = out.strip().replace("/dev/", "")
+          # 盤がそのタブを本物の Claude として認識するまで待つ(初回の画面は Esc で抜ける)
+          mine, tab = None, ""
+          for i in range(60):
+              time.sleep(1.5)
+              st, snap, _ = http("/api/snapshot")
+              mine = next((x for x in snap["sessions"] if x.get("tty") == tty), None)
+              if mine and (mine.get("ai") or "").startswith("Claude") and mine.get("sid"):
+                  break
+              if i == 6:
+                  # 初回の「このフォルダを信頼しますか」に、盤と同じ答え方(↓＋Enter)をする。
+                  # まだ sid が無いので /api/send は使えない(AI セッションにしか送らない作り)。自分で作ったタブにだけ送る
+                  cs.on_tty(tty, 'tell s to write text payload newline NO\n return "OK"',
+                            pre="set payload to (character id {27, 91, 66})")
+                  time.sleep(1)
+                  cs.on_tty(tty, 'tell s to write text "" newline YES\n return "OK"')
+          check(mine and (mine.get("ai") or "").startswith("Claude") and mine.get("sid"),
+                f"使い捨ての claude が盤に出ない(tty {tty}) {mine}")
+          sid, tab, pid = mine["sid"], mine["tab"], mine.get("pid") or 0
+          check(not tab.startswith("0-"), f"アプリの端末になっている(iTerm で作ったはず) {tab}")
+          # 1 往復させて、続きのある会話にする(状態の名前でなく、記録が増えたかで待つ)
+          st, r, _ = http("/api/send", "POST", {"tab": tab, "sid": sid, "text": "1 と答えて"},
+                          headers={"Origin": BASE.rstrip("/")})
+          check(st == 200 and r.get("ok"), f"使い捨てに送れない {r}")
+          tr, before = "", 0
+          for _ in range(60):
+              time.sleep(1.5)
+              st, snap, _ = http("/api/snapshot")
+              now = next((x for x in snap["sessions"] if x.get("sid") == sid), None)
+              tr = (now or {}).get("transcript") or tr
+              if tr and os.path.exists(tr) and "1 と答えて" in open(tr, errors="replace").read():
+                  break
+          check(tr and os.path.exists(tr), f"記録が無い(送った文が記録に現れない) tr={tr!r}")
+          body = open(tr, errors="replace").read()
+          check("1 と答えて" in body, "送った文が記録に無い(別のセッションを掴んでいる可能性)")
+          for _ in range(40):      # 返事が返るまで(道具を使わない 1 語の返事)
+              time.sleep(1.5)
+              st, snap, _ = http("/api/snapshot")
+              now = next((x for x in snap["sessions"] if x.get("sid") == sid), None)
+              if now and now["state"] in ("返答待ち", "確認待ち"):
+                  break
+          before = os.path.getsize(tr)
+
+          # ここが本番: 盤の「右の端末で開く」(確認は はい)。iTerm の AI を終えて、同じ会話をアプリの端末で開く
+          js = """(async () => {
+            const nap = ms => new Promise(r => setTimeout(r, ms));
+            const find = () => (board.snap().sessions || []).find(x => x.sid === %s);
+            let s = null;
+            for (let i = 0; i < 20 && !(s = find()); i++) await nap(500);
+            if (!s) return {ok: false, why: '移す前のセッションが盤に無い'};
+            const from = s.tab;
+            const r = await board.openInApp(s);
+            let pane = null;
+            for (let i = 0; i < 45; i++) {
+              await nap(1000);
+              pane = (board.snap().sessions || []).find(x => x.sid === %s && (x.tab || '').startsWith('0-'));
+              if (pane) break;
+            }
+            return {ok: !!(r && r.ok) && !!pane, r, from, pane: pane ? {tab: pane.tab, sid: pane.sid, cwd: pane.cwd} : null};
+          })()""" % (json.dumps(sid), json.dumps(sid))
+          res = run_app_js(ctx, "return await " + js.strip(),
+                           {"AIBOARD_DIALOG_AUTO": "yes", "AIBOARD_NO_ASK": "1", "AIBOARD_FAST_SHELL": "1"}, wait="6")
+          check(res.get("ok"), f"アプリが JS を返さない {res}")
+          v = res["value"]
+          check(v.get("ok"), f"移せていない {v}")
+          check(v["pane"]["sid"] == sid and os.path.realpath(v["pane"]["cwd"]) == work, f"移った先が違う {v['pane']}")
+          check(not v["from"].startswith("0-"), f"移す前が既にアプリの端末だった {v['from']}")
+          # 元の iTerm 側の AI は終わっている(同じ会話が 2 つ動かない)
+          for _ in range(20):
+              if not (pid and _pid_alive(pid)):
+                  break
+              time.sleep(0.5)
+          check(not (pid and _pid_alive(pid)), f"iTerm 側の claude がまだ生きている pid={pid}")
+          # 会話は同じ記録の続き(新しい会話を作っていない)
+          check(os.path.exists(tr) and os.path.getsize(tr) >= before, "記録が別物になっている")
+          others = [f for f in glob.glob(os.path.join(HOME, ".claude", "projects", "*", "*.jsonl"))
+                    if os.path.getmtime(f) > time.time() - 600 and os.path.basename(f) != sid + ".jsonl"
+                    and work.replace("/", "-") in f]
+          check(not others, f"別の会話ができている {others}")
+          return (f"iTerm のタブ {tab}(tty {tty}) → アプリの端末 {v['pane']['tab']}・sid は同じ / "
+                  f"元の claude は終了(pid {pid}) / 記録は同じ 1 本の続き({before}B→{os.path.getsize(tr)}B)")
+      except Exception:
+        import traceback
+        check(False, "例外: " + traceback.format_exc()[-1200:])
+    finally:
+        if tty:
+            cs.osa('tell application "iTerm"\n repeat with w in windows\n  repeat with t in tabs of w\n   repeat with s in sessions of t\n'
+                   '    if tty of s is %s then close s\n   end repeat\n  end repeat\n end repeat\nend tell' % json.dumps("/dev/" + tty))
+
+
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide
@@ -7713,9 +7823,9 @@ MANUAL = [
     ("MA-01", "日本語入力: アプリの会話ビューで「てすと」→変換→Enter で確定しても送られない(本物の IME は人の手。合成は CV-02)"),
     ("MA-02", "通知を押す: 出た通知をクリックすると、その端末が前に出る(出す・届く・押した先の処理は NT-02 で自動。押す操作だけ人)"),
     ("MA-06", "別アカウントで続き: 上限に当たったセッションで他アカウントのボタンを押し、続きが開く(2 つ目の実アカウントが要る)"),
-    ("MA-09", "右の端末で開く(別の端末で動いていた会話): iTerm の実セッションを右へ移す(利用者の iTerm を触るので人の手)"),
 ]
-# 自動になったもの: MA-03→RE-02(本物の判断待ちに盤で答える) / MA-04→RE-01 / MA-05→RE-03(本物を盤から終了) /
+# 自動になったもの: MA-03→RE-02(本物の判断待ちに盤で答える) / MA-04→RE-01 / MA-05→RE-03(本物を盤から終了)
+#   / MA-09→MG-01(使い捨ての会話を iTerm に作り、盤から右の端末へ移す。UAT_REAL=1) /
 #                  MA-07→SV-19 / MA-08・MA-10→AP-16 / MA-02 の配信→NT-02・NT-03
 # 自動になったもの: MA-04→RE-01 / MA-07→SV-19 / MA-08・MA-10→AP-16 / MA-02 の配信→NT-02・NT-03
 
