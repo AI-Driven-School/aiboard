@@ -909,7 +909,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
             let cwd = (b["cwd"] as? String) ?? HOME
             let codex = ai == "Codex"
             showTerminal()
-            pm.open(kind: codex ? "codex" : "claude", cwd: cwd, command: codex ? "codex resume \(id)" : "claude --resume \(id)")
+            // 「この続きから」: 再開と同時に、どこから続けるかの一言を渡す(Claude だけ。Codex は再開だけ)
+            var cmd = codex ? "codex resume \(id)" : "claude --resume \(id)"
+            if !codex, let ask = b["prompt"] as? String, !ask.isEmpty, ask.count <= 2000 {
+                cmd += " \"$(cat \(shellQuote(writeInstructions("resume-" + id, ask))))\""
+            }
+            pm.open(kind: codex ? "codex" : "claude", cwd: cwd, command: cmd)
             if let p = pm.panes.last { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.window.makeFirstResponder(p.view) } }
         case "send":
             // 会話ビューからの入力を、アプリの端末へ。文章は貼り付け+Enter、1 文字はキーとして、esc はエスケープ

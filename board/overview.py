@@ -1599,6 +1599,99 @@ def _remote_impl():
     return REMOTE_SCRIPT, _parse_remote, ""
 
 
+# 遠隔の機械で動いている Claude のセッションと、止まり方(認証・上限・一時的な失敗)を読む。
+# 向こうには何も入れない(python3 だけで動く小さな読み取り)。見るだけで、送ったり止めたりはしない。
+REMOTE_SESS_SCRIPT = r"""
+import json, os, glob, re, time
+H = os.path.expanduser("~")
+out = []
+for f in glob.glob(os.path.join(H, ".claude", "sessions", "*.json")):
+    try:
+        d = json.load(open(f))
+        pid = int(d.get("pid") or os.path.basename(f).split(".")[0])
+        os.kill(pid, 0)
+    except Exception:
+        continue
+    sid = d.get("sessionId") or ""
+    tr = glob.glob(os.path.join(H, ".claude", "projects", "*", sid + ".jsonl")) if sid else []
+    stop, last = "", ""
+    if tr:
+        try:
+            sz = os.path.getsize(tr[0]); fh = open(tr[0], "rb"); fh.seek(max(0, sz - 200000))
+            for line in fh.read().decode("utf-8", "replace").splitlines():
+                if '"assistant"' not in line and '"user"' not in line:
+                    continue
+                try:
+                    x = json.loads(line)
+                except Exception:
+                    continue
+                if x.get("type") == "user" and not x.get("isMeta"):
+                    last = "user"
+                if x.get("type") != "assistant":
+                    continue
+                last = "tool" if any(isinstance(b, dict) and b.get("type") == "tool_use"
+                                     for b in (x.get("message", {}).get("content") or [])) else "end"
+                t = "".join(b.get("text", "") for b in (x.get("message", {}).get("content") or []) if isinstance(b, dict))
+                q = x.get("quotaLimits") or {}
+                if x.get("isApiErrorMessage"):
+                    if q.get("status") == "rejected": stop = q.get("rateLimitType") or "five_hour"
+                    elif re.search(r"Invalid API key", t, re.I): stop = "apikey"
+                    elif re.search(r"Not logged in|Login expired|OAuth session expired", t, re.I): stop = "login"
+                    elif re.search(r"out of usage credits", t, re.I): stop = "credits"
+                    elif re.search(r"went to sleep|response stopped|reach the API|overloaded|timeout", t, re.I): stop = "transient"
+                elif (x.get("message", {}).get("model") or "") != "<synthetic>":
+                    stop = ""
+        except Exception:
+            pass
+    # hook が無い機械では status が無い。記録の末尾から推す(返答で終わった=こちらの番、それ以外=AI の番)
+    st = d.get("status") or {"end": "idle", "tool": "busy", "user": "busy"}.get(last, "")
+    out.append({"pid": pid, "sid": sid, "cwd": d.get("cwd") or "", "status": st, "status_from": "hook" if d.get("status") else "transcript",
+                "updated": d.get("updatedAt") or (os.path.getmtime(tr[0]) if tr else None), "stop": stop,
+                "name": (d.get("name") or "")[:60]})
+import socket
+print("@@rs" + json.dumps({"host": socket.gethostname(), "rows": out}) + "@@end")
+"""
+_RS_CACHE = {"t": 0, "data": {"ok": False, "reason": "まだ読んでいない", "rows": []}, "busy": False}
+
+
+def remote_sessions(force=False, ttl=60):
+    """遠隔の機械(remote_hosts)のセッション。盤を待たせないよう裏で読み、手元の最新を返す。"""
+    import threading
+    now = time.time()
+    if not MACMINI_HOSTS:
+        return {"ok": False, "reason": "未設定(~/.aiboard/config.json の remote_hosts)", "rows": []}
+    if (force or now - _RS_CACHE["t"] > ttl) and not _RS_CACHE["busy"]:
+        _RS_CACHE["busy"] = True
+
+        def run():
+            rows, errs, seen = [], [], set()
+            try:
+                for host in MACMINI_HOSTS:
+                    try:
+                        r = subprocess.run(["ssh"] + SSH_OPTS + [host, "python3 -"], input=REMOTE_SESS_SCRIPT,
+                                           capture_output=True, text=True, timeout=40)
+                    except (subprocess.TimeoutExpired, OSError) as e:
+                        errs.append(f"{host}: {e}"[:120]); continue
+                    m = re.search(r"@@rs(.*)@@end", r.stdout, re.S)
+                    if r.returncode != 0 or not m:
+                        errs.append(f"{host}: rc={r.returncode} {r.stderr.strip()[:120]}"); continue
+                    got = json.loads(m.group(1))
+                    if got["host"] in seen:
+                        continue    # 同じ機械への別名(macmini-cf と macmini-m4nc など)は 1 回だけ数える
+                    seen.add(got["host"])
+                    for x in got["rows"]:
+                        hook = {"waiting": "waiting", "busy": "working", "idle": "replied"}.get(x.get("status"), "")
+                        x["host"], x["machine"] = host, got["host"]
+                        x["ui"] = __import__("decide").decide({"proc": True, "stop": x.get("stop") or "", "hook": hook})
+                        rows.append(x)
+                _RS_CACHE.update(t=time.time(), data={"ok": not errs or bool(rows), "reason": " / ".join(errs), "rows": rows,
+                                                      "fetched": time.time()})
+            finally:
+                _RS_CACHE["busy"] = False
+        threading.Thread(target=run, daemon=True).start()
+    return _RS_CACHE["data"]
+
+
 def macmini(force=False):
     """macmini の無人AIジョブの状態。60秒キャッシュ(ステージング内 macmini_cache.json)。
     ssh 失敗時は ok=False と reason を返し、前回成功分があれば stale として添える。"""
@@ -1919,6 +2012,7 @@ def snapshot(with_macmini=True):
         "parallel": parallel_groups(sess),
         "truth_table": [r[0] for r in __import__("decide").ROWS],
         "autopilot": __import__("autopilot").policy(),
+        "remote_sessions": remote_sessions() if with_macmini else {"ok": False, "reason": "未取得", "rows": []},
         "sound": sound_on(),
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
@@ -2008,6 +2102,52 @@ def timeline_claude(path, limit=20, tail_bytes=3_000_000, with_text=False, sidec
     for e in picked:
         e["text"] = redact(e["text"])
     return picked
+
+
+def resume_point(path):
+    """終わった・止まった会話の「どこから続けるか」。記録の末尾から、最後の依頼・その後に済んだこと・
+    途中だった操作(結果が返っていない道具)・止まり方を拾う。推測で埋めない(無ければ空)。"""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 2_000_000))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    last_ask, last_ask_t, done, pending, stop, interrupted = "", "", [], {}, None, False
+    describe = _load_describe_tool()
+    for line in chunk.splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        typ = d.get("type")
+        if typ == "user":
+            if re.search(r"\[Request interrupted by user", line):
+                interrupted = True
+                continue
+            txt = cs.prompt_text(d)
+            if txt:
+                last_ask, last_ask_t, done, pending, interrupted, stop = txt, d.get("timestamp", ""), [], {}, False, None
+            for b in (d.get("message", {}).get("content") or []):
+                if isinstance(b, dict) and b.get("type") == "tool_result":
+                    tid = b.get("tool_use_id")
+                    if tid in pending:
+                        done.append(pending.pop(tid))
+        elif typ == "assistant":
+            if d.get("isApiErrorMessage"):
+                txt = "".join(b.get("text", "") for b in (d.get("message", {}).get("content") or []) if isinstance(b, dict))
+                stop = txt[:120]
+                continue
+            for b in (d.get("message", {}).get("content") or []):
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    pending[b.get("id")] = describe(b.get("name", ""), b.get("input") or {})
+    if not last_ask:
+        return None
+    return {"ask": redact(last_ask[:400]), "at": last_ask_t,
+            "done": [redact(x) for x in done[-5:]], "done_count": len(done),
+            "pending": [redact(x) for x in list(pending.values())[-3:]],
+            "interrupted": interrupted, "stop": redact(stop) if stop else ""}
 
 
 def timeline_codex(path, limit=20, with_text=False):

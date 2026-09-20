@@ -3510,6 +3510,135 @@ def pr01(ctx):
     return f"組の作り方(末尾の / ・終了・非 AI・背景を除く)・実機 {real}・カード ⇉2・相棒 1 件と注意"
 
 
+@case("RP-01", "どこから再開すべきか: 最後の依頼・済んだこと・途中だった操作・止めた所・止まり方を記録から拾い、再開ボタンがそれを添えて --resume する")
+def rp01(ctx):
+    import overview as o
+    d = tempfile.mkdtemp(dir=ctx["data"])
+    J = lambda x: json.dumps(x, ensure_ascii=False)
+    U = lambda t, c: J({"type": "user", "timestamp": t, "message": {"role": "user", "content": c}})
+    A = lambda t, c, **k: J({"type": "assistant", "timestamp": t, "message": {"model": "claude-opus-5", "content": c}, **k})
+    tu = lambda i, cmd: {"type": "tool_use", "id": i, "name": "Bash", "input": {"command": cmd}}
+    tr = lambda i: {"type": "tool_result", "tool_use_id": i, "content": "ok"}
+    lines = [
+        U("2026-09-19T00:00:00Z", [{"type": "text", "text": "古い依頼"}]),
+        A("2026-09-19T00:00:10Z", [tu("t0", "echo old")]),
+        U("2026-09-19T00:01:00Z", [{"type": "text", "text": "テストを直して"}]),     # ここから数え直す
+        A("2026-09-19T00:01:10Z", [tu("t1", "npm test")]),
+        U("2026-09-19T00:01:20Z", [tr("t1")]),
+        A("2026-09-19T00:01:30Z", [tu("t2", "npm run build")]),                      # 結果が返らないまま
+        U("2026-09-19T00:01:40Z", [{"type": "text", "text": "[Request interrupted by user for tool use]"}]),
+        A("2026-09-19T00:01:50Z", [{"type": "text", "text": "API Error: 529 overloaded"}], isApiErrorMessage=True),
+    ]
+    p = os.path.join(d, "t.jsonl"); open(p, "w").write("\n".join(lines) + "\n")
+    rp = o.resume_point(p)
+    check(rp and rp["ask"] == "テストを直して", f"最後の依頼 {rp}")
+    check(rp["done_count"] == 1 and "npm test" in rp["done"][0], f"済んだこと(古い依頼の分を数えない) {rp}")
+    check(len(rp["pending"]) == 1 and "npm run build" in rp["pending"][0], f"途中だった操作 {rp}")
+    check(rp["interrupted"] is True and "overloaded" in rp["stop"], f"止めた所・止まり方 {rp}")
+    open(p, "w").write("\n".join(lines[2:5]) + "\n")
+    clean = o.resume_point(p)
+    check(clean["pending"] == [] and not clean["interrupted"] and clean["stop"] == "", f"何も起きていない会話に印を付けた {clean}")
+    check(o.resume_point(os.path.join(d, "none.jsonl")) is None, "無い記録で None を返さない")
+
+    def route(pg):
+        def handler(route_, req):
+            import urllib.request
+            r = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            dd = json.loads(r.read())
+            base = (dd.get("sessions") or [{}])[0]
+            dd["sessions"] = [dict(base, sid="rp1", tab="9-1", ai="Claude", state="作業中", mark="🟢", cwd="/tmp/rp", pid=4242,
+                                   project="uat", doing="", task="テストを直して", mem_mb=1, subagents={}, tools=None, loop=None,
+                                   limit=None, client=None, state_for=1, ago=1, group_label="", group_rgb=None, auth_lost=None,
+                                   ui=None, model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"})]
+            dd["parallel"] = {}
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(dd))
+        pg.route("**/api/snapshot", handler)
+        pg.route("**/api/conv*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"ok": True, "etag": "x", "timeline": [], "tab": "9-1", "sid": "rp1", "state": "作業中", "mark": "🟢", "ai": "Claude", "resume": rp})))
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "document.querySelectorAll('.card.live').length >= 1", 40)
+        pg.evaluate("window.__sent = []; board.setToApp(m => window.__sent.push(m)); board.select('rp1')")
+        wait_js(pg, "!document.querySelector('#cvResume').hidden && !!document.querySelector('#cvResumeGo')", 30)
+        text = pg.evaluate("document.querySelector('#cvResume').innerText")
+        pg.evaluate("document.querySelector('#cvResumeGo').click()")
+        return {"text": text, "sent": pg.evaluate("window.__sent.filter(m => m.type === 'resume')")}, errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    for w in ("テストを直して", "済んだこと 1", "npm run build", "あなたが止めた", "overloaded"):
+        check(w in v["text"], f"画面に「{w}」が無い: {v['text'][:300]}")
+    check(len(v["sent"]) == 1, f"再開が送られていない {v['sent']}")
+    m = v["sent"][0]
+    check(m["id"] == "rp1" and m["ai"] == "Claude" and "npm run build" in m["prompt"] and "止めました" in m["prompt"], f"再開の中身 {m}")
+    src = open(os.path.join(ROOT, "Sources", "AIBoard", "main.swift"), encoding="utf-8").read()
+    check('b["prompt"] as? String' in src and 'writeInstructions("resume-" + id, ask)' in src, "アプリ側が prompt を --resume に渡していない")
+    return "記録: 最後の依頼以降だけ数える(済 1・途中 1・止めた・止まり方)/ 平穏な会話には印なし / 画面→再開に途中の操作と中断を添える"
+
+
+@case("MS-01", "別の機械のセッション: ssh で読むだけ・同じ機械の別名は 1 回・止まり方を真理値表で判定・盤に枠で出す(demo では機械名を隠す)")
+def ms01(ctx):
+    import overview as o
+    fake = tempfile.mkdtemp(dir=ctx["data"])
+    sid = "11111111-2222-3333-4444-555555555555"
+    os.makedirs(os.path.join(fake, ".claude", "sessions")); os.makedirs(os.path.join(fake, ".claude", "projects", "-w"))
+    json.dump({"pid": os.getpid(), "sessionId": sid, "cwd": "/w/secret-client-app", "kind": "interactive"},
+              open(os.path.join(fake, ".claude", "sessions", f"{os.getpid()}.json"), "w"))
+    json.dump({"pid": 999999, "sessionId": "dead", "cwd": "/w"}, open(os.path.join(fake, ".claude", "sessions", "999999.json"), "w"))
+    open(os.path.join(fake, ".claude", "projects", "-w", sid + ".jsonl"), "w").write(json.dumps(
+        {"type": "assistant", "isApiErrorMessage": True, "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Invalid API key · Please run /login"}]}}) + "\n")
+    real_run, calls = o.subprocess.run, []
+
+    def fake_run(cmd, **kw):
+        if cmd and cmd[0] == "ssh":
+            calls.append(cmd)
+            check("python3 -" in cmd and not any(w in " ".join(cmd) for w in ("kill", "rm ", "send-keys")), f"読む以外の命令 {cmd}")
+            return real_run(["python3", "-"], input=kw.get("input"), capture_output=True, text=True, timeout=40,
+                            env=dict(os.environ, HOME=fake))
+        return real_run(cmd, **kw)
+    hosts0 = o.MACMINI_HOSTS
+    try:
+        o.subprocess.run, o.MACMINI_HOSTS = fake_run, ["alias-a", "alias-b"]
+        o._RS_CACHE.update(t=0, busy=False, data={"ok": False, "reason": "", "rows": []})
+        o.remote_sessions(force=True)
+        for _ in range(60):
+            time.sleep(0.5)
+            got = o.remote_sessions()
+            if got.get("fetched"):
+                break
+    finally:
+        o.subprocess.run, o.MACMINI_HOSTS = real_run, hosts0
+    check(len(calls) == 2, f"ssh の回数 {len(calls)}")
+    rows = got["rows"]
+    check(len(rows) == 1, f"同じ機械を二重に数えた / 死んだ pid を拾った {rows}")
+    r = rows[0]
+    check(r["stop"] == "apikey" and r["ui"]["row"] == "認証: 鍵が無効" and r["ui"]["badge"] == "auth", f"判定 {r}")
+    check(r["status_from"] == "transcript", f"推定の出どころ {r}")
+
+    def route(pg):
+        def handler(route_, req):
+            import urllib.request
+            u = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            dd = json.loads(u.read())
+            dd["remote_sessions"] = {"ok": True, "reason": "", "fetched": time.time(), "rows": rows}
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(dd))
+        pg.route("**/api/snapshot", handler)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "[...document.querySelectorAll('.frame')].some(f => f.innerText.includes('別の機械') || f.innerText.includes('other machines'))", 40)
+        return pg.evaluate("""() => { const f = [...document.querySelectorAll('.frame')].find(f => /別の機械|other machines/.test(f.innerText));
+            const cards = [...document.querySelectorAll('.jobcard')].filter(c => c.innerText.includes('·'));
+            return {frame: f.innerText, cards: cards.map(c => c.innerText + ' | ' + (c.title || ''))}; }"""), errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check("こちらの番 1" in v["frame"] and "見るだけ" in v["frame"], f"枠の見出し {v['frame'][:200]}")
+    check(v["cards"] and "secret-client-app" in v["cards"][0] and "claude --resume " + sid in v["cards"][0], f"カード {v['cards']}")
+    vd, errs = with_page(ctx, fn, "?lang=ja&demo=1", route_extra=route)
+    check(not errs, f"ページエラー(demo) {errs[:1]}")
+    blob = " ".join(vd["cards"]) + vd["frame"]
+    check("secret-client-app" not in blob and r["machine"] not in blob and "ssh " not in blob, f"demo で機械名・フォルダ名が漏れた {blob[:300]}")
+    return f"ssh 2 回(別名 2)→ 1 台として 1 本 / 死んだ pid は拾わない / 鍵が無効→🔑 / 盤に枠・こちらの番 1 / demo で隠す"
+
+
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide

@@ -572,6 +572,7 @@ const EN = {
   '補助（元不明）': 'Helpers (origin unknown)', '元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開': 'codex exec runs (reviews/helpers) whose parent Claude session could not be identified. Click to expand',
   'サブエージェント': 'Subagent', '終了': 'Ended', '束': 'Bundle',
   'YouTube工場': 'YouTube factory', '⏸ PAUSE中(publish停止)': '⏸ PAUSED (publishing off)', '稼働': 'running', '最後': 'last', '停止: ': 'down: ', '全部 online': 'all online',
+  '▣ 別の機械のセッション': '▣ Sessions on other machines', 'こちらの番': 'your turn', '見るだけ': 'read-only', '（記録の末尾から推定）': ' (inferred from the transcript tail)', '次の一手: ': 'Next: ', 'その機械で開く: ': 'Open on that machine: ',
   '今日 ok': 'today ok', '本': ' jobs', '前': ' ago', ' 外部送信あり': ' (sends externally)', '取得失敗': 'fetch failed', '未設定(~/.aiboard/config.json の remote_hosts)': 'not configured (remote_hosts in ~/.aiboard/config.json)',
   '▣ macmini 無人AIジョブ': '▣ Remote unattended jobs', '● 自社・その他（直近）': '● Home & others (recent)', 'さらに表示': 'show more', '直近だけに戻す': 'recent only',
   'モデル不明': 'unknown model', '子: ': 'children: ', '子 ': 'children ', ' 動作中': ' running', '↳ サブエージェント': '↳ subagent', '↳ 査読': '↳ review', '↳ 補助': '↳ helper', '🤖 無人': '🤖 unattended',
@@ -583,7 +584,12 @@ const EN = {
   '使ったモデルの履歴': 'Model history', 'いまやっていること': 'Doing now', '関係': 'Relations', '直近の流れ': 'Recent activity', '過去セッション': 'past session', '期間': 'Period', '発言/操作': 'Msgs/ops', '人': 'human', 'ツール': 'tools',
   '編集したファイル': 'Edited files', 'iTerm でタブ': 'Open tab', 'を開く': ' in iTerm', 'iTerm で再開': 'Resume in terminal', '会話(依頼・返答・操作)': 'Conversation (prompts, replies, ops)',
   '新しい iTerm タブで再開します:': 'Resume in a new iTerm tab:', '根拠のある関係は見つかっていない': 'No evidenced relations found', '一致行: ': 'matched lines: ', 'つづき': 'continues', '査読': 'review', '補助': 'helper', '同じファイル': 'same file',
-  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'システムが自分でやること': 'What the system does by itself',
+  '無人ジョブ': 'Unattended jobs', 'あなた': 'You', '右の端末': 'right terminal', '右の端末には無い': 'not in the right terminal', '背景': 'background', '別の端末': 'another terminal', 'この続きから': 'Continue from here', '最後の依頼': 'Last request',
+  '済んだこと': 'Done', '直近': 'latest', '途中だった操作': 'In progress when it stopped', 'あなたが止めた所で終わっています': 'It ended where you interrupted it',
+  '止まり方': 'How it stopped', 'この続きから再開': 'Resume from here', '前回はここで止まりました。続きから進めてください。': 'It stopped here last time. Please continue from here.',
+  '（結果が返っていません。必要ならやり直してください）': '(no result came back; redo it if needed)',
+  '前回は私が途中で止めました。止めた所から、やり直すべきか確かめてから進めてください。': 'I interrupted you last time. Check whether to redo the interrupted step before continuing.',
+  '右の端末で、続きから開きました': 'Resumed from here in the right terminal', 'システムが自分でやること': 'What the system does by itself',
   '真理値表が決めた「次の一手」のうち、人しかできないもの（ログイン・鍵・請求・判断への返事）はシステムは触りません。':
     'Of the next steps the truth table decides, the ones only a person can do (signing in, keys, billing, answering a prompt) are never done by the system.',
   '上限が解けたら自動で続ける': 'Continue automatically when a limit resets',
@@ -621,7 +627,7 @@ const EN = {
   '上限は不明（当たった時に学習します）': 'ceiling unknown (learned when you hit it)', '5 時間枠': '5-hour window', '7 日枠': '7-day window',
   '※ 公式の使用率ではありません。使った量は自分の会話ログから数えたもの、% は前に上限に当たった時の使用量を 100% とした目安です':
     'Not an official usage figure. The amounts are counted from your own transcripts; the % is against the usage recorded the last time you hit the limit.', 'さらに': 'more:', '押すと次の分を出します': 'Click to show the next batch', 'このフォルダはまだ信頼の答えが記録されていません。「このフォルダを信頼しますか」で止まっているかもしれません': 'No trust answer is recorded for this folder yet. It may be waiting at \u201cDo you trust this folder?\u201d', '起動の途中か、初回の確認画面で止まっているかもしれません': 'Still starting, or stopped at a first-run prompt', '（いいえ・閉じる）': '(no / dismiss)', '（既定を選ぶ）': '(accept default)', '端末を見る': 'Look at the terminal', 'の分は、その時刻にアプリが開いていなかったので走っていません': 'did not run: the app was not open at that time', '分ごと（閉じていた間の分は 1 回にまとめて走ります）': ' min (runs missed while closed are merged into one)', '推定': 'guess', 'Tailscale（外出先から。自分で張った VPN）': 'Tailscale (from outside, over your own VPN)', '同じ Wi-Fi から': 'from the same Wi-Fi', '外出先からは、Tailscale や WireGuard のような自分の VPN でこの Mac に入ってから同じ URL を開きます。AIBoard は中継サーバを持ちません。': 'From outside, join this Mac over your own VPN (Tailscale, WireGuard) and open the same URL. AIBoard has no relay server.', 'スマホの Safari で開き「ホーム画面に追加」すると、アプリのように全画面で開けます（合言葉は端末に残ります）': 'Open it in Safari on your phone and \u201cAdd to Home Screen\u201d: it then opens full-screen like an app (the key stays on that device).', 'git のバッジ': 'git badges', 'ブランチ（手元の git だけ）': 'branch (local git only)', 'に問い合わせる': 'is queried', 'PR の状態を gh で GitHub に問い合わせます（ブランチ名を送ります・認証は gh のもの）。よろしいですか？': 'PR state will be looked up on GitHub via gh (the branch name is sent; auth is gh\u2019s own). Continue?',
-  '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)',
+  '判定器（選ぶだけの判断を誰がするか）': 'Judge (who makes the pick-one decisions)', '測った結果（2026-09-19・手元の 3 モデル・実際の会話から採った題材）: 「最初に見せる 1 件」は規則の方が強い（一致 27 組中 2〜10）。「顧客の候補」はモデル次第で、誤った名指しが 0 件のものと 36 件のものがあった。替える前に docs/judge-measured.md と scripts/judge_bench.py で自分の環境を測ってください。': 'Measured 2026-09-19 on three local models with real session data: rules beat all of them at picking what to show first (2–10 of 27 agreed). For client suggestions it depends entirely on the model — one named 8 with 0 wrong, another named 52 with 36 wrong. Measure your own setup with scripts/judge_bench.py (see docs/judge-measured.md) before switching.',
   '「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。':
     'Who makes pick-one decisions such as "which waiting session first" or "which client". Rules send nothing anywhere. A local model talks to 127.0.0.1 only. External is off by default; turning it on is always reported by the proof script.',
   '規則（既定）': 'Rules (default)', '手元のモデル': 'Local model', '外部の決定モデル': 'External decision model', '鍵': 'Key',
@@ -1028,6 +1034,25 @@ function layout(nodes) {
       jobs.push({id: 'mm:err', title: T('取得失敗'), sub: T(mm.reason), ok: false});
     }
   }
+  // 別の機械(remote_hosts)で動いているセッション。見るだけ(送る・止めるはしない)。止まっているものを先に出す
+  const rs = snap?.remote_sessions;
+  if (rs && rs.rows && rs.rows.length) {
+    if (x > 0) { x = 0; y += rowH + FRAME_GAP; }
+    const rows = rs.rows.slice().sort((a, b) => (b.ui.badge ? 1 : 0) - (a.ui.badge ? 1 : 0));
+    const rj = rows.map((r, i) => {
+      const machine = DEMO ? 'remote-' + (1 + hashStr(r.machine) % 9) : r.machine;
+      const where = DEMO ? demoProject(r.cwd.split('/').pop(), r.sid) : (r.cwd.split('/').pop() || '~');
+      const open = DEMO ? '' : `ssh ${r.host} -t 'cd ${r.cwd} && claude --resume ${r.sid}'`;
+      return {id: 'rs:' + r.sid, title: `${machine} · ${where}`, ok: !r.ui.badge,
+              sub: `${T(r.ui.state)}${r.ui.why && r.ui.badge ? '・' + T(r.ui.why) : ''}${r.status_from === 'transcript' ? T('（記録の末尾から推定）') : ''}`,
+              note: (r.ui.action_label ? T('次の一手: ') + T(r.ui.action_label) + '\n' : '') + (open ? T('その機械で開く: ') + open : '')};
+    });
+    const cols = Math.min(4, rj.length), nr = Math.ceil(rj.length / 4);
+    const w = Math.max(420, cols * (230 + GAP) - GAP + FRAME_PAD * 2), h = nr * (70 + GAP) - GAP + FRAME_PAD * 2;
+    rj.forEach((j, i) => { j.x = x + FRAME_PAD + (i % 4) * (230 + GAP); j.y = y + FRAME_PAD + Math.floor(i / 4) * (70 + GAP); });
+    frames.push({key: 'rs', x, y, w, h, nodes: [], jobs: rj, rs});
+    y += h + FRAME_GAP;
+  }
   if (jobs.length) {
     if (x > 0) { x = 0; y += rowH + FRAME_GAP; }
     const cols = Math.min(4, jobs.length), rows = Math.ceil(jobs.length / 4);
@@ -1054,7 +1079,9 @@ function render() {
   const items = [];   // [key, html]。patchNodes() が変わったものだけ DOM に反映する
   frames.forEach(f => {
     let label, color = null, sum = '';
-    if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
+    if (f.key === 'rs') { const st = f.rs.rows.filter(r => r.ui.badge).length;
+      label = T('▣ 別の機械のセッション'); sum = `${f.rs.rows.length}${T('本')}` + (st ? `・<span class="warn">${T('こちらの番')} ${st}</span>` : '') + `・${T('取得')} ${fmtDur(snap.time - f.rs.fetched)}${T('前')}・${T('見るだけ')}`; }
+    else if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
     else if (f.key.startsWith('c:')) { const c = (f.nodes.map(n => n.client).find(Boolean)) || {emoji: '•', label: f.key.slice(2), rgb: [120, 120, 120]};
       label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
     else if (f.key.startsWith('p:') && f.nodes.find(n => (n.s || n.r || {}).group_label)) {
@@ -1708,6 +1735,7 @@ async function renderSettings(refresh) {
     const opt = (v, label) => `<button data-jd="${v}" class="${jd.backend === v ? 'primary' : ''}">${label}</button>`;
     box.innerHTML = `<div class="sub">${T('「最初に見せる判断待ち」「顧客の候補」のような、候補から 1 つ選ぶ判断の担当。規則は何も外へ出しません。手元のモデルは 127.0.0.1 だけ。外部は既定で切で、入れると証明スクリプトに必ずその事実が書かれます。')}</div>
       <div class="opts">${opt('rules', T('規則（既定）'))}${opt('local', T('手元のモデル'))}${opt('external', T('外部の決定モデル'))}</div>
+      <div class="sub">${T('測った結果（2026-09-19・手元の 3 モデル・実際の会話から採った題材）: 「最初に見せる 1 件」は規則の方が強い（一致 27 組中 2〜10）。「顧客の候補」はモデル次第で、誤った名指しが 0 件のものと 36 件のものがあった。替える前に docs/judge-measured.md と scripts/judge_bench.py で自分の環境を測ってください。')}</div>
       ${jd.backend === 'local' ? `<div class="kvrow"><span>URL</span><span><input id="jdLocalUrl" value="${esc(jd.local_url)}" size="40"> <input id="jdLocalModel" placeholder="model" value="${esc(jd.local_model || '')}" size="14"></span></div>` : ''}
       ${jd.backend === 'external' ? `<div class="kvrow"><span>URL</span><span><input id="jdExtUrl" value="${esc(jd.external_url)}" size="40"> <input id="jdExtModel" value="${esc(jd.external_model || '')}" size="18"></span></div>
         <div class="kvrow"><span>${T('鍵')}</span><span>${jd.has_key ? `<span class="ok">${T('環境変数にある')}</span>` : `<span class="warn">${T('無い')}</span>`} <code>${esc(jd.key_env)}</code> — ${T('AIBoard は鍵を保存しません。盤サーバを起こすシェルの環境変数に置いてください。')}</span></div>` : ''}
@@ -1949,6 +1977,7 @@ async function renderLive(n) {
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>
       <div class="convlimit" id="cvLimit" hidden></div>
       <div class="convask" id="cvAsk" hidden></div>
+      <div class="convloop" id="cvResume" hidden></div>
       ${s0.sid && !String(s0.sid).startsWith('tty:') ? `<div class="convin"><span class="pr">❯</span><input id="sendIn" autocomplete="off" placeholder="${T('メッセージを送る（Enter）')}"></div><div id="sendMsg" class="legend"></div>` : `<div class="legend">${T('AI セッションではないので、ここからは送れません（端末で操作します）')}</div>`}
     </div>`;
   $('#goBtn').onclick = () => openInApp(s0);
@@ -2002,7 +2031,7 @@ async function renderLive(n) {
         <button data-a="keys" class="primary">${T('鍵の棚を開く')}</button><button data-a="resume">${T('直したら同じ会話を再開')}</button></div>`;
       ask.querySelectorAll('button').forEach(b => b.onclick = () => {
         if (b.dataset.a === 'keys') { renderSettings(false); setTimeout(() => { const el = $('#keyBox'); if (el) el.scrollIntoView({block: 'center'}); }, 300); return; }
-        toApp({type: 'resume', ai: 'Claude', id: s0.sid, cwd: s0.cwd}); say(T('右の端末で同じ会話を開きました'));
+        toApp({type: 'resume', ai: 'Claude', id: s0.sid, cwd: s0.cwd, prompt: lines.join('\n')}); say(T('右の端末で同じ会話を開きました'));
       });
     } else if (d.auth_lost && d.auth_lost.fix === 'billing') {
       ask.hidden = false;
@@ -2024,7 +2053,7 @@ async function renderLive(n) {
           runCmd(T('ログイン'), (l ? envFor(l) : 'env -u CLAUDE_CONFIG_DIR ') + 'command claude auth login');
           say(T('端末でログインを始めました。終わったら「同じ会話を再開」を押してください'));
         } else {
-          toApp({type: 'resume', ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', id: s0.sid, cwd: s0.cwd});
+          toApp({type: 'resume', ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', id: s0.sid, cwd: s0.cwd, prompt: lines.join('\n')});
           say(T('右の端末で同じ会話を開きました'));
         }
       });
@@ -2056,6 +2085,28 @@ async function renderLive(n) {
         say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 800);
       });
     } else ask.hidden = true;
+    // 終わった・止まった会話は「どこから続けるか」を出す(最後の依頼・済んだこと・途中だった操作・止まり方)
+    const rb = $('#cvResume'), rp = d.resume;
+    const stopped = rp && (rp.pending.length || rp.interrupted || rp.stop || !s0.pid || (d.limit && d.limit.active) || d.auth_lost);
+    if (rb && !d.same) {
+      if (stopped && !DEMO) {
+        rb.hidden = false;
+        rb.innerHTML = `<div><b>${T('この続きから')}</b></div>
+          <div class="sub">${T('最後の依頼')}: ${esc(rp.ask.slice(0, 160))}</div>
+          ${rp.done_count ? `<div class="sub">${T('済んだこと')} ${rp.done_count}${T('件')}${rp.done.length ? '（' + T('直近') + ': ' + esc(rp.done.slice(-2).join(' / ')) + '）' : ''}</div>` : ''}
+          ${rp.pending.length ? `<div class="sub warnTxt">${T('途中だった操作')}: ${esc(rp.pending.join(' / '))}</div>` : ''}
+          ${rp.interrupted ? `<div class="sub">${T('あなたが止めた所で終わっています')}</div>` : ''}
+          ${rp.stop ? `<div class="sub">${T('止まり方')}: ${esc(rp.stop)}</div>` : ''}
+          <div class="opts"><button class="primary" id="cvResumeGo">${T('この続きから再開')}</button></div>`;
+        $('#cvResumeGo').onclick = () => {
+          const lines = [T('前回はここで止まりました。続きから進めてください。')];
+          if (rp.pending.length) lines.push(T('途中だった操作') + ': ' + rp.pending.join(' / ') + ' ' + T('（結果が返っていません。必要ならやり直してください）'));
+          if (rp.interrupted) lines.push(T('前回は私が途中で止めました。止めた所から、やり直すべきか確かめてから進めてください。'));
+          toApp({type: 'resume', ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', id: s0.sid, cwd: s0.cwd, prompt: lines.join('\n')});
+          say(T('右の端末で、続きから開きました'));
+        };
+      } else rb.hidden = true;
+    }
     if (d.same) return;
     etag = d.etag;
     log.innerHTML = DEMO ? convHtml((d.timeline || []).map((e, i) => Object.assign({}, e, {text: e.kind === '操作' ? pick(DEMO_DOING, 'op' + i) : pick(DEMO_TASKS, 'cv' + i)}))) : convHtml(d.timeline || []);
