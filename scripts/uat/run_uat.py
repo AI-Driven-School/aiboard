@@ -3629,8 +3629,9 @@ def ms01(ctx):
     def fn(pg, errs, bl):
         wait_js(pg, "[...document.querySelectorAll('.frame')].some(f => f.innerText.includes('別の機械') || f.innerText.includes('other machines'))", 40)
         return pg.evaluate("""() => { const f = [...document.querySelectorAll('.frame')].find(f => /別の機械|other machines/.test(f.innerText));
-            const cards = [...document.querySelectorAll('.jobcard')].filter(c => c.innerText.includes('·'));
-            return {frame: f.innerText, cards: cards.map(c => c.innerText + ' | ' + (c.title || ''))}; }"""), errs
+            const cards = [...document.querySelectorAll('.jobcard')];
+            // textContent で読む: 引いた倍率では .task を隠す設計(.lod-mid)なので innerText には出ない
+            return {frame: f.innerText, cards: cards.map(c => c.textContent + ' | ' + (c.title || ''))}; }"""), errs
     v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
     check(not errs, f"ページエラー {errs[:1]}")
     check("こちらの番 1" in v["frame"] and "見るだけ" in v["frame"], f"枠の見出し {v['frame'][:200]}")
@@ -3639,7 +3640,20 @@ def ms01(ctx):
     check(not errs, f"ページエラー(demo) {errs[:1]}")
     blob = " ".join(vd["cards"]) + vd["frame"]
     check("secret-client-app" not in blob and r["machine"] not in blob and "ssh " not in blob, f"demo で機械名・フォルダ名が漏れた {blob[:300]}")
-    return f"ssh 2 回(別名 2)→ 1 台として 1 本 / 死んだ pid は拾わない / 鍵が無効→🔑 / 盤に枠・こちらの番 1 / demo で隠す"
+
+    # 読めなかった時に枠ごと消えないこと(消えると「止まっていない」に見える)
+    def route_err(pg):
+        def handler(route_, req):
+            import urllib.request
+            u = urllib.request.urlopen(urllib.request.Request(req.url, headers={"X-Overview": "1"}), timeout=30)
+            dd = json.loads(u.read())
+            dd["remote_sessions"] = {"ok": False, "reason": "alias-a: ssh: connect timed out", "fetched": time.time(), "rows": []}
+            route_.fulfill(status=200, content_type="application/json", body=json.dumps(dd))
+        pg.route("**/api/snapshot", handler)
+    ve, errs = with_page(ctx, fn, "?lang=ja", route_extra=route_err)
+    check(not errs, f"ページエラー(失敗時) {errs[:1]}")
+    check(any("読めません" in c and "timed out" in c for c in ve["cards"]), f"読めなかった理由が出ていない {ve}")
+    return f"ssh 2 回(別名 2)→ 1 台として 1 本 / 死んだ pid は拾わない / 鍵が無効→🔑 / 盤に枠・こちらの番 1 / demo で隠す / 読めなければ理由を残す"
 
 
 @case("LX-01", "tmux のパネル: 盤が拾って(mac でも)、画面の文字を読めて、キーを送れる(Linux の盤・iTerm 以外の端末はこの道)")

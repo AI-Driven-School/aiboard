@@ -573,7 +573,7 @@ const EN = {
   '補助（元不明）': 'Helpers (origin unknown)', '元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開': 'codex exec runs (reviews/helpers) whose parent Claude session could not be identified. Click to expand',
   'サブエージェント': 'Subagent', '終了': 'Ended', '束': 'Bundle',
   'YouTube工場': 'YouTube factory', '⏸ PAUSE中(publish停止)': '⏸ PAUSED (publishing off)', '稼働': 'running', '最後': 'last', '停止: ': 'down: ', '全部 online': 'all online',
-  '▣ 別の機械のセッション': '▣ Sessions on other machines', 'こちらの番': 'your turn', '見るだけ': 'read-only', '（記録の末尾から推定）': ' (inferred from the transcript tail)', '次の一手: ': 'Next: ', 'その機械で開く: ': 'Open on that machine: ',
+  '▣ 別の機械のセッション': '▣ Sessions on other machines', '読めませんでした': 'could not read it', 'こちらの番': 'your turn', '見るだけ': 'read-only', '（記録の末尾から推定）': ' (inferred from the transcript tail)', '次の一手: ': 'Next: ', 'その機械で開く: ': 'Open on that machine: ',
   '端末（tmux）': 'Terminal (tmux)', '画面を見る': 'show the screen', '画面を閉じる': 'hide the screen', '画面を読めません': 'cannot read the screen', '文字だけを 1.5 秒ごとに読みます。色や書き換え中の表示は出ません（埋め込みの本物の端末は macOS のアプリ版だけ）。': 'Reads the text every 1.5s. No colour, no live redraws — the embedded real terminal is macOS-app only.',
   '今日 ok': 'today ok', '本': ' jobs', '前': ' ago', ' 外部送信あり': ' (sends externally)', '取得失敗': 'fetch failed', '未設定(~/.aiboard/config.json の remote_hosts)': 'not configured (remote_hosts in ~/.aiboard/config.json)',
   '▣ macmini 無人AIジョブ': '▣ Remote unattended jobs', '● 自社・その他（直近）': '● Home & others (recent)', 'さらに表示': 'show more', '直近だけに戻す': 'recent only',
@@ -1038,9 +1038,9 @@ function layout(nodes) {
   }
   // 別の機械(remote_hosts)で動いているセッション。見るだけ(送る・止めるはしない)。止まっているものを先に出す
   const rs = snap?.remote_sessions;
-  if (rs && rs.rows && rs.rows.length) {
+  if (rs && ((rs.rows && rs.rows.length) || (!rs.ok && rs.reason && rs.fetched))) {
     if (x > 0) { x = 0; y += rowH + FRAME_GAP; }
-    const rows = rs.rows.slice().sort((a, b) => (b.ui.badge ? 1 : 0) - (a.ui.badge ? 1 : 0));
+    const rows = (rs.rows || []).slice().sort((a, b) => (b.ui.badge ? 1 : 0) - (a.ui.badge ? 1 : 0));
     const rj = rows.map((r, i) => {
       const machine = DEMO ? 'remote-' + (1 + hashStr(r.machine) % 9) : r.machine;
       const where = DEMO ? demoProject(r.cwd.split('/').pop(), r.sid) : (r.cwd.split('/').pop() || '~');
@@ -1049,6 +1049,8 @@ function layout(nodes) {
               sub: `${T(r.ui.state)}${r.ui.why && r.ui.badge ? '・' + T(r.ui.why) : ''}${r.status_from === 'transcript' ? T('（記録の末尾から推定）') : ''}`,
               note: (r.ui.action_label ? T('次の一手: ') + T(r.ui.action_label) + '\n' : '') + (open ? T('その機械で開く: ') + open : '')};
     });
+    // 読めなかったら黙って消さない(枠ごと消えると「止まっていない」に見える)
+    if (!rs.ok && rs.reason) rj.push({id: 'rs:err', title: T('読めませんでした'), ok: false, sub: DEMO ? '' : String(rs.reason).slice(0, 80), note: ''});
     const cols = Math.min(4, rj.length), nr = Math.ceil(rj.length / 4);
     const w = Math.max(420, cols * (230 + GAP) - GAP + FRAME_PAD * 2), h = nr * (70 + GAP) - GAP + FRAME_PAD * 2;
     rj.forEach((j, i) => { j.x = x + FRAME_PAD + (i % 4) * (230 + GAP); j.y = y + FRAME_PAD + Math.floor(i / 4) * (70 + GAP); });
@@ -1081,8 +1083,8 @@ function render() {
   const items = [];   // [key, html]。patchNodes() が変わったものだけ DOM に反映する
   frames.forEach(f => {
     let label, color = null, sum = '';
-    if (f.key === 'rs') { const st = f.rs.rows.filter(r => r.ui.badge).length;
-      label = T('▣ 別の機械のセッション'); sum = `${f.rs.rows.length}${T('本')}` + (st ? `・<span class="warn">${T('こちらの番')} ${st}</span>` : '') + `・${T('取得')} ${fmtDur(snap.time - f.rs.fetched)}${T('前')}・${T('見るだけ')}`; }
+    if (f.key === 'rs') { const st = (f.rs.rows || []).filter(r => r.ui.badge).length;
+      label = T('▣ 別の機械のセッション'); sum = `${(f.rs.rows || []).length}${T('本')}` + (st ? `・<span class="warn">${T('こちらの番')} ${st}</span>` : '') + `・${T('取得')} ${fmtDur(snap.time - f.rs.fetched)}${T('前')}・${T('見るだけ')}`; }
     else if (f.key === 'mm') { label = T('▣ macmini 無人AIジョブ'); sum = f.mm.ok ? `${T('取得')} ${fmtDur(snap.time - f.mm.fetched)}${T('前')} (${f.mm.host}) load ${f.mm.load1}` : `<span class="warn">${T('取得失敗')}</span>`; }
     else if (f.key.startsWith('c:')) { const c = (f.nodes.map(n => n.client).find(Boolean)) || {emoji: '•', label: f.key.slice(2), rgb: [120, 120, 120]};
       label = `${c.emoji} ${c.label}`; color = rgb(c.rgb); sum = frameSummary(f); }
