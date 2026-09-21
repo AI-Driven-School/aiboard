@@ -73,7 +73,8 @@ def line_session(s, w, show_state=True):
     elapsed = overview.fmt_dur(s.get("state_for")) if s.get("state_for") is not None else "-"
     rest = w - cs.width(head_plain) - cs.width(elapsed) - 4
     tagp = f"{s['client'].get('emoji', '')}{s['client']['label']} " if s.get("client") else ""
-    body = f"{tagp}{s.get('doing', '')} ／ {s.get('project', '')}: {s.get('task', '')}"
+    # 先頭は「いま何の作業か」(フックの Haiku 要約＝タブ題名と同じ)。最後の依頼(「はい」等)は話題にならない
+    body = f"{tagp}{s.get('topic') or s.get('task', '')} ▸ {s.get('doing', '')}"
     body = clip(body, max(10, rest))
     if tagp:
         body = body.replace(tagp, tag, 1)

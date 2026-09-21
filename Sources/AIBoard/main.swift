@@ -3,7 +3,8 @@ import WebKit
 import UserNotifications
 import GhosttyTerminal
 
-// AIBoard — 盤(全体地図)と端末を1つにした Mac アプリ。iTerm の代わりに使う。
+// AIBoard — どの AI が自分を待っているかを示す盤(全体地図)の Mac アプリ。端末は iTerm/tmux のままでよく、
+// 埋め込み端末(libghostty)は使いたい人のためのもの(2026-09-21 位置づけを変更。docs/why.md)。
 //
 // 左: 盤(~/.claude/tools の overview サーバを WebKit で表示)  右: 端末(libghostty。アプリが PTY を持つ)
 // アプリが端末を持つので、AppleScript 経由の画面取得や「ウィンドウ番号-タブ番号」の宛先ずれが構造ごと無くなる。

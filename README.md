@@ -1,6 +1,6 @@
 # AIBoard
 
-**The whiteboard for your coding agents.** Every Claude Code and Codex session on one canvas, grouped by client and project, with real terminals inside. When an agent needs you, its card lights up — and your Dock tells you how many are waiting.
+**The board that tells you which coding agent is waiting for you.** Keep working in iTerm or tmux — AIBoard picks up every Claude Code and Codex session you already have, puts them on one canvas grouped by client and project, and lights up the ones that need you. Your Dock tells you how many are waiting.
 
 Native macOS · open source (MIT) · local only, no telemetry
 
@@ -16,7 +16,7 @@ Native macOS · open source (MIT) · local only, no telemetry
 
 One agent is easy: you watch the terminal. Many agents are not. On this Mac, right now: **19 sessions running, 11 of them waiting on a human**. Over 30 days there were **1,585 distinct stops** (989 authentication, 495 usage limits) across 1,255 conversations — and after an authentication stop, the human came back to that conversation only **63 times out of 989**. Silently, because a stopped agent prints nothing, and macOS notifications turn out to have been denied on this machine the whole time.
 
-AIBoard does not start work for you. It **picks up the sessions you already have**, decides what state each one is in from published sources (the Claude hook, Codex's rollout, `claude agents --json`, terminal output), and gives you **one next action** per session — with the conversation on the left and a real terminal on the right. What differs from task-runner style tools, and where it loses to them, is written down in **[docs/why.md](docs/why.md)** (Japanese), with the measurements behind each claim.
+This is how it gets used, measured on the author's own Mac: all 15 running sessions live in iTerm and none in AIBoard's built-in terminal, only 2.2% of prompts in a day were typed into the board — and the board is open all day. It is a place to notice, not a place to type. So AIBoard does not start work for you or replace your terminal. It **picks up the sessions you already have**, decides what state each one is in from published sources (the Claude hook, Codex's rollout, `claude agents --json`, terminal output), and gives you **one next action** per session — with the conversation on the left and a real terminal on the right. What differs from task-runner style tools, and where it loses to them, is written down in **[docs/why.md](docs/why.md)** (Japanese), with the measurements behind each claim.
 
 ## Install
 
@@ -44,7 +44,7 @@ Requirements: macOS 13+, Xcode command line tools (Swift 5.9+), Python 3. A sign
 | **Grouping** | Frames come from your clients (`~/.aiboard/clients.json`), the project folder, or — for sessions started from `~` — the folder the touched files live in. Settings → *Grouping* lets you override the name, colour and client of each one; it can also copy a prompt for your own agent to propose them, and take the JSON back. AIBoard itself sends nothing. |
 | **Memory** | The memory button lists sessions largest first. *Interrupt* sends Esc; *Quit* (click twice) ends the agent — the terminal stays and History can resume it. |
 
-AIBoard is the terminal: it opens a shell on the right at launch, and ⌘T / ⌥⌘T start Claude or Codex there. Sessions you already have running elsewhere still show up on the board (found by tty, iTerm today), and *Open in terminal* brings them over: the agent in the other terminal is quit and the same conversation resumes in AIBoard, with a confirmation — and for a session mid-task, an interrupt first.
+**Keep your terminal.** AIBoard does not ask you to move. Sessions running in iTerm or tmux are found by their tty and show up on the board with their state; you can read the conversation and answer from the board without switching windows. If you do want everything in one window, AIBoard also has a built-in terminal (libghostty): ⌘T / ⌥⌘T start Claude or Codex there, and *Open in terminal* moves a running session over — the agent in the other terminal is quit and the same conversation resumes, with a confirmation (and an interrupt first if it is mid-task). It is optional: the board works the same either way.
 
 ### Controls
 

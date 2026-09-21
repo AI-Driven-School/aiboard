@@ -131,6 +131,73 @@ def first_user_prompt(path, head_bytes=200_000):
     return ""
 
 
+def recent_exchange(path):
+    """要約の材料: 直近の本人の依頼(system 注入を除く)と、AIの最後の返答。
+    末尾が画像やツール出力の巨大な行で埋まっていると 600KB では1件も拾えない(実測)ので、段階的に遡る。"""
+    for tail in (600_000, 6_000_000):
+        prompts, reply = _recent_exchange(path, tail)
+        if prompts:
+            break
+    return prompts, reply
+
+
+def _recent_exchange(path, tail_bytes):
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            f.seek(max(0, size - tail_bytes))
+            chunk = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return [], ""
+    prompts, reply = [], ""
+    for line in chunk.splitlines():
+        if '"type":"user"' not in line and '"type":"assistant"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        c = d.get("message", {}).get("content")
+        text = c if isinstance(c, str) else "".join(
+            b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
+        text = text.strip()
+        if not text:
+            continue
+        if d.get("type") == "user":
+            if not text.startswith("<") and not text.startswith("Continue from where you left off"):
+                prompts.append(one_line(text, 200))
+        else:
+            reply = text
+    return prompts[-8:], one_line(reply, 1500)
+
+
+NOW_REFRESH_SEC = 600
+
+
+def summarize_now(path):
+    """「いま何をしているか」を Haiku で1行にする(2026-09-21)。
+    話題名(ai-title)は会話全体の題で、付かないセッションもある。その場合の代わりに
+    最後の依頼を出すと「はい」「<task-notification>」が題名になっていた(17タブ中6)。"""
+    prompts, reply = recent_exchange(path)
+    if not prompts and not reply:
+        return ""
+    title = ai_title(path, tail_bytes=6_000_000)
+    body = (f"[会話の題名] {title}\n" if title else "") + "\n".join(f"[依頼] {p}" for p in prompts) + (
+        f"\n[AIの最後の返答] {reply}" if reply else "")
+    ask = ("次はAI作業セッションの最近のやり取り。このセッションがいま取り組んでいる作業の中身を、"
+           "日本語20字以内の名詞句1行だけで答えよ。「指示待ち」「確認待ち」のような状態ではなく、何の作業かを書く。"
+           "前置き・引用符・句点なし。\n" + body)
+    env = dict(os.environ, TAB_STATUS_CHILD="1")    # 子の claude でこのフックが再帰しないように
+    # stdin は必ず DEVNULL(開いたパイプだと警告文が本文に混ざる)
+    r = subprocess.run(["claude", "-p", "--model", "haiku", "--no-session-persistence", "--tools", "",
+                        "--strict-mcp-config", "--setting-sources", "", ask],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90, env=env)
+    out = r.stdout.strip().splitlines()
+    if r.returncode != 0 or not out:
+        raise RuntimeError(f"summarize_now rc={r.returncode} {r.stderr.strip()[:200]}")
+    return one_line(out[-1].strip("「」\"'。 "), 30)
+
+
 def client_of(state, data):
     """顧客の判定は ~/.claude/tools/clients.py に1か所で持つ。一度当たったら保持する。"""
     if state.get("client"):
@@ -196,6 +263,8 @@ def save(path, state):
 
 
 def main():
+    if os.environ.get("TAB_STATUS_CHILD"):
+        return
     raw = sys.stdin.read()
     data = json.loads(raw) if raw.strip() else {}
     event = data.get("hook_event_name", "")
@@ -228,7 +297,7 @@ def main():
     else:
         state["subagents"] = subs
 
-    if event == "UserPromptSubmit":
+    if event == "UserPromptSubmit" and not data.get("prompt", "").lstrip().startswith("<"):
         state["task"] = one_line(data.get("prompt", ""), 80)
     state["client"] = client_of(state, data)
     color = tuple(state["client"]["rgb"]) if state.get("client") else CLAUDE_RGB
@@ -275,19 +344,42 @@ def main():
 
     # タブの題名: 「状態・モデル・顧客」の印 + 話題名。タブバーに並んだまま見分けられるように。
     # Claude 自身の題名更新は settings の CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1 で止め、ここで組み立てる。
+    # 題名の本文: いまやっていること(Haiku の要約) > 話題名(ai-title) > 最後の依頼 > フォルダ名
     if data.get("transcript_path"):
         t = ai_title(data["transcript_path"])
         if t:
-            state["topic"] = t
-    topic = state.get("topic") or one_line(state.get("task", ""), 30) or os.path.basename(state.get("cwd", ""))
+            state["ai_title"] = t
     mark = {"Notification": "⚠", "Stop": "💬", "_ignore": state.get("mark", "⏳")}.get(event, "⏳")
     state["mark"] = mark
     if event == "_subagent":
         mark = "⏳"
-    title = f"{mark}{ms['emoji']}{state['client']['emoji'] if state.get('client') else ''} {one_line(topic, 40)}"
-    title_seq = f"\033]0;{title}\a"
-    state["tty"] = write_tty(osc_tab_color(color) + osc_badge(badge) + title_seq)
-    save(path, state)
+
+    def render():
+        state["topic"] = (state.get("now") or state.get("ai_title") or one_line(state.get("task", ""), 30)
+                          or os.path.basename(state.get("cwd", "")))
+        title = f"{mark}{ms['emoji']}{state['client']['emoji'] if state.get('client') else ''} {one_line(state['topic'], 40)}"
+        state["tty"] = write_tty(osc_tab_color(color) + osc_badge(badge) + f"\033]0;{title}\a")
+        save(path, state)
+
+    render()
+
+    # 返答の区切り(Stop)と起動・再開(SessionStart)で要約し直す。10分に1回まで(先に時刻を書いて同時実行を防ぐ)
+    if (event in ("Stop", "SessionStart") and data.get("transcript_path")
+            and time.time() - state.get("now_at", 0) > NOW_REFRESH_SEC):
+        state["now_at"] = time.time()
+        save(path, state)
+        now = summarize_now(data["transcript_path"])
+        if now:
+            try:   # 要約の7秒の間に他のフックが書いた状態(mark・doing)を消さない
+                latest = json.load(open(path))
+            except (OSError, ValueError):
+                latest = {}
+            if latest.get("mark") and latest.get("mark") != state.get("mark"):
+                latest["now"] = now     # 次の作業がもう始まっている。題名は次のフックに任せ、要約だけ残す
+                save(path, latest)
+                return
+            state["now"] = now
+            render()
 
 
 if __name__ == "__main__":
