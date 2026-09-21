@@ -1019,6 +1019,12 @@ function layout(nodes) {
     frames.push({key: k, fullW, fullH, nodes: g, sample: g.find(n => n.client) || g[0], hidden, cols: COLS});
   });
   placeFrames(frames);
+  // placeFrames が置いた枠の下端から、追加の枠(別の機械・macmini)を積む。
+  // 外側の x/y のまま積むと顧客の枠に重なって描かれる(2026-09-21 実機で発覚)
+  x = 0;
+  rowH = 0;
+  y = frames.reduce((m, f) => Math.max(m, (f.y || 0) + (f.h || 0)), 0);
+  if (y) y += FRAME_GAP;
   // macmini フレーム
   const mm = snap?.macmini;
   const jobs = [];
@@ -1039,7 +1045,6 @@ function layout(nodes) {
   // 別の機械(remote_hosts)で動いているセッション。見るだけ(送る・止めるはしない)。止まっているものを先に出す
   const rs = snap?.remote_sessions;
   if (rs && ((rs.rows && rs.rows.length) || (!rs.ok && rs.reason && rs.fetched))) {
-    if (x > 0) { x = 0; y += rowH + FRAME_GAP; }
     const rows = (rs.rows || []).slice().sort((a, b) => (b.ui.badge ? 1 : 0) - (a.ui.badge ? 1 : 0));
     const rj = rows.map((r, i) => {
       const machine = DEMO ? 'remote-' + (1 + hashStr(r.machine) % 9) : r.machine;
