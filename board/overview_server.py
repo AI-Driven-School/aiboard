@@ -79,6 +79,55 @@ def snapshot_cached(max_age=None):
 _FP = {"val": None, "full": 0, "skipped": 0}
 
 
+_ACCT_BUSY = {"on": False}
+
+
+def known_sessions():
+    """いま手元にある(作り終わっている)セッション一覧。無ければ空。
+
+    ここで snapshot_cached() を呼ぶと、起動直後は**その場で作りに行き**、中の macmini への ssh
+    (1 台 40 秒)まで待たされる。アカウント画面はそれを待つ必要が無い(稼働本数が次の呼びで埋まるだけ)。
+    """
+    _snap["asked"] = time.time()      # 裏の作り直しは続けてほしいので、聞かれたことは伝える
+    with _lock:
+        return ((_snap.get("data") or {}).get("sessions")) or []
+
+
+def accounts_view(force=False, ttl=120):
+    """アカウント一覧。手元に新しい答えが無ければ裏で聞きに行き、いまある物をすぐ返す。"""
+    now = time.time()
+    fresh = (_login.get("data") and now - _login.get("t", 0) < ttl
+             and _acct.get("data") and now - _acct.get("t", 0) < 60 and not force)
+    if not fresh and not _ACCT_BUSY["on"]:
+        _ACCT_BUSY["on"] = True
+
+        def run():
+            try:
+                data = overview.login_status()
+                clis = overview.ai_clis(force=True, logins=data)
+                # 錠の外で作る。snapshot_cached() も同じ錠を取るので、持ったまま呼ぶと固まる(2026-09-21 実機で発生)
+                rows = overview.accounts_full(known_sessions(), data)
+                with _lock:
+                    _login.update(t=time.time(), data=data, clis=clis)
+                    _acct.update(t=time.time(), data=rows)
+            except Exception as e:
+                _login["error"] = f"{type(e).__name__}: {e}"
+            finally:
+                _ACCT_BUSY["on"] = False
+        threading.Thread(target=run, daemon=True).start()
+    if not _login.get("data"):
+        # 一度も聞けていない: 設定ファイルだけで即答する(状態は None = 確認中。「未ログイン」とは書かない)。
+        # ここで本物の一覧を作ると、各 CLI への問い合わせと重なって 27 秒待たされた(2026-09-21 実測)
+        return {"ok": True, "accounts": overview.accounts_placeholder(), "fetched": 0, "auth_fetched": 0,
+                "checking": True, "clis": []}
+    if not _acct.get("data"):        # 一度も作っていない時だけその場で作る(古いだけなら裏で作り直す)
+        rows = overview.accounts_full(known_sessions(), _login["data"])
+        with _lock:
+            _acct.update(t=time.time(), data=rows)
+    return {"ok": True, "accounts": _acct["data"], "fetched": _acct["t"], "auth_fetched": _login["t"],
+            "checking": _ACCT_BUSY["on"], "clis": _login.get("clis") or []}
+
+
 def snapshot_loop():
     """2.5 秒ごとに見に行くが、**入力が何も変わっていなければ作り直さない**。
 
@@ -427,7 +476,7 @@ class Handler(BaseHTTPRequestHandler):
                                  "urls": overview.remote_urls(PORT) if c["enabled"] else [],
                                  "addrs": overview.remote_addrs() if c["enabled"] else []})
             elif path == "/api/version":
-                self._json(200, {"ok": True, "stamp": CODE_STAMP, "pid": os.getpid()})
+                self._json(200, {"ok": True, "stamp": CODE_STAMP, "pid": os.getpid(), "owner": OWNER})
             elif path == "/api/snapshot":
                 self._json(200, snapshot_cached())
             elif path == "/api/detail":
@@ -454,12 +503,8 @@ class Handler(BaseHTTPRequestHandler):
                 key = q.get("key", "")
                 self._json(200, {"ok": True, "key": key, "rows": overview.read_delegations(key) if key else []})
             elif path == "/api/pick":
-                now = time.time()
-                if not _login.get("data") or now - _login.get("t", 0) > 120:
-                    _login.update(t=now, data=overview.login_status())
-                if not _acct.get("data") or now - _acct.get("t", 0) > 60:   # ログイン状態を合流させた一覧で選ぶ
-                    _acct.update(t=now, data=overview.accounts_full(snapshot_cached()["sessions"], _login["data"]))
-                self._json(200, {"ok": True, **overview.pick_ai(q.get("prefer", ""), _acct["data"])})
+                view = accounts_view()
+                self._json(200, {"ok": True, **overview.pick_ai(q.get("prefer", ""), view["accounts"])})
             elif path == "/api/groups":
                 # 束ね方の候補(いま動いている分と、索引にある直近 30 日)と、いまの上書き
                 snap = snapshot_cached()
@@ -476,13 +521,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/extensions":
                 self._json(200, {"ok": True, **overview.extensions_info(refresh=q.get("refresh") == "1")})
             elif path == "/api/accounts":
-                now = time.time()
-                if q.get("refresh") == "1" or not _login.get("data") or now - _login.get("t", 0) > 120:
-                    _login.update(t=now, data=overview.login_status())
-                if q.get("refresh") == "1" or not _acct.get("data") or now - _acct.get("t", 0) > 60:
-                    _acct.update(t=now, data=overview.accounts_full(snapshot_cached()["sessions"], _login["data"]))
-                self._json(200, {"ok": True, "accounts": _acct["data"], "fetched": _acct["t"], "auth_fetched": _login["t"],
-                                 "clis": overview.ai_clis(force=q.get("refresh") == "1", logins=_login["data"])})
+                # 各 CLI に聞くのは 5 本合わせて 7 秒前後かかる。**待たせず**、裏で取り直して次の呼びで使う
+                # (直列だった頃は実機で 137 秒かかり、画面が固まったように見えた。2026-09-21)
+                self._json(200, accounts_view(force=q.get("refresh") == "1"))
             elif path == "/api/conv":
                 # 会話ビュー用: 依頼・返答・操作を時系列で(最大 150 件)。記録が変わっていなければ 304 相当で軽く返す
                 tab = q.get("tab", "")
@@ -646,12 +687,37 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"ok": False, "reason": "not found"})
 
 
+OWNER = int(os.environ.get("AIBOARD_OWNER_PID") or 0)   # アプリが起こした時は、そのアプリの pid
+
+
+def owner_watch(interval=3.0):
+    """起こした相手(アプリ)が居なくなったら、自分も終わる。
+
+    以前はアプリを終了してもサーバだけが残り、**端末の無い盤**を配り続けていた
+    (2026-09-21 実機: アプリは終了済みなのに 8791 は生きていて、移管しようとしても行き先が無い)。
+    落ちた時も片付くように、こちらから見に行く。手で起こした時(OWNER=0)は何もしない。
+    """
+    while OWNER:
+        time.sleep(interval)
+        try:
+            os.kill(OWNER, 0)
+        except OSError:
+            print(f"起こしたアプリ(pid {OWNER})が居なくなったので終わります", flush=True)
+            try:
+                os.unlink(PIDFILE)
+            except OSError:
+                pass
+            os._exit(0)
+
+
 def serve():
     import signal
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))   # kill で止めても PID ファイルを片付ける
     with open(PIDFILE, "w") as f:
         f.write(str(os.getpid()))
+    threading.Thread(target=owner_watch, daemon=True).start()
     threading.Thread(target=snapshot_loop, daemon=True).start()
+    threading.Thread(target=lambda: accounts_view(force=True), daemon=True).start()   # 開く前に聞いておく
     if not os.environ.get("OVERVIEW_NO_INDEX"):   # 検証中など、別プロセスが索引を作っている時は止める
         threading.Thread(target=index_loop, daemon=True).start()
     bind = "0.0.0.0" if overview.remote_config().get("enabled") else HOST   # 遠隔を入れた時だけ LAN に出す
@@ -727,6 +793,8 @@ def open_in_browser(args=()):
                 running = json.loads(r.read()).get("stamp")
         except Exception:
             running = None   # 版を返さない = 更新前のサーバ
+        # 既に動いているサーバは**乗っ取らない**。自分が起こしたものだけを自分の持ち物にする。
+        # (乗っ取ると、試験用に立てた共用サーバをアプリが持ち去り、アプリ終了で全部道連れになった。2026-09-21)
         if running != code_stamp():
             print(f"盤サーバのコードが更新されている(動作中 {running} / 手元 {code_stamp()})。入れ替える")
             stop()

@@ -2020,45 +2020,80 @@ def accounts_full(sess=None, logins=None):
     return acc
 
 
-def login_status():
-    """各アカウントのログイン状態を、それぞれの CLI 自身に聞く(推測しない)。数秒かかるので呼ぶ側で使い回す。"""
-    out = []
+def accounts_placeholder():
+    """まだ CLI に聞けていない時に出す、待たない一覧。設定ファイルを読むだけ(数 ms)。
+
+    ログイン状態は **None(確認中)**。ここで「未ログイン」と書くと嘘になる。
+    """
+    rows = []
     homes = [("default", HOME + "/.claude")] + [(os.path.basename(d), d) for d in sorted(glob.glob(HOME + "/.claude-profiles/*")) if os.path.isdir(d)]
     for name, base in homes:
-        env = dict(os.environ)
-        if name == "default":
-            env.pop("CLAUDE_CONFIG_DIR", None)
-        else:
-            env["CLAUDE_CONFIG_DIR"] = base
-        st = {"ai": "Claude", "profile": name, "config_dir": base, "logged_in": None, "method": "", "error": ""}
-        j = {}
+        a = {}
         try:
-            # CLI の実体を直接呼ぶ。アプリから起動したサーバは PATH が細く、`command claude` が
-            # 見つからないことがある。以前はその時 rc を見ずに「未ログイン」と表示していた
-            # (2026-09-21 実機: CLI 直では loggedIn:true なのに盤は 4 アカウント全部「未ログイン」)
-            claude = bin_path("claude")
-            argv = [claude, "auth", "status", "--json"] if claude else ["/bin/zsh", "-l", "-c", "command claude auth status --json"]
-            r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
-            j = json.loads(r.stdout[r.stdout.find("{"):]) if "{" in r.stdout else {}
-            if j:
-                st["logged_in"] = bool(j.get("loggedIn"))
-                st["method"] = j.get("authMethod") or ""
-            else:
-                # 答えが無い = 「ログインしていない」ではない。分からないまま出す(logged_in は None)
-                why = (r.stderr or r.stdout).strip().splitlines()
-                st["error"] = f"claude に聞けませんでした (rc={r.returncode}{': ' + why[-1][:60] if why else ''})"
-        except (subprocess.TimeoutExpired, ValueError, OSError) as e:
-            st["error"] = f"claude に聞けませんでした ({type(e).__name__})"
-        # 正はこの CLI の答え。設定ファイルは CLI が答えられなかった時だけ使う(古い値が残っていることがある)
-        st.update(email=j.get("email") or "", org=j.get("orgName") or "", plan=j.get("subscriptionType") or "")
-        if not st["email"]:
-            try:
-                with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
-                    a = json.load(f).get("oauthAccount") or {}
-                st.update(email=a.get("emailAddress") or "", org=a.get("organizationName") or "", plan=a.get("billingType") or "", from_file=True)
-            except (OSError, ValueError):
-                pass
-        out.append(st)
+            with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
+                a = json.load(f).get("oauthAccount") or {}
+        except (OSError, ValueError):
+            pass
+        rows.append({"ai": "Claude", "profile": name, "config_dir": base, "email": a.get("emailAddress") or "",
+                     "org": a.get("organizationName") or "", "plan": a.get("billingType") or "",
+                     "logged_in": None, "method": "", "auth_error": "", "from_file": True, "running": 0, "limit": None})
+    rows.append({"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "email": "", "org": "", "plan": "",
+                 "logged_in": None, "method": "", "auth_error": "", "running": 0, "limit": None})
+    return rows
+
+
+def login_status():
+    """各アカウントのログイン状態を、それぞれの CLI 自身に聞く(推測しない)。
+
+    1 本 4〜5 秒かかり、直列だと 20 秒を超える(実機で /api/accounts が 137 秒)。互いに独立なので同時に聞く。
+    """
+    import concurrent.futures as _cf
+    homes = [("default", HOME + "/.claude")] + [(os.path.basename(d), d) for d in sorted(glob.glob(HOME + "/.claude-profiles/*")) if os.path.isdir(d)]
+    with _cf.ThreadPoolExecutor(max_workers=max(2, len(homes) + 1)) as ex:
+        futs = [ex.submit(_claude_login, name, base) for name, base in homes] + [ex.submit(_codex_login)]
+        out = [f.result() for f in futs]
+    return out
+
+
+def _claude_login(name, base):
+    """1 アカウント分。CLI 自身に聞き、答えが無ければ「分からない」(None)で返す。"""
+    env = dict(os.environ)
+    if name == "default":
+        env.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        env["CLAUDE_CONFIG_DIR"] = base
+    st = {"ai": "Claude", "profile": name, "config_dir": base, "logged_in": None, "method": "", "error": ""}
+    j = {}
+    try:
+        # CLI の実体を直接呼ぶ。アプリから起動したサーバは PATH が細く、`command claude` が
+        # 見つからないことがある。以前はその時 rc を見ずに「未ログイン」と表示していた
+        # (2026-09-21 実機: CLI 直では loggedIn:true なのに盤は 4 アカウント全部「未ログイン」)
+        claude = bin_path("claude")
+        argv = [claude, "auth", "status", "--json"] if claude else ["/bin/zsh", "-l", "-c", "command claude auth status --json"]
+        r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
+        j = json.loads(r.stdout[r.stdout.find("{"):]) if "{" in r.stdout else {}
+        if j:
+            st["logged_in"] = bool(j.get("loggedIn"))
+            st["method"] = j.get("authMethod") or ""
+        else:
+            # 答えが無い = 「ログインしていない」ではない。分からないまま出す(logged_in は None)
+            why = (r.stderr or r.stdout).strip().splitlines()
+            st["error"] = f"claude に聞けませんでした (rc={r.returncode}{': ' + why[-1][:60] if why else ''})"
+    except (subprocess.TimeoutExpired, ValueError, OSError) as e:
+        st["error"] = f"claude に聞けませんでした ({type(e).__name__})"
+    # 正はこの CLI の答え。設定ファイルは CLI が答えられなかった時だけ使う(古い値が残っていることがある)
+    st.update(email=j.get("email") or "", org=j.get("orgName") or "", plan=j.get("subscriptionType") or "")
+    if not st["email"]:
+        try:
+            with open(os.path.join(HOME, ".claude.json") if name == "default" else os.path.join(base, ".claude.json"), encoding="utf-8") as f:
+                a = json.load(f).get("oauthAccount") or {}
+            st.update(email=a.get("emailAddress") or "", org=a.get("organizationName") or "", plan=a.get("billingType") or "", from_file=True)
+        except (OSError, ValueError):
+            pass
+    return st
+
+
+def _codex_login():
     cx = {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "logged_in": None, "method": "", "error": "", "email": "", "org": "", "plan": ""}
     try:
         codex = bin_path("codex")
@@ -2073,8 +2108,7 @@ def login_status():
             cx["error"] = f"codex に聞けませんでした (rc={r.returncode})"
     except (subprocess.TimeoutExpired, OSError) as e:
         cx["error"] = f"codex に聞けませんでした ({type(e).__name__})"
-    out.append(cx)
-    return out
+    return cx
 
 
 def settings_info():

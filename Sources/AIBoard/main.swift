@@ -866,7 +866,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         DispatchQueue.global().async {
             // GUI アプリの PATH は最小なので、ログインシェル経由で呼ぶ(pyenv の python3 を拾う)
             let p = Process(); p.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            p.arguments = ["-l", "-c", "python3 " + shellQuote(BOARD_DIR + "/cs.py") + " web --no-open"]
+            // 自分の pid を渡す: アプリが終わったらサーバも終わる(端末の無い盤が残らない)
+            p.arguments = ["-l", "-c", "AIBOARD_OWNER_PID=\(getpid()) python3 " + shellQuote(BOARD_DIR + "/cs.py") + " web --no-open"]
             p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
             try? p.run(); p.waitUntilExit()
             DispatchQueue.main.async { self.web.load(URLRequest(url: BOARD_URL)) }

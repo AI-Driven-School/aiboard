@@ -2104,7 +2104,32 @@ def sv19(ctx):
     check(v2["stamp"] == osv.code_stamp(), f"入れ替わった先が手元のコードでない {v2['stamp']} != {osv.code_stamp()}")
     check(v2["pid"] != v1["pid"], f"pid が同じ {v1['pid']}")
     check(not _pid_alive(v1["pid"]), f"古いサーバ(pid {v1['pid']})が生き残っている")
-    return f"古い版 pid {v1['pid']}/{v1['stamp']} → アプリ起動で pid {v2['pid']}/{v2['stamp']}(手元のコードと一致・古い方は終了)"
+    # 入れ替わった先は**その試験アプリの持ち物**なので、アプリが終わると一緒に消える(それが正しい動き)。
+    # 後の試験のために、共用のサーバを立て直しておく
+    gone = False
+    for _ in range(40):
+        time.sleep(0.5)
+        try:
+            st3, _v3, _ = http("/api/version")
+        except Exception:
+            gone = True      # 落ちている = アプリと一緒に終わった(期待どおり)
+            break
+        if st3 != 200:
+            gone = True
+            break
+    start_server(ctx["data"])
+    st4, v4 = 0, {}
+    for _ in range(30):
+        try:
+            st4, v4, _ = http("/api/version")
+            if st4 == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(1)
+    check(st4 == 200, "共用のサーバを立て直せなかった(以降の試験が全部落ちる)")
+    return (f"古い版 pid {v1['pid']}/{v1['stamp']} → アプリ起動で pid {v2['pid']}/{v2['stamp']}"
+            f"(手元のコードと一致・古い方は終了)/ アプリ終了でその子も終了{'' if gone else '(残った)'}・共用を pid {v4['pid']} で再開")
 
 
 @case("BD-17", "無人実行は日ごとに 1 枚へ畳む: 枚数が実測より減り、束を押すと中身が出て、検索は畳んだ中まで届く")
@@ -3915,6 +3940,47 @@ def ac05(ctx):
     check("確認できない" in txt and "rc=127" in txt, f"画面に理由が出ていない: {txt[:200]}")
     check("未ログイン" not in txt, f"呼べていないのに「未ログイン」と書いた: {txt[:200]}")
     return f"呼べなかった {len(rows)} 件すべて logged_in=None＋理由 / 画面は「確認できない (rc=127)」で「未ログイン」とは書かない"
+
+
+@case("SV-02", "盤サーバは、起こしたアプリが居なくなったら自分も終わる(端末の無い盤を残さない)")
+def sv02(ctx):
+    # 身代わりの「アプリ」を 1 つ作り、その pid を持ち主としてサーバを起こす
+    owner = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(300)"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    data = tempfile.mkdtemp(dir=ctx["data"], prefix="sv02-")
+    port = "8794"
+    env = dict(os.environ, OVERVIEW_PORT=port, AIBOARD_DATA=data, OVERVIEW_NO_INDEX="1",
+               AIBOARD_BOARD=BOARD, AIBOARD_OWNER_PID=str(owner.pid))
+    logp = os.path.join(data, "srv.log")
+    srv = subprocess.Popen([sys.executable, os.path.join(BOARD, "overview_server.py"), "--serve"], env=env,
+                           stdin=subprocess.DEVNULL, stdout=open(logp, "w"), stderr=subprocess.STDOUT)
+    try:
+        ver = None
+        for _ in range(60):
+            time.sleep(0.5)
+            try:
+                import urllib.request
+                ver = json.loads(urllib.request.urlopen(
+                    urllib.request.Request(f"http://127.0.0.1:{port}/api/version", headers={"X-Overview": "1"}), timeout=20).read())
+                break
+            except Exception:
+                pass
+        check(ver and ver.get("ok"), f"身代わりのサーバが起きない {ver} ログ: {open(logp, errors='replace').read()[-300:]}")
+        check(ver.get("owner") == owner.pid, f"持ち主を持っていない {ver}")
+        owner.terminate(); owner.wait(timeout=20)
+        gone = False
+        for _ in range(30):        # 3 秒ごとに見に行くので、10 秒あれば終わる
+            time.sleep(0.5)
+            if srv.poll() is not None:
+                gone = True
+                break
+        check(gone, "アプリが居なくなってもサーバが残っている")
+        check(not _pid_alive(srv.pid), "サーバのプロセスが残っている")
+    finally:
+        for p_ in (srv, owner):
+            if p_.poll() is None:
+                p_.kill()
+    return f"持ち主(pid {owner.pid})を見ていて、居なくなってから数秒で自分も終わった"
 
 
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")

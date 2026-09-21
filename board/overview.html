@@ -1422,11 +1422,18 @@ function limitWhen(lim) {
 let accounts = [];
 let usageTimer = null;
 function loadUsageOnce() { if (usageTimer) return; loadUsage(); usageTimer = setInterval(loadUsage, 30000); }
+let acctChecking = false, acctRetry = 0;
 async function loadAccounts(refresh) {
-  try { const d = await getJSON('/api/accounts' + (refresh ? '?refresh=1' : '')); accounts = d.accounts || []; window._clis = d.clis || window._clis || []; } catch (e) { return; }
+  let d;
+  try { d = await getJSON('/api/accounts' + (refresh ? '?refresh=1' : '')); accounts = d.accounts || []; window._clis = d.clis || window._clis || []; } catch (e) { return; }
+  // 各 CLI に聞いている間は待たせない(裏で聞いている)。終わった頃に取り直す
+  acctChecking = !!d.checking;
+  clearTimeout(acctRetry);
+  if (acctChecking) acctRetry = setTimeout(() => loadAccounts(false), 3000);
   const n = accounts.filter(a => a.limit && a.limit.active).length;
   $('#nLimit').textContent = n ? String(n) : ''; $('#btnAcct').classList.toggle('alert', n > 0);
   if ($('#panel.open') && $('#pTitle').dataset.kind === 'accounts') renderAccounts();
+  if (acctChecking && $('#acctMsg')) $('#acctMsg').textContent = T('確認中…');
 }
 function acctName(a) { return DEMO ? (a.ai === 'Codex' ? 'Codex' : 'account-' + a.profile.slice(0, 1)) : (a.email || (a.profile === 'default' ? T('既定') : a.profile)); }
 let usageRows = {};   // /api/usage の結果(アカウントごと。裏で数えるので遅れて入る)
