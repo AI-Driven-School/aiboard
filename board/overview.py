@@ -1320,16 +1320,42 @@ def ui_of(s, t=None):
     })
 
 
+def parallel_key(s):
+    """そのセッションの「持ち場」。衝突しうるのは同じ持ち場のときだけ。
+
+    以前は cwd をそのまま鍵にしていたので、`~` で起こした 14 本が全部「同じ場所・衝突注意」になっていた。
+    実際には盤自身がその 14 本を 10 個の別プロジェクトと推定していた(2026-09-21 実機)。
+    触っているファイルから推した持ち場(project_hint)があればそれを使い、無ければ cwd。
+    ホームそのものは持ち場ではないので、推定が無ければ組にしない。
+    """
+    hint = (s.get("project_hint") or "").strip()
+    if hint:
+        # 名前で持ち場が分かった時、その名前のフォルダが実在すればフォルダを鍵にする。
+        # そうしないと「~ で動いていて中身は A を触っている」組と「A で動いている」組が別々になる
+        for base in (HOME, os.path.join(HOME, "Desktop")):
+            p = os.path.join(base, hint)
+            if os.path.isdir(p):
+                return "cwd:" + p
+        return "hint:" + hint
+    cwd = (s.get("cwd") or "").rstrip("/")
+    if not cwd or cwd == HOME.rstrip("/"):
+        return ""      # ホーム直下で、何を触っているかも分からない = 持ち場が不明。衝突とは言えない
+    return "cwd:" + cwd
+
+
 def parallel_groups(sess):
-    """同じ場所で 2 本以上動いている組。実測で 621 フォルダ中 206(33%)が該当し、
+    """同じ持ち場で 2 本以上動いている組。実測で 621 フォルダ中 206(33%)が該当し、
     「自分が 2 つ動かしていることに気づかない」が起きる。隠さずに数と顔ぶれを出す。"""
     by = {}
     for s in sess:
-        cwd = (s.get("cwd") or "").rstrip("/")
-        if not cwd or not s.get("ai") or s.get("mark") == "⚪" or s.get("background"):
+        if not s.get("ai") or s.get("mark") == "⚪" or s.get("background"):
             continue
-        by.setdefault(cwd, []).append({"sid": s.get("sid"), "tab": s.get("tab"), "state": s.get("state"),
-                                       "ai": s.get("ai"), "task": (s.get("task") or "")[:60]})
+        key = parallel_key(s)
+        if not key:
+            continue
+        by.setdefault(key, []).append({"sid": s.get("sid"), "tab": s.get("tab"), "state": s.get("state"),
+                                       "ai": s.get("ai"), "task": (s.get("task") or "")[:60],
+                                       "where": (s.get("project_hint") or s.get("project") or "")})
     return {k: v for k, v in by.items() if len(v) > 1}
 
 
@@ -2007,11 +2033,22 @@ def login_status():
         st = {"ai": "Claude", "profile": name, "config_dir": base, "logged_in": None, "method": "", "error": ""}
         j = {}
         try:
-            r = subprocess.run(["/bin/zsh", "-l", "-c", "command claude auth status --json"], env=env, capture_output=True, text=True, timeout=20)
+            # CLI の実体を直接呼ぶ。アプリから起動したサーバは PATH が細く、`command claude` が
+            # 見つからないことがある。以前はその時 rc を見ずに「未ログイン」と表示していた
+            # (2026-09-21 実機: CLI 直では loggedIn:true なのに盤は 4 アカウント全部「未ログイン」)
+            claude = bin_path("claude")
+            argv = [claude, "auth", "status", "--json"] if claude else ["/bin/zsh", "-l", "-c", "command claude auth status --json"]
+            r = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
             j = json.loads(r.stdout[r.stdout.find("{"):]) if "{" in r.stdout else {}
-            st["logged_in"] = bool(j.get("loggedIn")); st["method"] = j.get("authMethod") or ""
+            if j:
+                st["logged_in"] = bool(j.get("loggedIn"))
+                st["method"] = j.get("authMethod") or ""
+            else:
+                # 答えが無い = 「ログインしていない」ではない。分からないまま出す(logged_in は None)
+                why = (r.stderr or r.stdout).strip().splitlines()
+                st["error"] = f"claude に聞けませんでした (rc={r.returncode}{': ' + why[-1][:60] if why else ''})"
         except (subprocess.TimeoutExpired, ValueError, OSError) as e:
-            st["error"] = f"{type(e).__name__}"
+            st["error"] = f"claude に聞けませんでした ({type(e).__name__})"
         # 正はこの CLI の答え。設定ファイルは CLI が答えられなかった時だけ使う(古い値が残っていることがある)
         st.update(email=j.get("email") or "", org=j.get("orgName") or "", plan=j.get("subscriptionType") or "")
         if not st["email"]:
@@ -2024,12 +2061,18 @@ def login_status():
         out.append(st)
     cx = {"ai": "Codex", "profile": "codex", "config_dir": HOME + "/.codex", "logged_in": None, "method": "", "error": "", "email": "", "org": "", "plan": ""}
     try:
-        r = subprocess.run(["/bin/zsh", "-l", "-c", "command codex login status"], capture_output=True, text=True, timeout=20)
+        codex = bin_path("codex")
+        argv = [codex, "login", "status"] if codex else ["/bin/zsh", "-l", "-c", "command codex login status"]
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL)
         txt = re.sub(r"\x1b\][^\x07\x1b]*(\x07|\x1b\\\\)|\x1b\][^A-Za-z]*[A-Za-z=][^\n]*?(?=Logged|Not)", "", r.stdout + r.stderr)
-        cx["logged_in"] = "Logged in" in txt
-        m = re.search(r"Logged in using ([A-Za-z ]+)", txt); cx["method"] = m.group(1).strip() if m else ""
+        if "Logged in" in txt or "Not logged in" in txt:
+            cx["logged_in"] = "Logged in" in txt
+            m = re.search(r"Logged in using ([A-Za-z ]+)", txt)
+            cx["method"] = m.group(1).strip() if m else ""
+        else:
+            cx["error"] = f"codex に聞けませんでした (rc={r.returncode})"
     except (subprocess.TimeoutExpired, OSError) as e:
-        cx["error"] = type(e).__name__
+        cx["error"] = f"codex に聞けませんでした ({type(e).__name__})"
     out.append(cx)
     return out
 
@@ -2099,6 +2142,8 @@ def snapshot(with_macmini=True):
     except Exception as e:                  # 自動処理の失敗で盤を止めない
         __import__("autopilot").note("tick", "", f"自動処理が落ちた: {e}"[:160], done=False)
     sess = __import__("gitinfo").annotate(sess)   # git のブランチ/PR(入れてある時だけ。既定は切)
+    for s in sess:
+        s["parallel_key"] = parallel_key(s)     # 画面が同じ鍵で引けるように、各セッションに持たせる
     cl, pr = grouped(sess)
     snap = {
         "time": time.time(),

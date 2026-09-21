@@ -569,7 +569,7 @@ const EN = {
   '同じファイルの線': 'Same-file links', 'F キー': 'Key F', '⛶ 全体': '⛶ Fit all', '見た目を切り替える(夜空 / figma)': 'Switch look (night / figma)', '◐ 見た目': '◐ Look',
   '顧客=四角(🟪🟦🟨🟥) モデル=丸 ／ ドラッグで移動・ホイールで拡大・F で全体': 'Client = square · Model = dot · drag to pan · wheel to zoom · F to fit',
   '詳細': 'Details', '秒': 's', '分': 'm', '時間': 'h', '日': 'd',
-  '更新': 'Updated', '取得': 'fetch', 'タブ': 'tab', 'snapshot 取得失敗': 'snapshot failed', '索引エラー': 'index error', '索引': 'index', '件': '', '更新中…': 'building…', '読込中…': 'loading…',
+  '更新': 'Updated', '取得': 'fetch', 'タブ': 'tab', 'snapshot 取得失敗': 'snapshot failed', '索引エラー': 'index error', '索引': 'index', '件': '', '更新中…': 'building…', '読込中…': 'loading…', '過去で読みます': 'loads in History',
   '補助（元不明）': 'Helpers (origin unknown)', '元の Claude セッションを特定できなかった codex exec(査読・補助)。クリックで展開': 'codex exec runs (reviews/helpers) whose parent Claude session could not be identified. Click to expand',
   'サブエージェント': 'Subagent', '終了': 'Ended', '束': 'Bundle',
   'YouTube工場': 'YouTube factory', '⏸ PAUSE中(publish停止)': '⏸ PAUSED (publishing off)', '稼働': 'running', '最後': 'last', '停止: ': 'down: ', '全部 online': 'all online',
@@ -1050,7 +1050,7 @@ function layout(nodes) {
       const machine = DEMO ? 'remote-' + (1 + hashStr(r.machine) % 9) : r.machine;
       const where = DEMO ? demoProject(r.cwd.split('/').pop(), r.sid) : (r.cwd.split('/').pop() || '~');
       const open = DEMO ? '' : `ssh ${r.host} -t 'cd ${r.cwd} && claude --resume ${r.sid}'`;
-      return {id: 'rs:' + r.sid, title: `${machine} · ${where}`, ok: !r.ui.badge,
+      return {id: 'rs:' + r.sid, title: `${where} · ${machine}`, ok: !r.ui.badge,
               sub: `${T(r.ui.state)}${r.ui.why && r.ui.badge ? '・' + T(r.ui.why) : ''}${r.status_from === 'transcript' ? T('（記録の末尾から推定）') : ''}`,
               note: (r.ui.action_label ? T('次の一手: ') + T(r.ui.action_label) + '\n' : '') + (open ? T('その機械で開く: ') + open : '')};
     });
@@ -1140,7 +1140,7 @@ function render() {
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
       ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
-      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${(() => { const g = n.live && ((snap.parallel || {})[(n.s.cwd || '').replace(/\/$/, '')] || []); return g && g.length > 1 ?
+      <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${(() => { const g = n.live && ((snap.parallel || {})[n.s.parallel_key || ''] || []); return g && g.length > 1 ?
         `<span class="c-par" title="${esc(T('同じ場所で動いているもの'))}: ${esc(g.map(x => (x.ai || '') + ' ' + TS(x.state || '')).join(' / '))}">⇉ ${g.length}</span>` : ''; })()}${n.live && n.s.git ? `<span class="c-git" title="${esc(DEMO ? '' : (n.s.git.root || ''))}">⎇ ${esc(DEMO ? 'main' : n.s.git.branch)}</span>${n.s.git.pr ? `<span class="c-pr ${esc(n.s.git.pr.state)}${n.s.git.pr.draft ? ' draft' : ''}" title="${esc(DEMO ? '' : n.s.git.pr.title)}">PR #${n.s.git.pr.number}${n.s.git.pr.draft ? ' draft' : ''}${n.s.git.pr.review === 'approved' ? ' ✓' : n.s.git.pr.review === 'changes_requested' ? ' ✗' : ''}</span>` : ''}` : ''}${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
   });
   patchNodes(nodesEl, items);
@@ -1245,7 +1245,10 @@ function renderToolbar(all, vis) {
   const ic = index.counts; $('#idxCounts').textContent = ic ? `💬 ${T('人の会話')} ${ic.human} · ${T('査読/補助')} ${ic.review_helper} · 🤖 ${T('無人')} ${ic.unattended} · ↳ ${T('子')} ${ic.subagent}` : '';
   const cs = $('#fClient'); const have = new Set([...cs.options].map(o => o.value));
   all.forEach(n => { if (n.client && !have.has(n.client.id)) { have.add(n.client.id); cs.insertAdjacentHTML('beforeend', `<option value="${esc(n.client.id)}">${esc(n.client.emoji)} ${esc(n.client.label)}</option>`); } });
-  const st = index.built ? ` ${T('索引')} ${index.records.length}${T('件')} (${index.building ? T('更新中…') : T('更新') + ' ' + fmtT(index.built)})` : (index.error ? ' ' + T('索引エラー') + ': ' + index.error : ' ' + T('索引') + ' ' + T('読込中…'));
+  // 「いま」では索引を取りに行かない(loadIndex が早期に戻る)。それを「読込中…」と出すのは嘘なので分ける
+  const st = index.built ? ` ${T('索引')} ${index.records.length}${T('件')} (${index.building ? T('更新中…') : T('更新') + ' ' + fmtT(index.built)})`
+    : index.error ? ' ' + T('索引エラー') + ': ' + index.error
+    : mode === 'history' ? ' ' + T('索引') + ' ' + T('読込中…') : ' ' + T('索引') + ' ' + T('過去で読みます');
   $('#status').textContent = statusBase + st;
 }
 
@@ -1458,7 +1461,7 @@ function renderAccounts(refresh) {
     const u = a.usage ? `<div class="bar" title="${esc(T('直近の窓の使用率'))}"><i style="width:${Math.min(100, a.usage.used_percent)}%;background:${a.usage.used_percent >= 90 ? 'var(--f-red)' : a.usage.used_percent >= 70 ? 'var(--f-yellow)' : 'var(--f-green)'}"></i></div><div class="sub">${T('使用')} ${Math.round(a.usage.used_percent)}% · ${T('リセット')} ${esc(hhmm(a.usage.resets_at))}</div>` : '';
     return `<div class="acct ${lim ? 'lim' : ''} ${inn ? '' : 'out'}" data-i="${i}">
       <div class="h"><span class="ai">${esc(a.ai)}</span><b>${esc(acctName(a))}</b>
-        <span class="st">${inn ? `<span class="dot ok"></span>${esc(a.plan ? a.plan.toUpperCase() : T('ログイン中'))}` : unk ? `<span class="dot"></span>${T('確認できない')}` : `<span class="dot lim"></span>${T('未ログイン')}`}</span></div>
+        <span class="st">${inn ? `<span class="dot ok"></span>${esc(a.plan ? a.plan.toUpperCase() : T('ログイン中'))}` : unk ? `<span class="dot"></span>${T('確認できない')}${a.auth_error ? `<small> ${esc(a.auth_error)}</small>` : ''}` : `<span class="dot lim"></span>${T('未ログイン')}`}</span></div>
       <div class="kvrow"><span>${T('いま動いている')}</span><span>${a.running ? `<b>${a.running}</b> ${T('本')}` : `<span class="dim">0</span>`}</span></div>
       <div class="kvrow"><span>${T('上限')}</span><span>${lim ? `<span class="warnTxt">${esc(limitWhen(lim))}</span>` : a.limit ? `${T('いまは無し')}（${T('最後に上限')} ${esc(fmtIso(a.limit.at))}）` : T('いまは無し')}</span></div>
       ${a.org && !DEMO ? `<div class="sub">${esc(a.org)}${a.method ? ' · ' + esc(a.method) : ''}${a.from_file ? ' · ' + T('設定ファイルの値') : ''}</div>` : ''}${u}${usageLine(a)}
@@ -1652,7 +1655,7 @@ async function renderSettings(refresh) {
     const logout = l.ai === 'Codex' ? 'command codex logout' : envFor(l) + 'command claude auth logout';
     const cfg = l.ai === 'Codex' ? st.codex_config : (l.config_dir + '/settings.json');
     return `<div class="acct ${ok ? '' : 'lim'}"><div class="h"><span class="ai">${esc(l.ai)}</span><b>${esc(who)}</b>
-      <span class="st"><span class="dot ${ok ? 'ok' : 'lim'}"></span>${ok ? `${T('ログイン中')}${l.method ? ' · ' + esc(l.method) : ''}` : unk ? T('確認できない') : T('未ログイン')}</span></div>
+      <span class="st"><span class="dot ${ok ? 'ok' : 'lim'}"></span>${ok ? `${T('ログイン中')}${l.method ? ' · ' + esc(l.method) : ''}` : unk ? `${T('確認できない')}${l.error ? `<small> ${esc(l.error)}</small>` : ''}` : T('未ログイン')}</span></div>
       ${!DEMO && l.profile !== 'default' && l.ai === 'Claude' ? `<div class="sub">${T('プロファイル')} ${esc(l.profile)} · ${esc(l.config_dir.replace(/^\/Users\/[^/]+/, '~'))}</div>` : ''}
       <div class="opts">${ok ? `<button data-run="${i}" data-kind="logout">${T('ログアウト')}</button>` : `<button class="primary" data-run="${i}" data-kind="login">${T('ログイン')}</button>`}<button data-open="${esc(cfg)}">${T('設定ファイル')}</button></div></div>`; }).join('');
   $('#pBody').innerHTML = `
@@ -1972,7 +1975,9 @@ function loopLine(s0) {
 async function renderLive(n) {
   const s0 = n.s, m = s0.model_style || {};
   convWho = m.label || s0.ai || 'AI';   // 吹き出しの名前
-  $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}`; $('#pTitle').dataset.kind = 'live';
+  // 見出しはモデルと場所だけだと、どの会話を開いたのか分からない(実機で判明)。依頼の頭を足す
+  const what = (DEMO ? demoText(s0.task, s0.sid, DEMO_TASKS) : (s0.task || s0.topic || '')).replace(/\s+/g, ' ').trim();
+  $('#pTitle').textContent = `${m.label || s0.ai} · ${s0.project || s0.tab}${what ? ' — ' + what.slice(0, 48) : ''}`; $('#pTitle').dataset.kind = 'live';
   if (APP) toApp({type: 'show', tab: isAppTab(s0.tab) ? s0.tab : ''});   // 右の端末も同じセッションへ(入力先は奪わない)
   const link = !APP ? '' : isAppTab(s0.tab)
     ? `<span class="cvlink on" title="${esc(T('右の端末に同じセッションを出しています'))}">⇄ ${T('右の端末')} ${esc(s0.tab.slice(2))}</span>`
@@ -1980,7 +1985,7 @@ async function renderLive(n) {
   $('#pBody').innerHTML = `
     <div class="convwrap">
       <div class="convhead"><span class="pill" style="background:${rgb(m.rgb)};color:${fgFor(m.rgb || [120,120,120])}">${esc(m.label || '')}</span>${s0.client ? `<span class="pill" style="background:${rgb(s0.client.rgb)};color:${fgFor(s0.client.rgb)}">${esc(s0.client.label)}</span>` : ''}<span id="cvState" class="cvstate"></span>${s0.git ? `<span class="c-git">⎇ ${esc(DEMO ? 'main' : s0.git.branch)}</span>${s0.git.pr ? `<a class="c-pr ${esc(s0.git.pr.state)}" href="${esc(DEMO ? '#' : s0.git.pr.url)}" target="_blank" rel="noopener">PR #${s0.git.pr.number}</a>` : ''}` : ''}${link}<button id="goBtn" class="primary" title="${T('カードをダブルクリックでも開く')}">${APP ? (isAppTab(s0.tab) ? T('右の端末で打つ') : T('右の端末で開く')) : T('iTerm で開く')}</button></div>
-      ${(() => { const g = ((snap.parallel || {})[(s0.cwd || '').replace(/\/$/, '')] || []).filter(x => x.sid !== s0.sid);
+      ${(() => { const g = ((snap.parallel || {})[s0.parallel_key || ''] || []).filter(x => x.sid !== s0.sid);
         return g.length ? `<div class="convloop"><div><b>⇉ ${T('同じ場所で動いています')}</b> ${g.map(x => `<button class="mini" data-par="${esc(x.sid)}">${esc(x.ai || '')} · ${esc(TS(x.state || ''))}${x.task ? ' · ' + esc(DEMO ? '' : x.task) : ''}</button>`).join(' ')}</div><div class="sub">${T('同じファイルを触ると衝突します。片方を待つか、持ち場を分けてください。')}</div></div>` : ''; })()}
       ${loopLine(s0)}
       <div class="convlog" id="cvLog"><div class="cv empty">${T('読込中…')}</div></div>

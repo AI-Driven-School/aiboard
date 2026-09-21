@@ -3474,7 +3474,23 @@ def pr01(ctx):
     g = o.parallel_groups([mk("a1", "/tmp/x"), mk("a2", "/tmp/x/"), mk("a3", "/tmp/y"),
                            dict(mk("a4", "/tmp/y"), mark="⚪"), dict(mk("a5", "/tmp/z"), ai=""),
                            dict(mk("a6", "/tmp/z"), background=True)])
-    check(list(g) == ["/tmp/x"] and len(g["/tmp/x"]) == 2, f"組の作り方 {g}")
+    check(list(g) == ["cwd:/tmp/x"] and len(g["cwd:/tmp/x"]) == 2, f"組の作り方 {g}")
+    # ホーム直下は「持ち場」ではない: 触っているものが分からない限り、衝突とは言わない
+    # (実機ではホームの 14 本が全部「同じ場所」になり、会話ビューの 6 割が相棒ボタンで埋まっていた)
+    hg = o.parallel_groups([mk("h1", o.HOME), mk("h2", o.HOME), mk("h3", o.HOME + "/")])
+    check(hg == {}, f"ホーム直下を組にした {hg}")
+    hint = o.parallel_groups([dict(mk("h1", o.HOME), project_hint="proj-a"), dict(mk("h2", o.HOME), project_hint="proj-a"),
+                              dict(mk("h3", o.HOME), project_hint="proj-b")])
+    check(list(hint) == ["hint:proj-a"] and len(hint["hint:proj-a"]) == 2, f"持ち場が同じものだけ組にする {hint}")
+    # 名前で分かった持ち場が実在するフォルダなら、そこで動いている組と一つにまとめる
+    import tempfile as _tf
+    name = os.path.basename(_tf.mkdtemp(dir=o.HOME, prefix=".uat-par-"))
+    try:
+        merged = o.parallel_groups([dict(mk("m1", o.HOME), project_hint=name), mk("m2", os.path.join(o.HOME, name))])
+        check(list(merged) == ["cwd:" + os.path.join(o.HOME, name)] and len(merged[list(merged)[0]]) == 2,
+              f"名前と実フォルダが別の組になった {merged}")
+    finally:
+        os.rmdir(os.path.join(o.HOME, name))
     st, snap, _ = http("/api/snapshot")
     check("parallel" in snap, "snapshot に parallel が無い")
     real = {k: len(v) for k, v in (snap.get("parallel") or {}).items()}
@@ -3491,8 +3507,10 @@ def pr01(ctx):
                         model_style={"label": "Opus 5", "emoji": "🟠", "rgb": [200, 120, 60], "short": "o5", "vendor": "", "id": "m"})
                    for i in (1, 2)]
             d["sessions"] = two
-            d["parallel"] = {"/tmp/par": [{"sid": "p1", "tab": "9-1", "state": "作業中", "ai": "Claude", "task": "仕事1"},
-                                          {"sid": "p2", "tab": "9-2", "state": "確認待ち", "ai": "Claude", "task": "仕事2"}]}
+            for x in two:
+                x["parallel_key"] = "cwd:/tmp/par"
+            d["parallel"] = {"cwd:/tmp/par": [{"sid": "p1", "tab": "9-1", "state": "作業中", "ai": "Claude", "task": "仕事1"},
+                                              {"sid": "p2", "tab": "9-2", "state": "確認待ち", "ai": "Claude", "task": "仕事2"}]}
             route_.fulfill(status=200, content_type="application/json", body=json.dumps(d))
         pg.route("**/api/snapshot", handler)
         pg.route("**/api/conv*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
@@ -3858,6 +3876,45 @@ def mg01(ctx):
         if tty:
             cs.osa('tell application "iTerm"\n repeat with w in windows\n  repeat with t in tabs of w\n   repeat with s in sessions of t\n'
                    '    if tty of s is %s then close s\n   end repeat\n  end repeat\n end repeat\nend tell' % json.dumps("/dev/" + tty))
+
+
+@case("AC-05", "CLI を呼べなかった時に『未ログイン』と言わない(『確認できない』＋理由)。実機で 4 アカウント全部を未ログインと誤表示していた")
+def ac05(ctx):
+    import overview as o
+    real = o.subprocess.run
+    calls = []
+
+    def dead(argv, **kw):
+        a = " ".join(map(str, argv))
+        if "auth status" in a or "login status" in a:
+            calls.append(a[:40])
+            return type("R", (), {"returncode": 127, "stdout": "", "stderr": "zsh:1: command not found: claude"})()
+        return real(argv, **kw)
+    try:
+        o.subprocess.run = dead
+        rows = o.login_status()
+    finally:
+        o.subprocess.run = real
+    check(calls, "CLI を呼びに行っていない")
+    for r in rows:
+        check(r["logged_in"] is None, f"呼べなかったのに logged_in={r['logged_in']} ({r['profile']})")
+        check("聞けませんでした" in r["error"] and "127" in r["error"], f"理由が残っていない {r}")
+    # 画面: 「確認できない」と理由が出て、「未ログイン」とは書かない
+    def route(pg):
+        pg.route("**/api/accounts*", lambda rt, q: rt.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"ok": True, "fetched": time.time(), "auth_fetched": time.time(),
+             "accounts": [{"ai": "Claude", "profile": "default", "email": "a@example.com", "plan": "max",
+                           "logged_in": None, "auth_error": "claude に聞けませんでした (rc=127)", "running": 3, "limit": None}],
+             "clis": []})))
+    def fn(pg, errs, bl):
+        pg.click("#btnAcct")
+        wait_js(pg, "document.querySelectorAll('#pBody .acct').length > 0", 40)
+        return pg.evaluate("document.querySelector('#pBody').innerText"), errs
+    txt, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check("確認できない" in txt and "rc=127" in txt, f"画面に理由が出ていない: {txt[:200]}")
+    check("未ログイン" not in txt, f"呼べていないのに「未ログイン」と書いた: {txt[:200]}")
+    return f"呼べなかった {len(rows)} 件すべて logged_in=None＋理由 / 画面は「確認できない (rc=127)」で「未ログイン」とは書かない"
 
 
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
