@@ -1778,9 +1778,18 @@ def remote_sessions(force=False, ttl=60):
     return _RS_CACHE["data"]
 
 
+_MM_BUSY = {"on": False}
+
+
 def macmini(force=False):
     """macmini の無人AIジョブの状態。60秒キャッシュ(ステージング内 macmini_cache.json)。
-    ssh 失敗時は ok=False と reason を返し、前回成功分があれば stale として添える。"""
+
+    **盤を待たせない**: 期限切れでも、取りに行くのは裏で、返すのは手元の値。
+    以前はここで ssh(1 台 40 秒)を待っていたので、起動直後の 1 回目の更新が 40〜80 秒返らず、
+    アプリを開いてもしばらく何も出なかった(2026-09-21 実測)。
+    ssh 失敗時は ok=False と reason を返し、前回成功分があれば stale として添える。
+    """
+    import threading
     now = time.time()
     cache = {}
     try:
@@ -1789,6 +1798,19 @@ def macmini(force=False):
         pass
     if not force and cache.get("fetched") and now - cache["fetched"] < MACMINI_TTL:
         return cache["data"]
+    if not force:
+        if not _MM_BUSY["on"]:
+            _MM_BUSY["on"] = True
+
+            def run():
+                try:
+                    macmini(force=True)
+                finally:
+                    _MM_BUSY["on"] = False
+            threading.Thread(target=run, daemon=True).start()
+        if cache.get("data"):
+            return {**cache["data"], "stale_for": round(now - cache.get("fetched", now))}
+        return {"ok": False, "reason": "まだ読んでいない(裏で取得中)", "fetching": True}
     errors = []
     if not MACMINI_HOSTS:
         return {"ok": False, "reason": "未設定(~/.aiboard/config.json の remote_hosts)", "unconfigured": True}

@@ -53,7 +53,7 @@ def case_timeout():
 
 # 混んでいる時だけ落ちることがある試験(アプリを起こす・実シェルを待つもの)。1 度だけやり直す
 RETRY_WHEN_BUSY = {"AP-04", "AP-05", "AP-06", "AP-07", "AP-08", "AP-09", "AP-16", "AP-17", "AS-01", "AS-02", "AS-03",
-                   "LK-01", "LK-02", "LK-03", "SV-19", "NT-02", "BD-17", "DG-03", "SC-03", "HK-09"}
+                   "LK-01", "LK-02", "LK-03", "SV-19", "NT-02", "BD-17", "DG-03", "SC-03", "HK-09", "LX-01", "MS-01"}
 
 
 def case(cid, title, kind="auto"):
@@ -3728,7 +3728,8 @@ def lx01(ctx):
                 break
         check(got.count(mark) >= 2, f"画面に打った字と出力が見えない: {got[-200:]!r}")
         st, r = 0, {}
-        for _ in range(20):        # 盤は 2.5 秒ごとに数え直す。作ったばかりのパネルは次の更新まで見えない
+        for _ in range(20 * max(1, int(load_factor()))):   # 混んでいる時は盤の数え直しも遅れる
+            # 盤は 2.5 秒ごとに数え直す。作ったばかりのパネルは次の更新まで見えない
             st, r, _ = http(f"/api/screen?lines=40&tab=8-{pane['tab']}")
             if st == 200 and r.get("ok") and mark in (r.get("screen") or ""):
                 break
