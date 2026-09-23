@@ -69,7 +69,8 @@ def line_session(s, w, show_state=True):
     acct = f"({s['account']})" if s.get("account") else ""
     head_plain = f"{s['tab']:<5}{s['mark']} " + (f"{s['state']:<7}" if show_state else "") + \
                  f"{(ms.get('emoji', '❔') + ' ' + ms.get('label', '')) if ms else '':<14}{acct}"
-    head = f"{s['tab']:<5}{s['mark']} " + (f"{s['state']:<7}" if show_state else "") + f"{model}{' ' * max(0, 14 - cs.width((ms.get('emoji', '❔') + ' ' + ms.get('label', '')) if ms else ''))}{acct}"
+    mark, label = overview.shown(s)   # 印と状態名は表の答え(盤のカードと同じ)
+    head = f"{s['tab']:<5}{mark} " + (f"{label:<7}" if show_state else "") + f"{model}{' ' * max(0, 14 - cs.width((ms.get('emoji', '❔') + ' ' + ms.get('label', '')) if ms else ''))}{acct}"
     elapsed = overview.fmt_dur(s.get("state_for")) if s.get("state_for") is not None else "-"
     rest = w - cs.width(head_plain) - cs.width(elapsed) - 4
     tagp = f"{s['client'].get('emoji', '')}{s['client']['label']} " if s.get("client") else ""
@@ -109,7 +110,7 @@ def render(snap, w):
         k = f"{ms.get('emoji', '❔')}{ms.get('label', '')}"
         models.setdefault(k, {"rgb": ms.get("rgb"), "n": 0, "busy": 0})
         models[k]["n"] += 1
-        models[k]["busy"] += 1 if s["mark"] in ("🟢", "🟩") else 0
+        models[k]["busy"] += 1 if overview.is_working(s) else 0
     mtxt = "  ".join(c(v["rgb"], f"{k}×{v['n']}") + dim(f"(作業中{v['busy']})") for k, v in models.items())
     out.append(f"タブ{cnt['tabs']}  🔴あなたの番 {len(snap['attention'])}  🟢作業中 {cnt['working']}  🟡返答待ち {cnt['waiting']}   {mtxt}")
     out.append(dim("─" * w))
@@ -121,12 +122,12 @@ def render(snap, w):
     for s in att:
         out.append("  " + line_session(s, w - 2, show_state=False) + "  " + dim(s["why"]))
     # 作業中
-    work = [s for s in snap["sessions"] if s["mark"] in ("🟢", "🟩")]
+    work = [s for s in snap["sessions"] if overview.is_working(s)]
     out.append(c((80, 190, 100), f"🟢 作業中 ({len(work)})", bold=True))
     for s in work:
         out.append("  " + line_session(s, w - 2, show_state=False))
     att_tabs = {s["tab"] for s in att}
-    others = [s for s in snap["sessions"] if s["mark"] not in ("🟢", "🟩", "⚪") and s["tab"] not in att_tabs]
+    others = [s for s in snap["sessions"] if not overview.is_working(s) and s["mark"] != "⚪" and s["tab"] not in att_tabs]
     if others:
         out.append(c((200, 180, 60), f"🟡 返答待ち ({len(others)})", bold=True))
         for s in others:

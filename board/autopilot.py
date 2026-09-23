@@ -68,6 +68,23 @@ def recent(limit=50):
     return rows[-limit:][::-1]
 
 
+def why_not(s):
+    """上限の会話に自動続行の予約を作れない理由。作れる(または対象外)なら ""。
+
+    盤は「予約が実際にある時だけ『自動で続きます』と言う」(docs/state-spec.md 4 節)。
+    オンなのに予約が無い時、黙っているとユーザーは続くと思い込むので、理由を画面に出す。
+    """
+    ui = s.get("ui") or {}
+    if ui.get("auto") != "resume_when_reset":
+        return ""
+    sid = s.get("sid") or ""
+    if not sid or sid.startswith(("tty:", "agent:")):
+        return "会話の id が分からないので予約できません"
+    if not (s.get("limit") or {}).get("resets_at"):
+        return "解除時刻が分からないので予約できません"
+    return ""
+
+
 def tick(sessions, now=None):
     """snapshot のたびに呼ぶ。表の一手のうち、やってよいものだけ実行して、やったことを返す。"""
     import overview
@@ -80,8 +97,8 @@ def tick(sessions, now=None):
             continue
         sid, lim = s.get("sid") or "", (s.get("limit") or {})
         at = lim.get("resets_at")
-        if not sid or sid.startswith("tty:") or not at:
-            continue
+        if why_not(s):
+            continue        # 理由は snapshot が盤に出す(auto_reason)
         if not pol.get("resume_when_reset"):
             continue        # 既定はオフ。人が押すまで何もしない
         jobs = overview.read_schedule()

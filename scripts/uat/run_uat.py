@@ -433,7 +433,7 @@ def lp03(ctx):
 @case("LP-04", "/loop 待機中は「あなたの番」に数えない。判断待ちは loop 中でも数える")
 def lp04(ctx):
     import overview as o
-    base = {"state": "返答待ち", "state_for": 99999, "doing": ""}
+    base = {"state": "返答待ち", "state_for": 99999, "doing": "", "pid": 1, "ai": "Claude"}
     r = (len(o.attention([dict(base)])), len(o.attention([dict(base, loop={"wake": {"next_at": 1}})])),
          len(o.attention([dict(base, state="確認待ち", loop={"wake": {}})])))
     check(r == (1, 0, 1), f"{r}(期待 1,0,1)")
@@ -647,10 +647,11 @@ def bd02(ctx):
         cards = pg.evaluate("[...document.querySelectorAll('.card.live')].map(c => ({id: c.dataset.id, cls: c.className}))")
         live = [s for s in snap["sessions"] if s.get("sid") and s.get("ai") and not s["sid"].startswith("tty:")]   # 素のシェルは盤に出さない(AI のセッションだけ)
         exp = {}
+        # 色は真理値表の kind で決まる(docs/state-spec.md 2 節)。赤=人が要る / 黄=あなたの番 / 紫=上限 / 緑=作業中 / 灰=それ以外
+        color = {"need": "turn", "auth": "turn", "billing": "turn", "error": "turn", "limited": "limited", "resumable": "yourturn",
+                 "yourturn": "yourturn", "loop": "loop", "work": "work", "idle": "past", "starting": "past", "ended": "past"}
         for s in live:
-            lim = (s.get("limit") or {}).get("active")
-            k = "limited" if lim else "turn" if s["state"] in ("確認待ち", "codex 停止") else ("loop" if (s.get("loop") or {}).get("wake") else "yourturn") if s["state"] in ("返答待ち", "codex 返答待ち") else "work"
-            exp[s["sid"]] = k
+            exp[s["sid"]] = color[(s.get("ui") or {}).get("kind")]
         bad = [(c["id"][:8], c["cls"], exp.get(c["id"])) for c in cards if exp.get(c["id"]) and f"k-{exp[c['id']]}" not in c["cls"]]
         shown = {c["id"] for c in cards}
         missing = [sid[:8] for sid in exp if sid not in shown]
@@ -1133,7 +1134,7 @@ def lm04(ctx):
 def at01(ctx):
     import overview as o
     mk = lambda sid, state, sec=0, **k: dict({"sid": sid, "tab": sid, "state": state, "state_for": sec,
-                                              "doing": "", "mark": "🟡"}, **k)
+                                              "doing": "", "mark": "🟡", "pid": 1, "ai": "Claude"}, **k)
     sess = [mk("work", "作業中", 99999, mark="🟢"),
             mk("idle-short", "返答待ち", o.IDLE_LONG + 10),
             mk("idle-long", "返答待ち", o.IDLE_LONG + 1000),
@@ -1144,7 +1145,8 @@ def at01(ctx):
             mk("boot", "起動中?", 0),
             mk("loop", "返答待ち", 99999, loop={"wake": {"next_at": time.time() + 60}})]
     got = [x["tab"] for x in o.attention(sess)]
-    exp = ["ask", "cxstop", "idle-long", "idle-short", "trust", "boot"]
+    # 画面で確かめた信頼の確認は判断待ちと同じ扱い(docs/state-spec.md 3 節 7 行目。Jev 0.95/0.96)。同じ順位の中は長く待っている順
+    exp = ["ask", "cxstop", "trust", "idle-long", "idle-short", "boot"]
     check(got == exp, f"{got} != {exp}")
     check(all(x.get("why") for x in o.attention(sess)), "理由(why)の無い項目がある")
     check(o.IDLE_LONG == 900, f"放置とみなす秒数が変わった {o.IDLE_LONG}")
@@ -1708,7 +1710,7 @@ def cv03(ctx):
     return "1/2/Esc とも 1 回・tab と sid 一致・数字は enter なし・判断待ちが終わるとボタンは消える"
 
 
-@case("BD-13", "カードの状態色は 1 つだけで、上限 > 判断待ち > ループ待機 > あなたの番 > 作業中 の順で決まる")
+@case("BD-13", "表の答え(ui)を持たない古い盤サーバの相手: カードの状態色は 1 つだけで、以前の順(上限 > 判断待ち > ループ待機 > あなたの番 > 作業中)で決まる")
 def bd13(ctx):
     now = time.time()
     base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "作業中", "mark": "🟡", "doing": "npm test",
@@ -1961,6 +1963,8 @@ def cs06(ctx):
 
 @case("TU-02", "信頼の確認で止まったセッションを、盤から答えられる(はい=↓+Enter・いいえ=Enter)")
 def tu02(ctx):
+    import decide
+    ui = json.dumps(decide.decide({"trust": "seen"}), ensure_ascii=False)   # 盤サーバが本来付ける表の答え(画面で確かめた信頼の確認)
     js = """
       const sent = [];
       const realFetch = window.fetch;
@@ -1972,7 +1976,7 @@ def tu02(ctx):
         if (url.includes('/api/snapshot')) {   // 盤に「信頼の確認で止まっている」セッションを 1 枚足す
           const r = await realFetch(u, o); const d = await r.json();
           d.sessions = [Object.assign({}, (d.sessions || [])[0] || {}, fake, {topic: 'フォルダ信頼の確認で止まって未起動',
-            trust_ask: '/tmp/uat-trust', model_style: {label: 'x', short: 'x', emoji: '🟠', rgb: [0, 0, 0], vendor: '', id: ''}})]
+            trust_ask: '/tmp/uat-trust', ui: UI_JSON, model_style: {label: 'x', short: 'x', emoji: '🟠', rgb: [0, 0, 0], vendor: '', id: ''}})]
             .concat(d.sessions || []);
           return new Response(JSON.stringify(d), {headers: {'Content-Type': 'application/json'}});
         }
@@ -1989,7 +1993,7 @@ def tu02(ctx):
       const btns = [...document.querySelectorAll('#cvAsk button')];
       (btns[1] || btns[0]).click();
       await new Promise(r => setTimeout(r, 400));
-      return {labels: labels, q: q, yes: yes, no: sent.splice(0)};"""
+      return {labels: labels, q: q, yes: yes, no: sent.splice(0)};""".replace("UI_JSON", ui)
     r = run_app_js(ctx, js, wait="8")
     check(r.get("ok"), f"{r}")
     v = r["value"]
@@ -2060,8 +2064,13 @@ def ap16(ctx):
     check(r0.get("firstResponderIsTerminal"), "起動直後にキー入力が端末に入らない(クリックが要る)")
     # 盤のカードから自分の端末を選び直す(別の端末を選んでおいてから戻す)
     js = """
-      const S = (board.snap().sessions || []).filter(x => x.tab && x.tab.startsWith('0-'));
-      if (!S.length) return {why: 'アプリの端末が盤に出ていない'};
+      // 盤に出るまで待つ(1 回だけ見ると、機械が混んでいる時に旧版でも落ちた: 2026-09-23 交互に 4 回で 2 勝 2 敗)
+      let S = [];
+      for (let i = 0; i < 30 && !S.length; i++) {
+        S = ((board.snap() || {}).sessions || []).filter(x => x.tab && x.tab.startsWith('0-'));
+        if (!S.length) await new Promise(r => setTimeout(r, 500));
+      }
+      if (!S.length) return {why: 'アプリの端末が 15 秒待っても盤に出ない'};
       window.webkit.messageHandlers.aiboard.postMessage({type: 'run', title: 'uat', command: 'CLAUDE_CONFIG_DIR=; cd /tmp; exec /bin/zsh -il'});
       await new Promise(r => setTimeout(r, 3000));
       document.querySelector('#q') && document.querySelector('#q').focus();
@@ -2904,8 +2913,8 @@ def jd03(ctx):
     try:
         judge.set_config({"backend": "local", "local_url": url})
         o._JUDGE_CACHE.clear()
-        sess = [{"sid": "s1", "tab": "9-1", "state": "確認待ち", "state_for": 100, "project": "A", "task": "a", "ai": "Claude", "client": None, "cwd": "/tmp/a"},
-                {"sid": "s2", "tab": "9-2", "state": "確認待ち", "state_for": 10, "project": "B", "task": "b", "ai": "Claude", "client": None, "cwd": "/tmp/b"}]
+        sess = [{"sid": "s1", "tab": "9-1", "state": "確認待ち", "state_for": 100, "project": "A", "task": "a", "ai": "Claude", "client": None, "cwd": "/tmp/a", "pid": 1},
+                {"sid": "s2", "tab": "9-2", "state": "確認待ち", "state_for": 10, "project": "B", "task": "b", "ai": "Claude", "client": None, "cwd": "/tmp/b", "pid": 2}]
         t0 = time.time(); att = o.attention(sess); first_ms = (time.time() - t0) * 1000
         check([x["sid"] for x in att][:2] == ["s1", "s2"], f"初回は規則のまま返す(待たない)はず {[x['sid'] for x in att]}")
         for _ in range(40):
@@ -4092,7 +4101,132 @@ def lg01(ctx):
             "盤の定型再開文は復帰に数えない / 画面は同じ長さの 7 日を 2 つ・言い切らない注記つき")
 
 
-@case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
+@case("SM-01", "状態の全組み合わせ: 真理値表の答えが、仕様から別に書いた期待値(state_oracle)と全チャネルで一致する")
+def sm01(ctx):
+    import itertools
+    import decide
+    sys.path.insert(0, os.path.join(ROOT, "scripts", "uat"))
+    import state_oracle as O
+    keys, n, bad = list(O.DOMAIN), 0, {}
+    for vals in itertools.product(*O.DOMAIN.values()):
+        inp = dict(zip(keys, vals)); n += 1
+        exp, got = O.expect(**inp), decide.decide(inp)
+        diff = {k: (got.get(k), v) for k, v in exp.items() if got.get(k) != v}
+        if diff and len(bad) < 5:
+            bad[json.dumps(inp, ensure_ascii=False)] = (got["row"], diff)
+    check(not bad, f"仕様と違う(行, {{欄: (実際, 期待)}}) {bad}")
+    # 入力の値域が仕様の 1 節と同じ(値を足したら両方に足す)
+    check(set(O.DOMAIN) == set(decide.FIELDS), f"入力の欄が仕様とずれた {set(O.DOMAIN) ^ set(decide.FIELDS)}")
+    return f"{n} 通りすべて一致(kind / 印 / 音 / 小窓 / Dock / 通知 / 集計 / 一手)"
+
+
+@case("SM-02", "観測から表まで: 実際のセッションの形を ui_of に通すと、監査で見つかった食い違いが起きない")
+def sm02(ctx):
+    import overview as o
+    now = time.time()
+    base = {"pid": 1, "ai": "Claude", "tab": "1-1", "sid": "s", "state": "作業中", "mark": "🟢", "doing": "", "limit": None,
+            "auth_lost": None, "loop": None, "trust_ask": "", "idle": None, "state_for": 5}
+    S = lambda **k: o.ui_of(dict(base, **k))
+    cases = [   # (監査の番号・何を見るか, セッション, 期待 {欄: 値})
+        ("⑦ ログイン切れで返答待ち → 鳴らす・小窓・Dock", dict(state="返答待ち", mark="🟡", auth_lost={"kind": "login"}),
+         {"kind": "auth", "sound": True, "popup": True, "dock": True, "action": "login"}),
+        ("⑧ クレジット切れ", dict(state="返答待ち", mark="🟡", auth_lost={"kind": "credits"}), {"kind": "billing", "dock": True}),
+        ("⑨ 一時的な失敗は数えない", dict(state="返答待ち", mark="🟡", auth_lost={"kind": "transient"}), {"kind": "work", "attn": None}),
+        ("⑨' 一時的な失敗が 10 分続いたら人の番", dict(state="返答待ち", mark="🟡", auth_lost={"kind": "transient"}, state_for=700),
+         {"kind": "yourturn", "attn": 0}),
+        ("⑮ 上限と一時的な失敗 → 上限を隠さない", dict(limit={"active": True, "kind": "session", "resets_at": now + 600}, auth_lost={"kind": "transient"}),
+         {"kind": "limited", "auto": "resume_when_reset"}),
+        ("③ Codex の停止 → エラー", dict(ai="Codex gpt", state="codex 停止", mark="🔴"), {"kind": "error", "notify": True, "dock": True}),
+        ("④ 背景の failed → エラー", dict(pid=None, background=True, tab="a-1234", state="⛔ エラーで停止", mark="🔴"), {"kind": "error"}),
+        ("⑤ 背景の判断待ちは小窓を出さない", dict(pid=None, background=True, tab="a-1234", state="確認待ち", mark="🔴"),
+         {"kind": "need", "popup": False, "action": "look"}),
+        ("① 信頼の答えが無いと推した", dict(state="起動中?", mark="🔴", trust_ask="/x"), {"kind": "need", "action": "trust", "sound": False}),
+        ("② 画面で信頼の確認を見た", dict(state="確認画面で停止", mark="🔴", trust_ask="/x"), {"kind": "need", "sound": True, "popup": True}),
+        ("⑪ 記録の無い CLI の 45 秒は断定しない", dict(ai="Gemini", state="返答待ち", mark="🟡", idle=45), {"kind": "idle", "action": "look"}),
+        ("⑫ 記録の無い CLI で tty を読めない", dict(ai="Gemini", state="他の AI", mark="🔵", idle=None), {"kind": "starting"}),
+        ("⑩ 上限中の返答待ちはあなたの番に数えない", dict(state="返答待ち", mark="🟡", limit={"active": True, "kind": "session", "resets_at": now + 600}, state_for=9999),
+         {"kind": "limited", "attn": None}),
+        ("上限が明けて誰も続きを頼んでいない → 1 回通知", dict(state="返答待ち", mark="🟡", limit={"active": False, "kind": "session", "resets_at": now - 60}),
+         {"kind": "resumable", "notify": True, "sound": False}),
+        ("解除時刻が分からない上限が古くなった → 明けたとは言わない", dict(state="返答待ち", mark="🟡", limit={"active": False, "kind": "session", "resets_at": None}),
+         {"kind": "yourturn"}),
+        ("判断待ちは古い上限より上", dict(state="確認待ち", mark="🔴", limit={"active": True, "kind": "session", "resets_at": now + 600}),
+         {"kind": "need", "popup": True}),
+        ("プロセスが居ない古い判断待ち → 終了", dict(pid=None, state="確認待ち", mark="🔴"), {"kind": "ended", "popup": False}),
+        ("週の上限", dict(limit={"active": True, "kind": "weekly", "resets_at": now + 86400}), {"kind": "limited"}),
+        # Codex は上限の文も ⛔ で出し、cs が「codex 停止」にする。上限をエラーに化けさせない(自動で続ける予約が消える。Codex の反証)
+        ("Codex の上限は停止でなく上限", dict(ai="Codex gpt", state="codex 停止", mark="🔴", limit={"active": True, "kind": "usage", "resets_at": now + 3600}),
+         {"kind": "limited", "auto": "resume_when_reset"}),
+        ("Codex の上限が明けた後もエラーにしない", dict(ai="Codex gpt", state="codex 停止", mark="🔴", limit={"active": False, "kind": "usage", "resets_at": now - 1}),
+         {"kind": "resumable", "sound": False, "dock": False, "attn": 1}),
+    ]
+    bad = {}
+    for name, sess, want in cases:
+        got = S(**sess)
+        d = {k: (got.get(k), v) for k, v in want.items() if got.get(k) != v}
+        if d:
+            bad[name] = (got["row"], d)
+    check(not bad, f"食い違いが残っている(行, {{欄: (実際, 期待)}}) {bad}")
+    # ⑥ 公式の状態で起動中?→確認待ちに上書きされたら、表の答えも判断待ちになる(ui は上書きの後で出す)
+    import inspect
+    src = inspect.getsource(o.sessions)
+    check(src.index('x["ui"] = ui_of(x)') > src.index('x["state"] = off["state"]'), "表の答えを公式の上書きより前に出している")
+    # 集計(あなたの番): 表の attn だけで決まる
+    a = o.attention([dict(base, sid="t", tab="t", state="返答待ち", mark="🟡", auth_lost={"kind": "transient"}, state_for=60)])
+    check(a == [], f"一時的な失敗を集計に入れた {[x['why'] for x in a]}")
+    # 印・状態名・作業中かは、表の答えから 1 か所で(盤・TUI・見張り・集計が同じものを見る)
+    login = dict(base, state="返答待ち", mark="🟡", auth_lost={"kind": "login"}); login["ui"] = o.ui_of(login)
+    check(o.shown(login) == ("🔴", "ログイン切れ"), f"ログイン切れの印と状態名 {o.shown(login)}")
+    tr = dict(base, state="返答待ち", mark="🟡", auth_lost={"kind": "transient"}); tr["ui"] = o.ui_of(tr)
+    check(o.is_working(tr) and not o.is_working(login), "作業中の判定が表の答えと違う")
+    import decide
+    check(set(decide.LABEL) == {r[0] for r in decide.ROWS} and set(decide.MARK) >= {r[2] for r in decide.ROWS}, "表の行に状態名か印が無い")
+    return f"{len(cases)} 件の観測 → 表の答えが仕様どおり / 表は上書きの後で 1 回 / 集計は attn"
+
+
+@case("SM-03", "盤の画面: カードの色・状態名・印は表の kind / badge だけで決まり、state 文字列で決め直さない")
+def sm03(ctx):
+    import decide
+    base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "作業中", "mark": "🟢", "doing": "npm test",
+            "task": "UAT fixture", "topic": "", "project": "uatproj", "cwd": "/Users/uat/uatproj", "client": None,
+            "model_style": {"emoji": "🔷", "label": "Sonnet", "rgb": [80, 140, 220]}, "ago": 5, "state_for": 5,
+            "mem_mb": 120, "limit": None, "loop": None, "tools": None, "account": "", "transcript": ""}
+    # わざと state 文字列を「作業中」のままにして、表の答えだけを変える(画面が state で決め直していれば落ちる)
+    inputs = {"uat-login": dict(stop="login"), "uat-key": dict(stop="apikey"), "uat-cred": dict(stop="credits"),
+              "uat-err": dict(stop="error"), "uat-need": dict(hook="waiting"), "uat-lim": dict(stop="five_hour"),
+              "uat-reset": dict(stop="limit_reset"), "uat-turn": dict(hook="replied"), "uat-loop": dict(hook="replied", loop=True),
+              "uat-idle": dict(idle=45), "uat-work": dict(hook="working")}
+    exp = {"uat-login": ("k-turn", "ログイン切れ", "auth"), "uat-key": ("k-turn", "API キーが無効", "auth"),
+           "uat-cred": ("k-turn", "クレジット切れ", "billing"), "uat-err": ("k-turn", "停止", "err"),
+           "uat-need": ("k-turn", "判断待ち", "need"), "uat-lim": ("k-limited", "上限", "lim"),
+           "uat-reset": ("k-yourturn", "上限が明けた", "turn"), "uat-turn": ("k-yourturn", "あなたの番", "turn"),
+           "uat-loop": ("k-loop", "ループ待機", ""), "uat-idle": ("k-past", "出力が止まっている", "look"),
+           "uat-work": ("k-work", "作業中", "")}
+    ss = [dict(base, tab=f"9-{i}", sid=sid, ui=decide.decide(inp)) for i, (sid, inp) in enumerate(inputs.items(), 1)]
+
+    def extra(pg):
+        def fake(route):
+            r = route.fetch(); d = r.json()
+            d["sessions"] = ss
+            d["counts"] = dict(d.get("counts") or {}, tabs=len(ss))
+            route.fulfill(response=r, body=json.dumps(d))
+        pg.route("**/api/snapshot*", fake)
+
+    def fn(pg, errs, bl):
+        wait_js(pg, f"document.querySelectorAll('.card[data-id^=\"uat-\"]').length === {len(ss)}", 30)
+        pg.wait_for_timeout(300)
+        return pg.evaluate("""Object.fromEntries([...document.querySelectorAll('.card[data-id^="uat-"]')].map(c =>
+            [c.dataset.id, [[...c.classList].filter(x => x.startsWith('k-')).join(','), c.querySelector('.c-state').textContent,
+             (c.querySelector('.c-badge') || {className: ''}).className.replace('c-badge', '').trim()]]))"""), list(errs)
+
+    got, errs = with_page(ctx, fn, "?lang=ja", route_extra=extra)
+    bad = {k: (got.get(k), list(v)) for k, v in exp.items() if not got.get(k) or tuple(got[k]) != v}
+    check(not bad, f"表の答えと画面が違う(実際, 期待) {bad}")
+    check(not errs, f"{errs[:1]}")
+    return f"{len(exp)} 種の答え → 色・状態名・印が表どおり(state 文字列は全部「作業中」のまま)"
+
+
+@case("DT-01", "状態の真理値表: 全 19 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide
     D = lambda **kw: decide.decide(kw)
@@ -4103,20 +4237,25 @@ def dt01(ctx):
         ("OAuth 失効", dict(stop="oauth"), ("認証: ログイン切れ", "止まっている", "auth", True, True, "login")),
         ("期限切れ", dict(stop="expired"), ("認証: ログイン切れ", "止まっている", "auth", True, True, "login")),
         ("クレジット", dict(stop="credits"), ("クレジット切れ", "止まっている", "billing", True, True, "billing")),
+        ("エラーで停止", dict(stop="error"), ("エラーで停止", "停止", "err", True, False, "resume")),
+        ("判断待ち", dict(hook="waiting"), ("判断待ち", "確認待ち", "need", True, True, "answer")),
+        ("背景の判断待ち", dict(hook="waiting", answerable=False), ("判断待ち（盤から答えられない）", "確認待ち", "need", True, False, "look")),
+        ("信頼の確認(画面)", dict(trust="seen"), ("信頼の確認", "確認待ち", "need", True, True, "trust")),
         ("5 時間枠", dict(stop="five_hour"), ("上限", "上限", "lim", False, False, "move_or_wait")),
         ("7 日枠", dict(stop="seven_day"), ("上限", "上限", "lim", False, False, "move_or_wait")),
         ("超過", dict(stop="overage"), ("上限", "上限", "lim", False, False, "move_or_wait")),
-        ("判断待ち", dict(hook="waiting"), ("判断待ち", "確認待ち", "need", True, True, "answer")),
-        ("信頼の答えが無い", dict(hook="", trusted=False), ("信頼の確認かも", "起動中?", "need", False, False, "trust")),
-        ("一時的な失敗", dict(stop="transient"), ("一時的な失敗", "作業中", "", False, False, "none")),
+        ("上限が明けた", dict(stop="limit_reset", hook="replied"), ("上限が明けた", "返答待ち", "turn", False, False, "reply")),
+        ("終わっている", dict(proc=False), ("終わっている", "終了", "", False, False, "resume")),
+        ("信頼の答えが無い", dict(hook="", trust="suspect"), ("信頼の確認かも", "起動中?", "need", False, False, "trust")),
+        ("一時的な失敗", dict(stop="transient", stale=30), ("一時的な失敗", "作業中", "", False, False, "none")),
+        ("一時的な失敗が長引く", dict(stop="transient", stale=600), ("一時的な失敗が長引いている", "返答待ち", "turn", False, False, "reply")),
         ("作業中", dict(hook="working"), ("作業中", "作業中", "", False, False, "none")),
         ("ループ待機", dict(hook="replied", loop=True), ("ループ待機", "返答待ち", "", False, False, "none")),
         ("あなたの番", dict(hook="replied"), ("あなたの番", "返答待ち", "turn", False, False, "reply")),
         ("記録なし・出力中", dict(hook="", idle=1.0), ("記録なしの CLI: 出力が続く", "作業中", "", False, False, "none")),
-        ("記録なし・止まった", dict(hook="", idle=45.0), ("記録なしの CLI: 出力が止まった", "返答待ち", "turn", False, False, "look")),
+        ("記録なし・止まった", dict(hook="", idle=45.0), ("記録なしの CLI: 出力が止まった", "出力が止まっている", "look", False, False, "look")),
         ("記録なし・その間", dict(hook="", idle=12.0), ("起動中", "起動中?", "", False, False, "look")),
         ("起動中", dict(hook=""), ("起動中", "起動中?", "", False, False, "look")),
-        ("終わっている", dict(proc=False), ("終わっている", "終了", "", False, False, "resume")),
     ]
     bad = {}
     for name, inp, want in rows:
@@ -4129,13 +4268,18 @@ def dt01(ctx):
     fights = [
         ("認証 > 判断待ち", dict(stop="login", hook="waiting"), "認証: ログイン切れ"),
         ("鍵 > 認証", dict(stop="apikey"), "認証: 鍵が無効"),
-        ("クレジット > 上限", dict(stop="credits", hook="waiting"), "クレジット切れ"),
-        ("上限 > 判断待ち", dict(stop="five_hour", hook="waiting"), "上限"),
+        ("クレジット > 判断待ち", dict(stop="credits", hook="waiting"), "クレジット切れ"),
+        # 判断待ちは古い上限より上(上限の記録は本物の返答で解けるので、重なるのは上限が古い時。Jev 0.81/0.81)
+        ("判断待ち > 上限", dict(stop="five_hour", hook="waiting"), "判断待ち"),
         ("判断待ち > 一時的な失敗", dict(stop="transient", hook="waiting"), "判断待ち"),
         ("一時的な失敗 > 作業中", dict(stop="transient", hook="working"), "一時的な失敗"),
         ("ループ > あなたの番", dict(hook="replied", loop=True), "ループ待機"),
-        ("判断待ち > 信頼", dict(hook="waiting", trusted=False), "判断待ち"),
-        ("終了はプロセスが居ない時だけ", dict(proc=False, hook="working"), "作業中"),
+        ("判断待ち > 信頼かも", dict(hook="waiting", trust="suspect"), "判断待ち"),
+        # プロセスが居なければ終了(docs/continuity-ux.md。Jev 0.52/0.60)。認証・上限は残す
+        ("終了 > 古い hook", dict(proc=False, hook="working"), "終わっている"),
+        ("終了でも判断待ちは出さない", dict(proc=False, hook="waiting"), "終わっている"),
+        ("終了でも上限は残す(自動で続けるため)", dict(proc=False, stop="five_hour"), "上限"),
+        ("終了でもログイン切れは残す", dict(proc=False, stop="login"), "認証: ログイン切れ"),
     ]
     bad2 = {n: D(**i)["row"] for n, i, w in fights if D(**i)["row"] != w}
     check(not bad2, f"優先順位が表と違う {bad2}")
@@ -4225,14 +4369,15 @@ def au03(ctx):
             "mem_mb": 120, "limit": None, "loop": None, "tools": None, "account": "", "transcript": ""}
     lim = {"active": True, "kind": "5h", "resets_at": now + 3600, "resets": "", "at": ""}
     ss = [dict(base, tab="9-1", sid="uat-booked", limit=lim, resume_at=now + 3660),
-          dict(base, tab="9-2", sid="uat-open", limit=lim, resume_at=None),
+          dict(base, tab="9-2", sid="uat-open", limit=lim, resume_at=None, auto_reason=""),
           dict(base, tab="9-3", sid="uat-work", state="作業中", mark="🟢", doing="npm test")]
     posted = []
 
     def extra(pg):
         def fake(route):
             r = route.fetch(); d = r.json()
-            d["sessions"] = ss
+            # オンになったら、盤サーバは次の snapshot で予約を入れる(autopilot.tick)。その後の姿を返す
+            d["sessions"] = [dict(x, resume_at=now + 3660) if posted and x["sid"] == "uat-open" else x for x in ss]
             d["autopilot"] = {"resume_when_reset": bool(posted)}
             d["counts"] = dict(d.get("counts") or {}, tabs=len(ss))
             route.fulfill(response=r, body=json.dumps(d))
@@ -4263,7 +4408,7 @@ def au03(ctx):
         pg.evaluate("board.closePanel()")
         pg.evaluate("document.querySelector('#btnAutoResume').click()")
         wait_js(pg, "document.querySelector('#btnAutoResume').hidden === true", 20)
-        pg.wait_for_timeout(300)
+        wait_js(pg, "(document.querySelector('.card[data-id=\"uat-open\"] .c-doing') || {}).textContent.includes('に自動で続きます')", 20)
         after = pg.evaluate(f"({doing})('uat-open')")
         return before, chip, cvbtn, after, list(errs)
 
@@ -4274,7 +4419,7 @@ def au03(ctx):
     check(chip[0] is False and "1" in chip[1], f"チップが出ない/数が違う(予約済みは数えない) {chip}")
     check("解除時刻に自動で続ける" in cvbtn and "いつもそうする" in cvbtn, f"会話ビューにボタンが無い {cvbtn}")
     check(posted == [{"resume_when_reset": True}], f"チップで送った中身 {posted}")
-    check(after == "⟳ 明けたら自動で続きます", f"オンにした後のカード {after!r}")
+    check("に自動で続きます" in after, f"オンにして予約が入った後のカード {after!r}")
     check(not errs, f"{errs[:1]}")
     return "予約時刻は未実行の最早 1 件 / カード 3 種の一言 / チップは予約の無い 1 本だけ数え、押すと方針オン / 1 アカウントでも会話ビューにボタン"
 
@@ -4654,9 +4799,10 @@ def sn01(ctx):
     snap = o.snapshot(with_macmini=False)
     blob = json.dumps(snap, ensure_ascii=False)          # 直列化できない値が混ざれば落ちる
     sess = snap["sessions"]
-    exp = {"your_turn": sum(1 for s in sess if s["state"] == "確認待ち"),
-           "working": sum(1 for s in sess if s["mark"] in ("🟢", "🟩")),
-           "waiting": sum(1 for s in sess if s["state"] in ("返答待ち", "codex 返答待ち")),
+    kinds = [(s.get("ui") or {}) for s in sess]
+    exp = {"your_turn": sum(1 for u in kinds if u.get("dock")),
+           "working": sum(1 for u in kinds if u.get("kind") == "work"),
+           "waiting": sum(1 for u in kinds if u.get("kind") in ("yourturn", "resumable")),
            "tabs": len(sess)}
     check(snap["counts"] == exp, f"上のバーの数 {snap['counts']} != sessions から数えた {exp}")
     tabs = [s["tab"] for s in sess]
@@ -6238,7 +6384,7 @@ def cv04(ctx):
     return f"並び {r['order']}・操作 4 件を 1 行に畳む・HTML 実行 0・```と**だけ整形"
 
 
-@case("RL-01", "「過去」の上の列は 判断待ち→返答済み→作業中 の順で、押すとそのカードが選ばれる(「いま」では出さない)")
+@case("RL-01", "「過去」の上の列は 判断待ち→あなたの番→作業中 の順で、押すとそのカードが選ばれる(「いま」では出さない)")
 def rl01(ctx):
     base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "作業中", "mark": "🟡", "doing": "npm test",
             "task": "UAT fixture", "topic": "", "project": "uatproj", "cwd": "/Users/uat/uatproj", "client": None,
@@ -6248,7 +6394,7 @@ def rl01(ctx):
           dict(base, tab="9-2", sid="uat-your", state="返答待ち", state_for=30),
           dict(base, tab="9-3", sid="uat-turn", state="確認待ち", mark="🔴", state_for=10),
           dict(base, tab="9-4", sid="uat-cxstop", ai="Codex", state="codex 停止", state_for=20)]
-    exp = ["停止", "判断待ち", "返答済み", "作業中"]      # rank 0 は state_for の長い順 → codex 停止(20) → 確認待ち(10)
+    exp = ["停止", "判断待ち", "あなたの番", "作業中"]      # rank 0 は state_for の長い順 → codex 停止(20) → 確認待ち(10)。状態名はカードと同じ(cardLabel)
 
     def extra(pg):
         def fake(route):
@@ -6809,7 +6955,7 @@ def ap12(ctx):
     return f"{os.path.basename(dest)} を相手の projects/ へコピー / 端末に渡った cmd={cmd[:70]}…"
 
 
-@case("AP-14", "見張り: 起動時の状態では通知せず、変わった時だけ 1 回。判断待ちの数が Dock の数字になる")
+@case("AP-14", "見張り: 真理値表の答え(ui)どおりに、起動時の状態では通知せず変わった時だけ 1 回。Dock は人が要るものの数(判断待ち＋ログイン切れ)。返答済みは通知しない")
 def ap14(ctx):
     data = tempfile.mkdtemp(dir=ctx["data"])
     open(os.path.join(data, "hook-declined"), "w").close()
@@ -6824,14 +6970,16 @@ def ap14(ctx):
     check(os.path.exists(prefix + ".json"), "アプリが自己試験の結果を書かなかった")
     rep = json.load(open(prefix + ".json"))
     log, counts = rep.get("watch_log", []), rep.get("watch_counts", [])
-    check(counts == [1, 2, 2], f"判断待ちの数(Dock バッジ) {counts}(期待 1,2,2)")
-    check(len(log) == 2, f"通知 {len(log)} 件(期待 2 件)\n{log}")
+    check(counts == [1, 3, 3], f"人が要るものの数(Dock バッジ) {counts}(期待 1,3,3: 判断待ち 2＋ログイン切れ 1)")
+    check(len(log) == 3, f"通知 {len(log)} 件(期待 3 件)\n{log}")
     check(log[0] == "AI があなたの判断待ち · acme | Allow Bash? | tab=1-1", f"1 件目 {log[0]!r}")
-    check(log[1] == "AI が返答 · globex | あなたの番です。 | tab=0-1", f"2 件目 {log[1]!r}")
+    check(log[1] == "AI が止まっている · dev | Please run /login | tab=1-4", f"2 件目 {log[1]!r}")
+    check(log[2] == "上限が明けました · ops | 上限が明けた | tab=1-5 | silent", f"3 件目(上限明けは通知だけ・音なし) {log[2]!r}")
     check(not any("1-3" in x for x in log), f"起動時から判断待ちだったものを鳴らした {log}")
+    check(not any("0-1" in x for x in log), f"返答済みを通知した(docs/state-spec.md 3 節 16 行目) {log}")
     check(rep.get("focus_ok") is True, "盤からの focus でその端末が選ばれていない")
     check(rep.get("panes_file_exists") is True, "動作中に app_panes.json が無い")
-    return f"通知 2 件(判断待ち 1-1 / 返答 0-1)・据え置きと重複 0 件・Dock の数 {counts}"
+    return f"通知 3 件(判断待ち 1-1 / ログイン切れ 1-4 / 上限明け 1-5 は無音)・返答済み・据え置き・重複 0 件・Dock の数 {counts}"
 
 
 @case("AP-15", "メニュー: 短縮キーが重ならず、押した先の処理が実在し、英語表示に日本語が混ざらない")

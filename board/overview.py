@@ -753,6 +753,18 @@ def save_job(job):
     return rec
 
 
+def is_working(s):
+    """作業中か。表の答え(ui.kind)で見る。答えが無い古い形だけ mark"""
+    ui = s.get("ui")
+    return ui.get("kind") == "work" if ui else s.get("mark") in ("🟢", "🟩")
+
+
+def shown(s):
+    """(印の絵文字, 状態名)。表の答え(ui.mark / ui.label)。答えが無い古い形だけ観測の mark / state"""
+    ui = s.get("ui")
+    return (ui.get("mark") or s.get("mark", ""), ui.get("label") or s.get("state", "")) if ui else (s.get("mark", ""), s.get("state", ""))
+
+
 def pending_resumes():
     """会話 id → 「上限が解けたら続ける」予約の時刻(まだ走っていない 1 回だけのもの)。盤のカードに出す。"""
     out = {}
@@ -761,6 +773,17 @@ def pending_resumes():
         if sid and at and j.get("enabled", True) and not j.get("last_run"):
             out[sid] = min(out.get(sid, at), at)
     return out
+
+
+def auto_reason(s, auto_on):
+    """自動がオンなのに、この上限の会話に予約が無い理由。予約がある・対象外・オフなら ""。
+
+    盤は予約が実際にある時だけ「自動で続きます」と言う(docs/state-spec.md 4 節)。黙っていると続くと思い込む。
+    """
+    import autopilot
+    if s.get("resume_at") or not auto_on or (s.get("ui") or {}).get("auto") != "resume_when_reset":
+        return ""
+    return autopilot.why_not(s) or "予約の保存に失敗しました（設定の「やったこと」を見てください）"
 
 
 def delete_job(jid):
@@ -1283,8 +1306,8 @@ def sessions(procs=None, with_official=True):
                                  else claude_limit(t["transcript"]) if t.get("transcript") else None),
             # ログインが切れて止まっているか(実測で最多の止まり方。盤に出ていなかった)
             "auth_lost": (claude_auth_error(t["transcript"]) if t.get("transcript") and not (t.get("ai") or "").startswith("Codex") else None),
+            "trust_ask": t.get("trust_ask") or "",   # 信頼の答えが無いと推したフォルダ(以前はここで落ちていて、表の「信頼」の行に届かなかった)
         })
-        out[-1]["ui"] = ui_of(out[-1], t)      # 真理値表(board/decide.py)が決めた見せ方と次の一手
     if with_official:
         agents = official_agents()
         for x in out:   # hook が無い/まだ書かれていないセッションは、公式の状態で補う
@@ -1299,33 +1322,60 @@ def sessions(procs=None, with_official=True):
         seen_tty = {x.get("tty") for x in out}
         for b in background_sessions(agents):
             if b["sid"] not in {x.get("sid") for x in out}:
-                b["ui"] = ui_of(b)
                 out.append(b)
+    # 真理値表(board/decide.py)の答えは、公式の状態での上書きが全部済んだ後で 1 回だけ出す。
+    # 以前は上書きの前に出していて、「起動中?」→「確認待ち」に変わったカードに判断待ちの印が付かなかった
+    for x in out:
+        x["ui"] = ui_of(x)
     return [apply_group(x) for x in out]
 
 
+RECORDED_AI = ("Claude", "Codex")   # 状態の記録(hook / rollout)を持つ CLI。それ以外は端末の出力で見分ける
+
+
 def ui_of(s, t=None):
-    """セッション 1 本を真理値表の入力に直して、見せ方と次の一手を決める(board/decide.py)。"""
+    """セッション 1 本を真理値表の入力に直して、見せ方・知らせ方・次の一手を決める(board/decide.py)。
+
+    入力の作り方は docs/state-spec.md 1 節。優先の付け方は表に任せ、ここでは観測を値に直すだけにする。
+    ただし「上限」と「一時的な失敗」は同じ欄(stop)に入るので、ここで上限を先に取る(一時的な失敗で上限を隠さない)。
+    """
     import decide
     lim = s.get("limit") or {}
+    auth = (s.get("auth_lost") or {}).get("kind") or ""
+    st = s.get("state") or ""
     stop = ""
-    if s.get("auth_lost"):
-        stop = s["auth_lost"].get("kind") or ""
+    if auth and auth != "transient":
+        stop = auth
     elif lim.get("active"):
-        stop = {"5h": "five_hour", "usage": "five_hour", "weekly": "seven_day"}.get(lim.get("kind"), "five_hour")
+        # 上限はエラーより先に取る。Codex は上限の文も ⛔ で出し cs が「codex 停止」にするので、
+        # 逆にすると上限がエラーに化けて自動で続ける予約が作られない(2026-09-23 Codex の反証)
+        stop = {"weekly": "seven_day", "overage": "overage"}.get(lim.get("kind"), "five_hour")
+    elif lim and lim.get("resets_at") and lim["resets_at"] <= time.time():
+        # 解除時刻は過ぎたが、記録の末尾はまだ上限(誰も続きを頼んでいない)。Codex はこの時も「codex 停止」なので、
+        # エラーより先に取る(明けた瞬間にエラーへ変わって音と Dock が復活していた。Codex の 2 回目の反証)
+        stop = "limit_reset"
+    elif st == "codex 停止" or st.startswith("⛔"):
+        stop = "error"
+    elif auth == "transient":
+        stop = "transient"
+    recorded = (s.get("ai") or "").startswith(RECORDED_AI) or bool(s.get("background"))
     hook = ""
-    if s.get("state") == "確認待ち":
-        hook = "waiting"
-    elif s.get("mark") in ("🟢", "🟩"):
-        hook = "working"
-    elif s.get("state") in ("返答待ち", "codex 返答待ち"):
-        hook = "replied"
+    if recorded:
+        if st == "確認待ち":
+            hook = "waiting"
+        elif s.get("mark") in ("🟢", "🟩"):
+            hook = "working"
+        elif st in ("返答待ち", "codex 返答待ち"):
+            hook = "replied"
+    trust = "seen" if st == "確認画面で停止" else ("suspect" if s.get("trust_ask") else None)
     return decide.decide({
         "proc": bool(s.get("pid")) or bool(s.get("background")),
         "stop": stop, "hook": hook,
         "loop": bool((s.get("loop") or {}).get("wake")),
-        "trusted": (False if s.get("trust_ask") else None),
-        "idle": s.get("idle"),
+        "trust": trust,
+        "idle": None if recorded else s.get("idle"),
+        "stale": s.get("state_for"),
+        "answerable": not str(s.get("tab") or "").startswith("a-"),   # 背景エージェントへは 1/2/Esc を送れない
         "others": 0,        # 並行は snapshot 側で数える(ここでは 1 本しか見えない)
     })
 
@@ -1363,34 +1413,34 @@ def parallel_groups(sess):
         key = parallel_key(s)
         if not key:
             continue
-        by.setdefault(key, []).append({"sid": s.get("sid"), "tab": s.get("tab"), "state": s.get("state"),
+        by.setdefault(key, []).append({"sid": s.get("sid"), "tab": s.get("tab"), "state": s.get("state"), "ui": s.get("ui"),
                                        "ai": s.get("ai"), "task": (s.get("task") or "")[:60],
                                        "where": (s.get("project_hint") or s.get("project") or "")})
     return {k: v for k, v in by.items() if len(v) > 1}
 
 
 def attention(sess):
-    """利用者が対応すべきもの。上から順に: ⚠確認待ち → 返答済みで長く放置 → 確認画面で停止。"""
+    """利用者が対応すべきもの。**順位は真理値表の attn**(0 すぐ / 1 放置されたら / 2 起動待ちなど / None 数えない)。
+
+    以前はここが state 文字列から自分で決めていて、一時的なエラーを「ログインが切れている」で最優先に数え、
+    上限中の返答待ちも「あなたの番」に数えていた(2026-09-23 Claude・Codex の監査)。
+    """
     items = []
     for s in sess:
-        why = None
-        rank = None
-        if s.get("auth_lost"):
-            why, rank = "ログインが切れている: " + (s["auth_lost"].get("text") or "")[:60], 0
-        elif s["state"] == "確認待ち":
-            why, rank = "⚠ 確認待ち(承認か返事が要る)", 0
-        elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("loop") or {}).get("wake"):
-            continue   # /loop が次に自分で起きる。人の番ではない
-        elif s["state"] in ("返答待ち", "codex 返答待ち") and (s.get("state_for") or 0) >= IDLE_LONG:
-            why, rank = f"返答済みのまま {fmt_dur(s['state_for'])} 放置", 1
-        elif s["state"] == "codex 停止":
-            why, rank = "Codex が止まっている: " + (s.get("doing") or "")[:80], 0
-        elif s["state"] == "確認画面で停止":
-            why, rank = "フォルダ信頼の確認画面で止まっている(未起動)", 2
-        elif s["state"] == "起動中?":
-            why, rank = "セッション記録が無い(起動途中か固まっている)", 2
-        if why:
-            items.append({**s, "why": why, "rank": rank})
+        ui = s.get("ui") or ui_of(s)
+        rank = ui.get("attn")
+        if rank is None:
+            continue
+        # 返答済み・上限明けは、しばらく放置されてから数える。上限明けは「明けてから」の時間で測る
+        waited = (time.time() - (s.get("limit") or {}).get("resets_at", time.time())) if ui.get("kind") == "resumable" else (s.get("state_for") or 0)
+        if rank == 1 and waited < IDLE_LONG:
+            continue
+        detail = ((s.get("auth_lost") or {}).get("text") or s.get("doing") or "")[:60]
+        if rank == 1:
+            why = f"{ui['row']}のまま {fmt_dur(waited)} 放置"
+        else:
+            why = f"{ui['row']}: {detail}" if detail else f"{ui['row']}（{ui['why']}）"
+        items.append({**s, "why": why, "rank": rank})
     items.sort(key=lambda x: (x["rank"], -(x.get("state_for") or 0)))
     return _judge_priority(items)
 
@@ -1428,9 +1478,10 @@ def _judge_priority(items):
         return items
     top = items[:5]
     # 顔ぶれだけでなく状態も鍵に入れる(同じ sid でも「確認待ち→返答待ち」になれば問い直す)。経過時間は 5 分刻み
-    key = ("priority", tuple((x.get("sid"), x.get("state"), int((x.get("state_for") or 0) // 300)) for x in top))
+    # 判定器に見せる状態も表の答え(行)で。state 文字列だとログイン切れ・上限明けが「返答待ち」に見える
+    key = ("priority", tuple((x.get("sid"), (x.get("ui") or {}).get("row") or x.get("state"), int((x.get("state_for") or 0) // 300)) for x in top))
     res = _judge_async(key, "priority",
-                       [{"id": x.get("sid"), "text": f'{x.get("state")} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
+                       [{"id": x.get("sid"), "text": f'{shown(x)[1]} {fmt_dur(x.get("state_for") or 0)} {x.get("project") or ""} {x.get("task") or ""}'} for x in top],
                        {"count": len(items)}, 20)
     if not res:
         return items
@@ -1468,11 +1519,12 @@ def judge_clients(sess):
 def _group_summary(rows):
     counts = {}
     for s in rows:
-        counts[s["state"]] = counts.get(s["state"], 0) + 1
+        k = shown(s)[1]   # 表の答えの状態名で数える(見張りがそのまま表示する。内部の kind 名は出さない)
+        counts[k] = counts.get(k, 0) + 1
     latest = max(rows, key=lambda s: -(s.get("ago") if s.get("ago") is not None else 1e12))
     return {
         "sessions": len(rows),
-        "active": sum(1 for s in rows if s["mark"] in ("🟢", "🟩")),
+        "active": sum(1 for s in rows if is_working(s)),
         "states": counts,
         "latest_task": latest.get("task", ""),
         "latest_tab": latest["tab"],
@@ -1730,7 +1782,8 @@ for f in glob.glob(os.path.join(H, ".claude", "sessions", "*.json")):
                 t = "".join(b.get("text", "") for b in (x.get("message", {}).get("content") or []) if isinstance(b, dict))
                 q = x.get("quotaLimits") or {}
                 if x.get("isApiErrorMessage"):
-                    if q.get("status") == "rejected": stop = q.get("rateLimitType") or "five_hour"
+                    # rateLimitType は five_hour / seven_day 以外(seven_day_opus 等)も来る。表の値に丸める(以前は「起動中」に落ちていた)
+                    if q.get("status") == "rejected": stop = "seven_day" if str(q.get("rateLimitType") or "").startswith("seven_day") else "five_hour"
                     elif re.search(r"Invalid API key", t, re.I): stop = "apikey"
                     elif re.search(r"Not logged in|Login expired|OAuth session expired", t, re.I): stop = "login"
                     elif re.search(r"out of usage credits", t, re.I): stop = "credits"
@@ -2209,9 +2262,11 @@ def snapshot(with_macmini=True):
         __import__("autopilot").note("tick", "", f"自動処理が落ちた: {e}"[:160], done=False)
     sess = __import__("gitinfo").annotate(sess)   # git のブランチ/PR(入れてある時だけ。既定は切)
     resumes = pending_resumes()
+    auto_on = __import__("autopilot").policy().get("resume_when_reset")
     for s in sess:
         s["parallel_key"] = parallel_key(s)     # 画面が同じ鍵で引けるように、各セッションに持たせる
         s["resume_at"] = resumes.get(s.get("sid") or "")   # 上限が解けたら自動で続く予約(無ければ None)
+        s["auto_reason"] = auto_reason(s, auto_on)
     cl, pr = grouped(sess)
     snap = {
         "time": time.time(),
@@ -2232,9 +2287,10 @@ def snapshot(with_macmini=True):
         "iterm": {"ok": not cs.OSA_ERROR, "error": cs.OSA_ERROR,
                   "stale_for": (time.time() - cs._LAST_ITERM["fail_t"]) if cs._LAST_ITERM.get("fail_t") else 0},
         "counts": {
-            "your_turn": sum(1 for s in sess if s["state"] == "確認待ち"),
-            "working": sum(1 for s in sess if s["mark"] in ("🟢", "🟩")),
-            "waiting": sum(1 for s in sess if s["state"] in ("返答待ち", "codex 返答待ち")),
+            # 上のバーの数も真理値表の答えから数える(docs/state-spec.md 0 節)
+            "your_turn": sum(1 for s in sess if (s.get("ui") or {}).get("dock")),   # 人が動かないと進まないもの
+            "working": sum(1 for s in sess if (s.get("ui") or {}).get("kind") == "work"),
+            "waiting": sum(1 for s in sess if (s.get("ui") or {}).get("kind") in ("yourturn", "resumable")),
             "tabs": len(sess),
         },
     }

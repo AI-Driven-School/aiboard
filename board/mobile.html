@@ -69,7 +69,7 @@ async function pull() {
   try { d = await fetch('/api/snapshot', {headers: H}).then(x => x.json()); }
   catch (e) { document.querySelector('#list').innerHTML = `<div class="empty">つながりません: ${esc(e)}</div>`; return; }
   if (d.ok === false) { document.querySelector('#list').innerHTML = `<div class="empty">${esc(d.reason || '見られません')}</div>`; return; }
-  const waiting = (d.sessions || []).filter(s => s.state === '確認待ち');
+  const waiting = (d.sessions || []).filter(s => s.ui ? s.ui.action === 'answer' : s.state === '確認待ち');   // 答えられるものだけ(真理値表の一手)
   document.querySelector('#when').textContent = new Date().toLocaleTimeString() + ' 現在';
   const list = document.querySelector('#list');
   list.textContent = '';

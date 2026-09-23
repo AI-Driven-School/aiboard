@@ -50,48 +50,36 @@ FAR_W, FAR_H = 54, 3       # 遠景の枠(中の行数)
 
 
 # ================================================================ 索引(子プロセス) ====
-def index_child(days, build, live_ids):
-    """索引を読んで、表示に要る行だけ JSON で返す。親プロセスのメモリを増やさないために別プロセスで動く。"""
-    import overview  # noqa
-    import overview_index  # noqa
-    t0 = time.time()
-    stats = None
-    if build:
-        idx, stats = overview_index.build(days=days)
-        del idx
-    q = overview_index.query_db(days=days, include_unattended=True, live_ids=live_ids)
-    rows = []
-    n_unatt = 0
-    for r in q["records"]:
-        if r.get("role") == "subagent":               # サブエージェントは親の child_models(子の数)だけ使う。行は送らない
-            continue
-        if r.get("role") == "unattended":
-            n_unatt += 1
-            if n_unatt > UNATTENDED_CAP:              # 新しい順に並んでいる。u で出す分は上限まで
-                continue
-        r["path"] = r.get("path") or ""
-        r["first_prompt"] = overview.redact(r.get("first_prompt", ""))
-        r["last_prompt"] = overview.redact(r.get("last_prompt", ""))
-        r["title"] = overview.redact(r.get("title", "") or "")
-        role = r.get("role")
-        if role in ("subagent", "review", "helper"):   # カードにしない行は小さく(親の「子N」と関係一覧にだけ使う)
-            r = {k: r.get(k) for k in ("id", "ai", "model_style", "kind", "role", "parent", "parent_session",
-                                       "start", "end", "path", "cwd", "project", "client", "prompts", "tools")} | {"first_prompt": r["first_prompt"][:80]}
-        elif role == "unattended":                    # 無人実行は u で出すときだけ。件数が多い(30日で6千超)ので短く
-            r = {k: r.get(k) for k in ("id", "ai", "model_style", "kind", "role", "start", "end", "path", "cwd", "project",
-                                       "client", "prompts", "tools", "unattended", "unattended_by", "title")} | \
-                {"first_prompt": r["first_prompt"][:80], "last_prompt": r["last_prompt"][:80]}
-        rows.append(r)
-    edges = []
-    for e in q["edges"]:
-        if e["kind"] == "subagent":
-            continue
-        e = dict(e)
-        if isinstance(e.get("evidence"), str) and len(e["evidence"]) > 160:
-            e["evidence"] = e["evidence"][:160]
-        edges.append(e)
-    return {"ok": True, "records": rows, "edges": edges, "built": q.get("built"), "counts": q["counts"],
-            "stats": stats, "took": round(time.time() - t0, 1), "n_index": q.get("n_index", 0)}
+
+def needs_you(n):
+    """人が動かないと進まないか。真理値表(board/decide.py)の dock を読む。答えを持たない古い盤サーバの時だけ state で見る"""
+    ui = n.get("ui")
+    return bool(ui.get("dock")) if ui else n.get("state") == "確認待ち"
+
+
+# 真理値表の kind → 色の種類(盤の overview.html の KIND_CLASS と同じ分け方)。状態名と印は表の答え(ui.label / ui.mark)を読む
+KIND_COLOR = {"need": "turn", "auth": "turn", "billing": "turn", "error": "turn", "limited": "limited", "resumable": "yourturn",
+              "yourturn": "yourturn", "loop": "loop", "work": "work", "idle": "past", "starting": "past", "ended": "past"}
+
+
+def color_kind(n):
+    """カードの色の種類: turn / yourturn / work / limited / past。答えが無い時だけ mark で見る"""
+    ui = n.get("ui")
+    if ui and ui.get("kind"):
+        return KIND_COLOR.get(ui["kind"], "work")
+    return "turn" if n.get("state") == "確認待ち" else "work" if n.get("mark") in ("🟢", "🟩") else "yourturn" if n.get("mark") == "🟡" else "past"
+
+
+def mark_of(n):
+    """カードの印の絵文字。表(decide.py の MARK)の答え。答えが無い古い形だけ観測の mark"""
+    ui = n.get("ui")
+    return (ui.get("mark") or n.get("mark", "")) if ui else n.get("mark", "")
+
+
+def state_label(n):
+    """状態名。表(decide.py の LABEL)の答え。答えが無い古い形だけ state"""
+    ui = n.get("ui")
+    return (ui.get("label") or ui.get("state") or n.get("state", "")) if ui else n.get("state", "")
 
 
 def server_alive():
@@ -279,7 +267,7 @@ def live_node(s, now):
     return {"id": s["sid"], "live": True, "s": s, "ai": ai, "model": s.get("model_style"), "client": s.get("client"),
             "cwd": s.get("cwd", ""), "project": s.get("project", ""),
             "frame": frame_key_of(s.get("client"), s.get("cwd"), s.get("project")),
-            "state": s["state"], "mark": s["mark"], "doing": s.get("doing", ""), "task": s.get("task", ""),
+            "state": s["state"], "mark": s["mark"], "ui": s.get("ui"), "doing": s.get("doing", ""), "task": s.get("task", ""),
             "t": now - (s["ago"] or 0) if s.get("ago") is not None else now,
             "text": oneline(" ".join(str(x) for x in (s.get("task"), s.get("topic"), s.get("cwd"), s.get("doing"), s.get("tab"), (s.get("model_style") or {}).get("label")))).lower(),
             "tab": s.get("tab"), "role": "live", "kind": "live", "title": s.get("topic", ""), "parent": None, "unattended": False}
@@ -321,6 +309,7 @@ C_GREEN = "#4ade80"
 C_YELLOW = "#facc15"
 C_BLUE = "#60a5fa"
 C_TEAL = "#2dd4bf"
+C_PURPLE = "#b98cff"
 C_TURN_BG = "#3a1c20"
 C_SEL_BG = "#33405a"
 
@@ -680,7 +669,7 @@ class MapApp(App):
     def live_rank(n):
         if not n["live"]:
             return 9
-        return {"🔴": 0, "🟢": 1, "🟩": 1, "🟡": 2, "🔵": 3, "⚪": 4}.get(n["mark"], 5)
+        return {"turn": 0, "work": 1, "yourturn": 2, "limited": 3, "loop": 3, "past": 4}.get(color_kind(n), 5)   # 並びも表の答えから
 
     def build_frames(self):
         groups = {}
@@ -711,9 +700,9 @@ class MapApp(App):
                 snapg = next((c for c in self.snap.get("clients", []) if "c:" + c["id"] == key), None) or \
                     next((p for p in self.snap.get("projects", []) if "p:" + p["name"] == key), None)
             frames.append({"key": key, "label": label, "color": color, "rank": rank, "nodes": keep, "hidden": hidden,
-                           "turn": sum(1 for n in live if n["state"] == "確認待ち"),
-                           "work": sum(1 for n in live if n["mark"] in ("🟢", "🟩")),
-                           "wait": sum(1 for n in live if n["mark"] == "🟡"),
+                           "turn": sum(1 for n in live if needs_you(n)),
+                           "work": sum(1 for n in live if color_kind(n) == "work"),
+                           "wait": sum(1 for n in live if color_kind(n) == "yourturn"),
                            "past": sum(1 for n in keep if not n["live"]),
                            "today": (snapg or {}).get("today_requests"), "today_partial": (snapg or {}).get("today_requests_partial"),
                            "n_live": len(live), "latest": (live[0] if live else keep[0]), "jobs": None})
@@ -858,7 +847,7 @@ class MapApp(App):
 
     def draw_card(self, buf, n, cx, cy, cw, ch):
         live = n["live"]
-        turn = live and n["state"] == "確認待ち"
+        turn = live and needs_you(n)
         selected = self.sel == n["id"]
         related = n["id"] in self.related
         bg = C_SEL_BG if selected else C_TURN_BG if turn else C_CARD if live else C_CARD_PAST
@@ -892,7 +881,7 @@ class MapApp(App):
         if ch == 1:   # 中景: 1行。関係は「↳」1文字だけ
             rel = "↳" if rel else ""
             x = buf.put(x0, cy, badge + " ", st(color=mc, bg=bg, bold=True), maxw=w)
-            state = f"{n['mark']} " + (f"{n['tab']} " if n["tab"] else "") + (fmt_dur(s.get("state_for")) + " " if live and s.get("state_for") is not None else fmt_t(n["t"]) + " " if not live else "")
+            state = f"{mark_of(n)} " + (f"{n['tab']} " if n["tab"] else "") + (fmt_dur(s.get("state_for")) + " " if live and s.get("state_for") is not None else fmt_t(n["t"]) + " " if not live else "")
             x = buf.put(x, cy, state, st(color=C_RED if turn else ink, bg=bg), maxw=x0 + w - x)
             body = (n["doing"] if live else (n["title"] or n["doing"])) or n["task"]
             buf.put(x, cy, clip(body, x0 + w - x - (cell_len(rel) + 1 if rel else 0)), st(color=ink, bg=bg), maxw=x0 + w - x)
@@ -908,8 +897,9 @@ class MapApp(App):
         if tab:
             buf.put(x0 + w - cell_len(tab), cy, tab, st(color=ink, bg=bg, bold=True))
         if live:
-            state = f"{n['mark']} {n['state']}" + (f" {fmt_dur(s['state_for'])}" if s.get("state_for") is not None else "")
-            scol = C_RED if turn else C_GREEN if n["mark"] in ("🟢", "🟩") else C_YELLOW if n["mark"] == "🟡" else ink
+            ck = color_kind(n)   # 色と状態名は真理値表の答えから(盤のカードと同じ)
+            state = f"{mark_of(n)} {state_label(n)}" + (f" {fmt_dur(s['state_for'])}" if s.get("state_for") is not None else "")
+            scol = {"turn": C_RED, "work": C_GREEN, "yourturn": C_YELLOW, "limited": C_PURPLE}.get(ck, ink)
         else:
             state = f"⚪ {n['state']} {fmt_t(n['t'])}"
             scol = C_MUTED
@@ -988,7 +978,7 @@ class MapApp(App):
                 k = ms["label"]
                 cnt.setdefault(k, {"n": 0, "busy": 0, "st": ms})
                 cnt[k]["n"] += 1
-                if x["mark"] in ("🟢", "🟩"):
+                if color_kind(x) == "work":   # 作業中は表の答えで数える(盤の counts.working と同じ)
                     cnt[k]["busy"] += 1
             for k, v in sorted(cnt.items(), key=lambda kv: -kv[1]["n"]):
                 on = self.filters["model"] == k
@@ -1066,8 +1056,8 @@ class MapApp(App):
         t.append("\n")
         if n["live"]:
             s = n["s"]
-            turn = n["state"] == "確認待ち"
-            kv = [("状態", f"{n['mark']} {n['state']}" + (f"（{fmt_dur(s.get('state_for'))}）" if s.get("state_for") is not None else "")),
+            turn = needs_you(n)
+            kv = [("状態", f"{mark_of(n)} {state_label(n)}" + (f"（{fmt_dur(s.get('state_for'))}）" if s.get("state_for") is not None else "")),
                   ("タブ", f"{s['tab']}   → g で iTerm のこのタブへ"), ("AI", s.get("ai", "") + (f" / アカウント {s['account']}" if s.get("account") else "")),
                   ("フォルダ", s.get("cwd", "")), ("メモリ", f"{s.get('mem_mb')}MB"),
                   ("開始/更新", f"{fmt_t(s.get('started'))} / {fmt_dur(s['ago']) + '前' if s.get('ago') is not None else '-'}"),
@@ -1264,7 +1254,7 @@ class MapApp(App):
     def action_jump(self, which, quiet=False):
         for f in self.frames:
             for n in f["nodes"]:
-                if n["live"] and ((which == "turn" and n["state"] == "確認待ち") or (which == "work" and n["mark"] in ("🟢", "🟩"))):
+                if n["live"] and ((which == "turn" and needs_you(n)) or (which == "work" and color_kind(n) == "work")):
                     if self.zoom == ZOOM_FAR:
                         self.select("frame:" + f["key"])
                     else:

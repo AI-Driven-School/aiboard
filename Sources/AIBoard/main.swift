@@ -231,7 +231,7 @@ final class PaneManager {
     var onChange: (() -> Void)?
     /// 盤と同じ名前と色(「Opus 5 · homepage」)。左の会話と右の端末が同じものだと一目で分かるように、両方に同じ札を出す
     var labels: [Int: (text: String, rgb: [Int])] = [:]
-    var states: [Int: String] = [:]                 // 盤が知っている状態(確認待ち など)。タブにバッジを出す
+    var states: [Int: String] = [:]                 // 盤が知っている状態(真理値表の kind)。タブにバッジを出す
     /// 右の端末の一覧(タブ列)。左のカードと同じ名前・色・バッジ。押すとその端末へ(左の会話も追従する)
     let strip = NSStackView()
     var onUserSelect: ((Pane) -> Void)?
@@ -255,9 +255,10 @@ final class PaneManager {
                 let name = p.title.isEmpty ? (p.kind == "shell" ? "shell" : p.kind) : String(p.title.prefix(24))
                 a.append(NSAttributedString(string: mark + name, attributes: [.font: font, .foregroundColor: NSColor.labelColor]))
             }
-            if let st = states[p.id] {
-                if st == "確認待ち" { a.append(NSAttributedString(string: "  !", attributes: [.foregroundColor: NSColor.systemRed, .font: NSFont.boldSystemFont(ofSize: 12)])) }
-                else if st == "返答待ち" || st == "codex 返答待ち" { a.append(NSAttributedString(string: "  ●", attributes: [.foregroundColor: NSColor.systemYellow, .font: font])) }
+            if let k = states[p.id] {   // 真理値表の kind(盤のカードと同じ色の分け方)
+                if ["need", "auth", "billing", "error"].contains(k) { a.append(NSAttributedString(string: "  !", attributes: [.foregroundColor: NSColor.systemRed, .font: NSFont.boldSystemFont(ofSize: 12)])) }
+                else if k == "yourturn" || k == "resumable" { a.append(NSAttributedString(string: "  ●", attributes: [.foregroundColor: NSColor.systemYellow, .font: font])) }
+                else if k == "limited" { a.append(NSAttributedString(string: "  ⏸", attributes: [.foregroundColor: NSColor.systemPurple, .font: font])) }
             }
             if linkedTab == p.id { a.append(NSAttributedString(string: " ⇄", attributes: [.foregroundColor: NSColor.systemTeal, .font: font])) }
             b.attributedTitle = a
@@ -441,31 +442,42 @@ final class Watcher {
     }
 
     private func update(_ sessions: [[String: Any]]) {
+        // 音・小窓・Dock・通知は、盤サーバの真理値表(board/decide.py)の答え ui を読むだけ(docs/state-spec.md 0 節)。
+        // 以前は state == "確認待ち" だけを見ていて、ログイン切れ・クレジット切れで鳴らず、Dock にも数えていなかった
         var now: [String: String] = [:]
         var needs = 0
         var waiting: [[String: Any]] = []
         for s in sessions {
             guard let sid = s["sid"] as? String, !sid.isEmpty, let state = s["state"] as? String else { continue }
-            now[sid] = state
+            let ui = s["ui"] as? [String: Any] ?? Watcher.legacyUI(state: state, doing: s["doing"] as? String ?? "")
+            let row = ui["row"] as? String ?? state
+            now[sid] = row
             let tab = s["tab"] as? String ?? ""
-            let inApp = tab.hasPrefix("0-")
             let model = (s["model_style"] as? [String: Any])?["label"] as? String ?? (s["ai"] as? String ?? "AI")
             let where_ = (s["project"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? tab
             let doing = (s["doing"] as? String ?? "").trimmingCharacters(in: .whitespaces)
-            if state == "確認待ち" {
-                needs += 1
+            if ui["dock"] as? Bool == true { needs += 1 }
+            if ui["popup"] as? Bool == true {
                 waiting.append(["sid": sid, "tab": tab, "model": model, "where": where_, "doing": doing,
-                                "task": (s["task"] as? String ?? ""), "inApp": inApp])
+                                "task": (s["task"] as? String ?? ""), "inApp": tab.hasPrefix("0-"),
+                                "action": ui["action"] as? String ?? "answer", "label": ui["action_label"] as? String ?? ""])
             }
-            guard primed, known[sid] != state else { continue }
-            if state == "確認待ち" {
-                notify(id: sid, title: L("\(model) needs you · \(where_)", "\(model) があなたの判断待ち · \(where_)"), body: doing, tab: tab, sid: sid)
-                Chime.play("Glass")       // 通知が切られていても気づけるように
-            } else if state == "codex 停止" || doing.hasPrefix("⛔") {
-                notify(id: sid, title: L("\(model) stopped · \(where_)", "\(model) が停止 · \(where_)"), body: doing, tab: tab, sid: sid)
-                Chime.play("Basso")
-            } else if inApp, state == "返答待ち" || state == "codex 返答待ち" {
-                notify(id: sid, title: L("\(model) replied · \(where_)", "\(model) が返答 · \(where_)"), body: L("Your turn.", "あなたの番です。"), tab: tab, sid: sid)
+            guard primed, known[sid] != row else { continue }
+            let kind = ui["kind"] as? String ?? ""
+            if ui["notify"] as? Bool == true {
+                let why = (ui["why"] as? String) ?? ""
+                let title: String
+                switch kind {
+                case "need": title = L("\(model) needs you · \(where_)", "\(model) があなたの判断待ち · \(where_)")
+                case "auth", "billing": title = L("\(model) is stopped · \(where_)", "\(model) が止まっている · \(where_)")
+                case "error": title = L("\(model) stopped · \(where_)", "\(model) が停止 · \(where_)")
+                case "resumable": title = L("Limit reset · \(where_)", "上限が明けました · \(where_)")
+                default: title = L("\(model) · \(where_)", "\(model) · \(where_)")
+                }
+                notify(id: sid, title: title, body: doing.isEmpty ? why : doing, tab: tab, sid: sid, sound: ui["sound"] as? Bool == true)
+            }
+            if ui["sound"] as? Bool == true {
+                Chime.play(kind == "need" ? "Glass" : "Basso")   // 通知が切られていても気づけるように
             }
         }
         known = now
@@ -474,10 +486,18 @@ final class Watcher {
         onWaiting?(waiting)
     }
 
-    private func notify(id: String, title: String, body: String, tab: String, sid: String) {
-        if dryRun { dryLog.append("\(title) | \(body) | tab=\(tab)"); return }
+    /// 真理値表の答えを持たない古い盤サーバ向け。以前の決め方(確認待ちだけ)をそのまま残す
+    static func legacyUI(state: String, doing: String) -> [String: Any] {
+        if state == "確認待ち" { return ["row": state, "kind": "need", "sound": true, "popup": true, "dock": true, "notify": true, "action": "answer"] }
+        if state == "codex 停止" || doing.hasPrefix("⛔") { return ["row": state, "kind": "error", "sound": true, "notify": true] }
+        if state == "返答待ち" || state == "codex 返答待ち" { return ["row": state, "kind": "yourturn"] }
+        return ["row": state]
+    }
+
+    private func notify(id: String, title: String, body: String, tab: String, sid: String, sound: Bool) {
+        if dryRun { dryLog.append("\(title) | \(body) | tab=\(tab)" + (sound && Chime.enabled ? "" : " | silent")); return }
         let c = UNMutableNotificationContent()
-        c.title = title; c.body = String(body.prefix(140)); c.sound = .default
+        c.title = title; c.body = String(body.prefix(140)); c.sound = (sound && Chime.enabled) ? .default : nil   // 音は表の sound に従う。音を切ったら通知の音も止める(Jev 0.77)
         c.userInfo = ["tab": tab, "sid": sid]
         center.add(UNNotificationRequest(identifier: id + "-" + String(Int(Date().timeIntervalSince1970)), content: c, trigger: nil))
     }
@@ -554,7 +574,12 @@ final class AskPanel: NSObject, NSWindowDelegate {
         let more = waiting.count > 1 ? " ＋\(waiting.count - 1)" : ""
         title.stringValue = "\(w["model"] as? String ?? "AI") · \(w["where"] as? String ?? "")\(more)"
         let doing = (w["doing"] as? String ?? "").isEmpty ? (w["task"] as? String ?? "") : (w["doing"] as? String ?? "")
-        body.stringValue = String(doing.prefix(200))
+        // 1/2/Esc と入力欄は「答える」一手の時だけ。ログイン・鍵・請求・信頼は、何をするかと「開く」だけ出す
+        let answer = (w["action"] as? String ?? "answer") == "answer"
+        for v in row.arrangedSubviews where v.identifier?.rawValue != "open" { v.isHidden = !answer }
+        input.isHidden = !answer
+        let label = w["label"] as? String ?? ""
+        body.stringValue = String(((answer || label.isEmpty) ? doing : "\(label)\n\(doing)").prefix(200))
         panel.setContentSize(NSSize(width: 380, height: 150))
         if offscreen {      // 自己試験: 画面を奪わない
             panel.setFrameOrigin(NSPoint(x: -5000, y: -5000))
@@ -1024,7 +1049,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
                 if let text = s["label"] as? String, !text.isEmpty {
                     pm.labels[p.id] = (text, (s["rgb"] as? [Int]) ?? [120, 120, 120])
                 }
-                if let st = s["state"] as? String { pm.states[p.id] = st }
+                if let st = s["state"] as? String {
+                    pm.states[p.id] = (s["ui"] as? [String: Any])?["kind"] as? String ?? (Watcher.legacyUI(state: st, doing: s["doing"] as? String ?? "")["kind"] as? String ?? "")
+                }
             }
             if let cur = pm.selected { pm.titleChanged(cur) }
             pm.publish()
@@ -1335,11 +1362,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
             // 見張りの判定: 起動時の状態では鳴らさず、変化した時だけ鳴る
             let w = Watcher(); w.dryRun = true; var counts: [Int] = []; w.onCount = { counts.append($0) }
-            let base: [[String: Any]] = [["sid": "A", "tab": "1-1", "state": "作業中", "doing": "Bash: npm test", "project": "acme"],
-                                         ["sid": "B", "tab": "0-1", "state": "作業中", "doing": "考え中", "project": "globex"],
-                                         ["sid": "C", "tab": "1-3", "state": "確認待ち", "doing": "Allow Edit?", "project": "infra"]]
+            // 盤サーバと同じ形(真理値表の答え ui 付き)で渡す。音・小窓・Dock・通知は ui だけで決まる
+            func ui(_ row: String, _ kind: String, alert: Bool, popup: Bool = true, notify: Bool? = nil, action: String = "none") -> [String: Any] {
+                ["row": row, "kind": kind, "sound": alert, "popup": alert && popup, "dock": alert, "notify": notify ?? alert, "action": action, "why": ""]
+            }
+            let work = ui("作業中", "work", alert: false)
+            let need = ui("判断待ち", "need", alert: true, action: "answer")
+            let base: [[String: Any]] = [["sid": "A", "tab": "1-1", "state": "作業中", "doing": "Bash: npm test", "project": "acme", "ui": work],
+                                         ["sid": "B", "tab": "0-1", "state": "作業中", "doing": "考え中", "project": "globex", "ui": work],
+                                         ["sid": "C", "tab": "1-3", "state": "確認待ち", "doing": "Allow Edit?", "project": "infra", "ui": need],
+                                         ["sid": "D", "tab": "1-4", "state": "作業中", "doing": "Edit", "project": "dev", "ui": work],
+                                         ["sid": "E", "tab": "1-5", "state": "返答待ち", "doing": "limit", "project": "ops", "ui": ui("上限", "limited", alert: false)]]
             w.feed(base)
-            var next = base; next[0]["state"] = "確認待ち"; next[0]["doing"] = "Allow Bash?"; next[1]["state"] = "返答待ち"; next[1]["doing"] = "✅ 返答済み（あなたの番）"
+            var next = base; next[0]["state"] = "確認待ち"; next[0]["doing"] = "Allow Bash?"; next[0]["ui"] = need
+            next[1]["state"] = "返答待ち"; next[1]["doing"] = "✅ 返答済み（あなたの番）"; next[1]["ui"] = ui("あなたの番", "yourturn", alert: false)
+            next[3]["state"] = "返答待ち"; next[3]["doing"] = "Please run /login"; next[3]["ui"] = ui("認証: ログイン切れ", "auth", alert: true, action: "login")
+            next[4]["doing"] = "上限が明けた"; next[4]["ui"] = ui("上限が明けた", "resumable", alert: false, notify: true, action: "reply")   // 通知は出すが鳴らさない
             w.feed(next)
             w.feed(next)   // 同じ状態が続いても鳴らない
             var rep: [String: Any] = ["watch_log": w.dryLog, "watch_counts": counts, "pane_tty": p.tty, "panes_file_exists": FileManager.default.fileExists(atPath: PANES_FILE),
