@@ -4197,6 +4197,88 @@ def cf01(ctx):
     return "別プロセスが書いた設定が、盤サーバの次の読み取りで効く(自動処理・音の 2 経路で確認)"
 
 
+@case("AU-03", "上限で止まった会話は、明けたら自動で続くかを盤に出す: カードの一言・右下のチップ・会話ビューのボタン(アカウント 1 つでも)")
+def au03(ctx):
+    import overview as o
+    # (1) 予約の一覧から「まだ走っていない、自動で続く予約」の時刻を引く
+    t = time.time()
+    sids = ["aaaaaaaa-0000-0000-0000-00000000a002", "aaaaaaaa-0000-0000-0000-00000000b002", "aaaaaaaa-0000-0000-0000-00000000c002"]
+    made = []
+    try:
+        made.append(o.save_job({"prompt": "uat", "cwd": HOME, "once_at": t + 900, "resume": sids[0]})["id"])
+        made.append(o.save_job({"id": "uat-au02-early", "prompt": "uat", "cwd": HOME, "once_at": t + 600, "resume": sids[0]})["id"])
+        ran = o.save_job({"id": "uat-au02-ran", "prompt": "uat", "cwd": HOME, "once_at": t + 600, "resume": sids[1]})["id"]
+        made.append(ran); o.mark_ran(ran)
+        made.append(o.save_job({"id": "uat-au02-off", "prompt": "uat", "cwd": HOME, "once_at": t + 600, "resume": sids[2], "enabled": False})["id"])
+        pr = o.pending_resumes()
+        check(abs(pr.get(sids[0], 0) - (t + 600)) < 1, f"早い方の予約を返すはず {pr.get(sids[0])}")
+        check(sids[1] not in pr and sids[2] not in pr, f"走った予約・止めた予約を返した {pr}")
+    finally:
+        for j in made:
+            o.delete_job(j)
+
+    # (2) 盤: 予約済みのカード / 自動がオフのカード / チップを押すとオンになる
+    now = time.time()
+    base = {"tab": "9-1", "sid": "uat-1", "ai": "Claude", "state": "返答待ち", "mark": "🟡", "doing": "",
+            "task": "UAT fixture", "topic": "", "project": "uatproj", "cwd": "/Users/uat/uatproj", "client": None,
+            "model_style": {"emoji": "🔷", "label": "Sonnet", "rgb": [80, 140, 220]}, "ago": 5, "state_for": 5,
+            "mem_mb": 120, "limit": None, "loop": None, "tools": None, "account": "", "transcript": ""}
+    lim = {"active": True, "kind": "5h", "resets_at": now + 3600, "resets": "", "at": ""}
+    ss = [dict(base, tab="9-1", sid="uat-booked", limit=lim, resume_at=now + 3660),
+          dict(base, tab="9-2", sid="uat-open", limit=lim, resume_at=None),
+          dict(base, tab="9-3", sid="uat-work", state="作業中", mark="🟢", doing="npm test")]
+    posted = []
+
+    def extra(pg):
+        def fake(route):
+            r = route.fetch(); d = r.json()
+            d["sessions"] = ss
+            d["autopilot"] = {"resume_when_reset": bool(posted)}
+            d["counts"] = dict(d.get("counts") or {}, tabs=len(ss))
+            route.fulfill(response=r, body=json.dumps(d))
+        def actions(route, req):
+            if req.method == "POST":
+                posted.append(json.loads(req.post_data))
+                return route.fulfill(status=200, content_type="application/json", body=json.dumps({"ok": True, "policy": {"resume_when_reset": True}}))
+            return route.continue_()
+        def conv(route):
+            body = dict(ss[1], ok=True, etag="uat-1", limit=lim, timeline=[{"kind": "依頼", "t": "2026-09-23T10:00:00", "text": "テスト"}])
+            route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
+        pg.route("**/api/snapshot*", fake)
+        pg.route("**/api/actions*", actions)
+        pg.route("**/api/conv*", conv)
+        pg.route("**/api/schedule*", lambda route, req: route.fulfill(status=200, content_type="application/json", body='{"ok": false, "reason": "uat-intercepted"}') if req.method == "POST" else route.continue_())
+
+    def fn(pg, errs, bl):
+        pg.on("dialog", lambda dlg: dlg.accept())
+        wait_js(pg, "!!document.querySelector('.card[data-id=\"uat-open\"]')", 30)
+        pg.wait_for_timeout(300)
+        doing = "id => (document.querySelector(`.card[data-id=\"${id}\"] .c-doing`) || {}).textContent || ''"
+        before = pg.evaluate(f"[({doing})('uat-booked'), ({doing})('uat-open'), ({doing})('uat-work')]")
+        chip = pg.evaluate("[document.querySelector('#btnAutoResume').hidden, document.querySelector('#btnAutoResume').textContent]")
+        # 会話ビュー: アカウントが 1 つでも(ブラウザでは別アカウントのボタンは出ない)「明けたら続ける」が出る
+        pg.evaluate("board.select('uat-open')")
+        wait_js(pg, "!!document.querySelector('#cvLimit button[data-auto]')", 30)
+        cvbtn = pg.evaluate("[...document.querySelectorAll('#cvLimit button')].map(b => b.textContent.trim())")
+        pg.evaluate("board.closePanel()")
+        pg.evaluate("document.querySelector('#btnAutoResume').click()")
+        wait_js(pg, "document.querySelector('#btnAutoResume').hidden === true", 20)
+        pg.wait_for_timeout(300)
+        after = pg.evaluate(f"({doing})('uat-open')")
+        return before, chip, cvbtn, after, list(errs)
+
+    (before, chip, cvbtn, after, errs) = with_page(ctx, fn, "?lang=ja", route_extra=extra)
+    check("に自動で続きます" in before[0], f"予約済みのカードに時刻が出ない {before[0]!r}")
+    check(before[1] == "明けても自動では続きません", f"自動がオフのカード {before[1]!r}")
+    check(before[2] == "npm test", f"上限でないカードの文言を変えた {before[2]!r}")
+    check(chip[0] is False and "1" in chip[1], f"チップが出ない/数が違う(予約済みは数えない) {chip}")
+    check("解除時刻に自動で続ける" in cvbtn and "いつもそうする" in cvbtn, f"会話ビューにボタンが無い {cvbtn}")
+    check(posted == [{"resume_when_reset": True}], f"チップで送った中身 {posted}")
+    check(after == "⟳ 明けたら自動で続きます", f"オンにした後のカード {after!r}")
+    check(not errs, f"{errs[:1]}")
+    return "予約時刻は未実行の最早 1 件 / カード 3 種の一言 / チップは予約の無い 1 本だけ数え、押すと方針オン / 1 アカウントでも会話ビューにボタン"
+
+
 @case("AU-01", "システムが自分でやること: 既定はオフ・入れると上限の会話に 1 回だけ予約・二重に入れない・人しかできない一手は触らない")
 def au01(ctx):
     import autopilot as A

@@ -52,6 +52,11 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
   border:1px solid var(--line,#243049);border-radius:999px;padding:3px 11px;font:11px/1.6 ui-monospace,Menlo,monospace;cursor:pointer}
 #btnLedger:hover{color:var(--fg,#e7ecf3)}
 #btnLedger b{color:var(--f-yellow,#f5c542);font-weight:600}
+#btnAutoResume{position:fixed;right:14px;bottom:44px;z-index:3;background:var(--card,#141a26);color:var(--fg,#e7ecf3);
+  border:1px solid var(--f-violet,#a78bfa);border-radius:999px;padding:5px 12px;font:12px/1.2 inherit;cursor:pointer}
+#btnAutoResume b{color:var(--f-violet,#a78bfa);font-weight:600}
+.card .c-doing.c-auto.on{color:var(--f-green,#4ade80)}
+.convlimit .okTxt{color:var(--f-green,#4ade80)}
 #toolbar{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;flex-direction:column;gap:6px;padding:8px 12px;}
 #toolbar .row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 #toolbar [hidden]{display:none !important}
@@ -503,6 +508,7 @@ table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6
 <div id="stage"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></div>
 <div id="status">…</div>
 <button id="btnLedger" title="今週、止まったまま置かれた時間（観測された経過時間）" hidden></button>
+<button id="btnAutoResume" title="上限が明けた時刻に、その会話の続きを自動で開きます" hidden></button>
 <aside id="panel"><header><h2 id="pTitle">詳細</h2><div><button id="pClose">✕</button></div></header><div class="body" id="pBody"></div></aside>
 <script>
     // 背景の明るさから文字色を選ぶ(2026-09-17 実測: 白文字だと 6色中5色が WCAG AA 未達。
@@ -602,6 +608,11 @@ const EN = {
   '真理値表が決めた「次の一手」のうち、人しかできないもの（ログイン・鍵・請求・判断への返事）はシステムは触りません。':
     'Of the next steps the truth table decides, the ones only a person can do (signing in, keys, billing, answering a prompt) are never done by the system.',
   '上限が解けたら自動で続ける': 'Continue automatically when a limit resets',
+  '⟳ 明けたら自動で続きます': '⟳ Continues automatically when the limit resets',
+  '解除時刻が分からないので自動では続きません': 'Reset time unknown, so it will not continue automatically',
+  '明けても自動では続きません': 'Will not continue on its own when the limit resets',
+  'これから、上限で止まった会話は明けたら自動で続きます': 'From now on, conversations stopped by a limit continue automatically when it resets',
+  '上限で止まっている会話': 'Stopped by a limit', '明けたら自動で続ける': 'Continue automatically when it resets', 'いつもそうする': 'Always do this',
   '解除時刻＋60 秒に、同じ会話を --resume で開く予約を 1 つ作ります（アプリが開いている間）':
     'Creates one schedule that resumes the same conversation 60s after the reset (while the app is open)',
   'やったこと': 'What it did', 'やった': 'done', 'やらなかった': 'not done', 'まだ何もしていません': 'Nothing yet',
@@ -891,6 +902,7 @@ async function getJSON(u, opt) { opt = opt || {}; opt.headers = Object.assign({'
 async function loadSnap() {
   try { snap = await getJSON('/api/snapshot'); statusBase = `${T('更新')} ${new Date().toLocaleTimeString()}  ${T('取得')} ${snap.took}s  ${T('タブ')} ${snap.counts.tabs}`; }
   catch (e) { $('#status').innerHTML = `<span class="warn">${T('snapshot 取得失敗')}: ${esc(e)}</span>`; return; }
+  renderAutoChip();
   if (APP) toApp({type: 'sessions', list: snap.sessions.filter(x => isAppTab(x.tab)).map(x => ({tab: x.tab, sid: x.sid, ai: x.ai, cwd: x.cwd,
     // 右の端末の札を、盤のカードと同じ名前・同じ色にする(左右が同じものだと分かるように)
     label: x.ai ? `${(x.model_style || {}).label || x.ai} · ${x.project_hint || x.project || ''}`.replace(/ · $/, '') : '',
@@ -1136,7 +1148,9 @@ function render() {
     const stLabel = {past: roleLabel, limited: T('上限'), turn: n.state === 'codex 停止' ? T('停止') : T('判断待ち'), yourturn: T('あなたの番'), work: T('作業中'), loop: T('ループ待機')}[stKey];
     const stWhen = !n.live ? fmtT(n.t) : stKey === 'limited' ? limitWhen(n.s.limit) : stKey === 'loop' ? `${T('次')} ${hhmm(lp.wake.next_at)}` : (n.s.state_for != null ? fmtDur(n.s.state_for) : '');
     const title = n.live ? (n.task || n.s.topic || n.project || '') : (n.title || n.r.first_prompt || '');
-    const doing = n.live ? (stKey === 'limited' ? '' : TD(n.doing)) : (n.r.last_prompt || '');
+    // 上限のカードは「明けたら続くのか」を言う。黙って止まったままだと、明けても誰も気づかない(2026-09-23 実測: 明けてから戻るまで中央値 79 分)
+    const auto = stKey === 'limited' ? autoResumeState(n.s) : null;
+    const doing = n.live ? (stKey === 'limited' ? auto.text : TD(n.doing)) : (n.r.last_prompt || '');
     // こっちが持っている(あなたが動かないと進まない)ものにバッジ
     // 印は真理値表(board/decide.py)が決める。古い盤サーバ相手のときだけ、以前の導き方に落ちる
     const stop = n.live && n.s.auth_lost && n.s.auth_lost.fix !== 'wait' ? n.s.auth_lost : null;
@@ -1146,7 +1160,7 @@ function render() {
     items.push(['n:' + n.id, `<div class="card ${cls} k-${stKey}" data-id="${esc(n.id)}" style="left:${n.x}px;top:${n.y}px;--mc:${mc}" title="${esc(title)}">
       ${badge}${(rightTab && n.tab === rightTab) ? `<span class="c-right" title="${esc(T('右の端末に出ています'))}">⇄</span>` : ''}<div class="c-top st"><span class="c-state"><i></i>${esc(stLabel)}</span><span class="c-when">${esc(stWhen)}</span>${n.tab && mode === 'history' ? `<span class="c-tab">${T('タブ')} ${esc(n.tab)}</span>` : ''}</div>
       <div class="c-title">${esc(title)}</div>
-      ${doing ? `<div class="c-doing">${esc(doing)}</div>` : ''}
+      ${doing ? `<div class="c-doing${auto ? ` c-auto ${auto.on ? 'on' : 'off'}` : ''}">${esc(doing)}</div>` : ''}
       <div class="c-foot"><span class="c-model"><i style="background:${mc}"></i>${esc(m.label)}</span>${n.client && mode === 'history' ? `<span class="c-client"><i style="background:${rgb(n.client.rgb)}"></i>${esc(n.client.label)}</span>` : ''}<span class="c-proj">${esc(T(n.project || ''))}</span>${(() => { const g = n.live && ((snap.parallel || {})[n.s.parallel_key || ''] || []); return g && g.length > 1 ?
         `<span class="c-par" title="${esc(T('同じ場所で動いているもの'))}: ${esc(g.map(x => (x.ai || '') + ' ' + TS(x.state || '')).join(' / '))}">⇉ ${g.length}</span>` : ''; })()}${n.live && n.s.git ? `<span class="c-git" title="${esc(DEMO ? '' : (n.s.git.root || ''))}">⎇ ${esc(DEMO ? 'main' : n.s.git.branch)}</span>${n.s.git.pr ? `<span class="c-pr ${esc(n.s.git.pr.state)}${n.s.git.pr.draft ? ' draft' : ''}" title="${esc(DEMO ? '' : n.s.git.pr.title)}">PR #${n.s.git.pr.number}${n.s.git.pr.draft ? ' draft' : ''}${n.s.git.pr.review === 'approved' ? ' ✓' : n.s.git.pr.review === 'changes_requested' ? ' ✗' : ''}</span>` : ''}` : ''}${n.live && n.s.client_suggest && !n.client ? `<span class="c-client sug" title="${esc(T('判定器の候補（設定→束ね方で確定できます）'))}">? ${esc(DEMO ? 'Client' : n.s.client_suggest.label)}</span>` : ''}${toolChips(n)}${n.live && n.s.mem_mb ? `<span class="c-mem">${n.s.mem_mb}MB</span>` : ''}${mode === 'history' && kids ? `<span class="c-kids">${esc(kids)}</span>` : ''}</div></div>`]);
   });
@@ -1426,6 +1440,30 @@ function limitWhen(lim) {
     return `${day}${hm} ${T('に解除')}${left > 0 ? ` (${T('あと')}${fmtDur(left)})` : ''}`; }
   return lim.resets || T('解除時刻不明');
 }
+// 上限で止まった会話が、明けたら自動で続くか。{on, text}
+function autoResumeState(s) {
+  if (s && s.resume_at) return {on: true, text: LANG === 'ja' ? `⟳ ${hhmm(s.resume_at)} に自動で続きます` : `⟳ Continues automatically at ${hhmm(s.resume_at)}`};
+  const lim = (s && s.limit) || {};
+  if (((snap || {}).autopilot || {}).resume_when_reset) return lim.resets_at ? {on: true, text: T('⟳ 明けたら自動で続きます')} : {on: false, text: T('解除時刻が分からないので自動では続きません')};
+  return {on: false, text: T('明けても自動では続きません')};
+}
+async function enableAutoResume() {
+  if (!confirm(T('上限で止まった会話に、解除時刻に続きを開く予約を自動で入れます。送る文は「上限が解けたので続けてください」だけです。よろしいですか？'))) return false;
+  let r; try { r = await getJSON('/api/actions', {method: 'POST', body: JSON.stringify({resume_when_reset: true})}); } catch (e) { r = {ok: false, reason: String(e)}; }
+  if (r && r.ok === false) { say(String(r.reason || ''), true); return false; }
+  if (snap) snap.autopilot = Object.assign({}, snap.autopilot, {resume_when_reset: true});
+  say(T('これから、上限で止まった会話は明けたら自動で続きます'));
+  render(); renderAutoChip();
+  return true;
+}
+// 上限で止まっている会話があり、自動で続かないとき、盤の右下に 1 つだけ出す
+function renderAutoChip() {
+  const b = $('#btnAutoResume'); if (!b) return;
+  const on = !!((snap || {}).autopilot || {}).resume_when_reset;
+  const n = ((snap || {}).sessions || []).filter(s => s.limit && s.limit.active && s.limit.resets_at && !s.resume_at).length;
+  b.hidden = on || !n;
+  if (!b.hidden) b.innerHTML = `${T('上限で止まっている会話')} <b>${n}</b> · ${T('明けたら自動で続ける')}`;
+}
 let accounts = [];
 let usageTimer = null;
 function loadUsageOnce() { if (usageTimer) return; loadUsage(); usageTimer = setInterval(loadUsage, 30000); }
@@ -1528,6 +1566,7 @@ function renderAccounts(refresh) {
 $('#btnAcct').onclick = () => { renderAccounts(); loadAccounts().then(() => { if ($('#pTitle').dataset.kind === 'accounts') renderAccounts(); }); };
 loadAccounts(); setInterval(loadAccounts, 60000);
 $('#btnLedger').onclick = renderLedger;
+$('#btnAutoResume').onclick = enableAutoResume;
 loadLedger(); setInterval(loadLedger, 900000);
 
 // ---------------- 設定 ----------------
@@ -2088,7 +2127,11 @@ async function renderLive(n) {
       lb.hidden = false;
       const mine = s0.account && s0.account !== '自社' ? s0.account : 'default';
       const others = accounts.filter(a => a.ai === 'Claude' && a.config_dir && !(a.limit && a.limit.active) && a.profile !== mine);
-      const html = `<b>${T('上限に当たっています')}</b> · ${esc(limitWhen(lim))}${(!(s0.ai || '').startsWith('Codex') && APP && others.length) ? `<div class="opts">${others.map(o => `<button data-prof="${esc(o.profile)}" data-dir="${esc(o.config_dir)}">${T('別アカウントで続ける')}: ${esc(DEMO ? o.profile : (o.email || o.profile))}</button>`).join('')}${(s0.limit || {}).resets_at ? `<button data-auto="1">${T('解除時刻に自動で続ける')}</button>` : ''}</div>` : ''}`;
+      // 「明けたら続ける」はアカウントが 1 つでも出す(以前は別アカウントがある時しか出ず、1 アカウントの人には見えなかった)
+      const swap = (!(s0.ai || '').startsWith('Codex') && APP) ? others.map(o => `<button data-prof="${esc(o.profile)}" data-dir="${esc(o.config_dir)}">${T('別アカウントで続ける')}: ${esc(DEMO ? o.profile : (o.email || o.profile))}</button>`).join('') : '';
+      const ar = autoResumeState(s0), policyOn = !!((snap || {}).autopilot || {}).resume_when_reset;
+      const autoBtns = (s0.resume_at || !(s0.limit || {}).resets_at) ? '' : `<button data-auto="1">${T('解除時刻に自動で続ける')}</button>${policyOn ? '' : `<button data-always="1">${T('いつもそうする')}</button>`}`;
+      const html = `<b>${T('上限に当たっています')}</b> · ${esc(limitWhen(lim))}<div class="sub ${ar.on ? 'okTxt' : ''}">${esc(ar.text)}</div>${(swap || autoBtns) ? `<div class="opts">${swap}${autoBtns}</div>` : ''}`;
       if (lb.dataset.html !== html) { lb.innerHTML = html; lb.dataset.html = html;
         const auto = lb.querySelector('button[data-auto]');
         if (auto) auto.onclick = async () => {
@@ -2100,7 +2143,10 @@ async function renderLive(n) {
             cwd: s0.cwd, ai: (s0.ai || '').startsWith('Codex') ? 'Codex' : 'Claude', once_at: at + 60, resume: s0.sid})}); }
             catch (e) { r = {ok: false, reason: String(e)}; }
           say(r.ok ? `${T('予約しました')}: ${hhmm(at + 60)}` : `${T('予約できません')}: ${r.reason}`, !r.ok);
+          if (r.ok) { s0.resume_at = at + 60; lb.dataset.html = ''; }
         };
+        const always = lb.querySelector('button[data-always]');
+        if (always) always.onclick = async () => { if (await enableAutoResume()) lb.dataset.html = ''; };
         lb.querySelectorAll('button[data-dir]').forEach(b => b.onclick = () => {
           if (!confirm(T('この会話の記録を別アカウントにコピーし、そのアカウントで続きを開きます。元のセッションはそのまま残ります。'))) return;
           toApp({type: 'switchAccount', tab: s0.tab, sid: s0.sid, cwd: s0.cwd, transcript: s0.transcript, configDir: b.dataset.dir, profile: b.dataset.prof});

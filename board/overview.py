@@ -753,6 +753,16 @@ def save_job(job):
     return rec
 
 
+def pending_resumes():
+    """会話 id → 「上限が解けたら続ける」予約の時刻(まだ走っていない 1 回だけのもの)。盤のカードに出す。"""
+    out = {}
+    for j in read_schedule():
+        sid, at = j.get("resume"), j.get("once_at")
+        if sid and at and j.get("enabled", True) and not j.get("last_run"):
+            out[sid] = min(out.get(sid, at), at)
+    return out
+
+
 def delete_job(jid):
     rows = read_schedule()
     left = [r for r in rows if r.get("id") != jid]
@@ -2198,8 +2208,10 @@ def snapshot(with_macmini=True):
     except Exception as e:                  # 自動処理の失敗で盤を止めない
         __import__("autopilot").note("tick", "", f"自動処理が落ちた: {e}"[:160], done=False)
     sess = __import__("gitinfo").annotate(sess)   # git のブランチ/PR(入れてある時だけ。既定は切)
+    resumes = pending_resumes()
     for s in sess:
         s["parallel_key"] = parallel_key(s)     # 画面が同じ鍵で引けるように、各セッションに持たせる
+        s["resume_at"] = resumes.get(s.get("sid") or "")   # 上限が解けたら自動で続く予約(無ければ None)
     cl, pr = grouped(sess)
     snap = {
         "time": time.time(),
