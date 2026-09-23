@@ -1,155 +1,41 @@
 #!/usr/bin/env python3
 """「止まった仕事を、どれだけ取り戻せているか」の基準値を測る。
 
-盤の「取り戻した仕事」の台帳は、この定義をそのまま使う（測り方が食い違わないように 1 か所に置く）。
+**数え方はこのファイルに書かない。** board/recovery.py（盤の台帳が使うもの）をそのまま import する。
+2026-09-23 まではここに同じ関数を複製していた。複製と正典は**同じ答えを出していた**ので
+（1,649 件 / auth 1,040 / 対話 470 で一致）、これはバグではなく、次に定義を変えたときに
+片方だけ直る危険があっただけ。消して 1 か所にした。
 
-  止まり   : 会話記録の `isApiErrorMessage` の行。**連続する同じ種類は 1 件にまとめる**
-             （行数は「しつこさ」であって出来事の数ではない。2026-09-20 の反証で判明）
-             種類: auth（未ログイン・鍵が無効・OAuth 失効）/ limit（5 時間・7 日・超過）/ credits / transient
-  復帰     : その止まりのあと、同じ会話に**人が次に書いた**時刻（道具の結果や中断の印は数えない）
-  止まり時間: 止まり → 復帰 の差。戻らなかったものは**合計に入れない**（開いた区間を足すと水増しになる）
-  盤の関与  : 盤から送った・盤から止めた・自動再開が動いた記録（~/.aiboard の send.log / stop.log / actions.jsonl）
-             と時刻で突き合わせる。**盤を経由したものだけ**を「盤が取り戻した」と数える
+**この数字は後から再現できない。** 理由は 2 つあり、どちらも 2026-09-23 に実測した:
+  1. Claude Code は `cleanupPeriodDays`（既定 30 日）で会話記録を消す。実際、手元の最古の
+     mtime は 30 日前ちょうどだった。**測った 30 日ぶんの元データは、30 日後には無い。**
+     2026-09-20 に公開した「認証 989 件」を今日の同じ窓で測ると 899 件になるが、
+     差の 90 件がどこへ行ったかは確かめようがない（消えた会話を読めないため）。
+  2. だから、公開する数字は**測った日を必ず添える**。過去の数字を後から検算する予定があるなら、
+     その日の結果をファイルに残すこと（--json）。記録を残さなければ検証不能な主張になる。
+
+定義（recovery.py の docstring が正典）:
+  止まり   : `isApiErrorMessage`。連続する同じ種類は 1 件にまとめる（行数は件数ではない）
+  復帰     : その後、同じ会話に**人が書いた**時刻。空の発言と盤の定型文は数えない
+  止まり時間: 止まり → 復帰。戻らなかったものは合計に入れない
+  対話/無人: 記録の entrypoint。sdk-cli（claude -p / SDK）は戻る人が居ないので合算しない
 
   python3 scripts/measure_recovery.py [--days 30] [--json 出力先]
 """
 import argparse
-import glob
 import json
 import os
-import re
 import statistics
+import sys
 import time
 from datetime import datetime
 
-HOME = os.path.expanduser("~")
-QUICK = 600           # 10 分以内に戻れたら「すぐ気づけた」
-KINDS = ("auth", "limit", "credits", "transient")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "board"))
+import recovery as R                                    # noqa: E402  定義の正典
 
-
-def ts(x):
-    try:
-        return datetime.fromisoformat(str(x).replace("Z", "+00:00")).timestamp()
-    except (ValueError, TypeError):
-        return None
-
-
-def kind_of(txt, quota):
-    if quota.get("status") == "rejected":
-        return "limit"
-    if re.search(r"Invalid API key", txt, re.I):
-        return "auth"
-    if re.search(r"Not logged in|Login expired|OAuth (session )?expired|Please run /login", txt, re.I):
-        return "auth"
-    if re.search(r"out of usage credits", txt, re.I):
-        return "credits"
-    if re.search(r"usage limit|rate limit", txt, re.I):
-        return "limit"
-    if re.search(r"went to sleep|response stopped|reach the API|overloaded|timeout|Connection error", txt, re.I):
-        return "transient"
-    return ""
-
-
-def transcripts(days):
-    cut = time.time() - days * 86400
-    out = []
-    for root in [os.path.join(HOME, ".claude", "projects")] + sorted(glob.glob(os.path.join(HOME, ".claude-profiles", "*", "projects"))):
-        for p in glob.glob(os.path.join(root, "*", "*.jsonl")):
-            try:
-                if os.path.getmtime(p) >= cut:
-                    out.append(p)
-            except OSError:
-                pass
-    return out
-
-
-def entrypoint_of(path, head=40):
-    """その会話が対話(cli)か無人(sdk-cli = claude -p / SDK)か。無人には「戻る人」が居ないので分けて数える。"""
-    try:
-        with open(path, errors="replace") as f:
-            for i, line in enumerate(f):
-                if '"entrypoint"' in line:
-                    try:
-                        return json.loads(line).get("entrypoint") or "不明"
-                    except ValueError:
-                        return "不明"
-                if i > head:
-                    break
-    except OSError:
-        pass
-    return "不明"
-
-
-def stops_in(path):
-    """1 つの会話から、止まりの出来事を拾う。返り値: [{kind, at, back_at}]"""
-    events, open_ev, last_kind = [], None, ""
-    try:
-        fh = open(path, errors="replace")
-    except OSError:
-        return events
-    with fh:
-        for line in fh:
-            flat = line.replace(" ", "")
-            if '"isApiErrorMessage":true' not in flat and '"type":"user"' not in flat:
-                continue
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            at = ts(d.get("timestamp"))
-            if d.get("type") == "user":
-                if d.get("isMeta") or re.search(r"\[Request interrupted", line):
-                    continue
-                c = d.get("message", {}).get("content")
-                human = isinstance(c, str) or (isinstance(c, list) and any(
-                    isinstance(b, dict) and b.get("type") == "text" for b in c))
-                if human and open_ev is not None:
-                    open_ev["back_at"] = at
-                    events.append(open_ev)
-                    open_ev, last_kind = None, ""
-                continue
-            if not d.get("isApiErrorMessage"):
-                continue
-            txt = "".join(b.get("text", "") for b in (d.get("message", {}).get("content") or []) if isinstance(b, dict))
-            k = kind_of(txt, d.get("quotaLimits") or {})
-            if not k:
-                continue
-            if open_ev is not None and k == last_kind:
-                continue                      # 同じ止まりの繰り返し
-            if open_ev is not None:
-                events.append(open_ev)
-            open_ev, last_kind = {"kind": k, "at": at, "back_at": None, "file": path}, k
-    if open_ev is not None:
-        events.append(open_ev)
-    return events
-
-
-def board_actions():
-    """盤を経由した操作の時刻。これがあった止まりだけ「盤が取り戻した」と数える。"""
-    out = []
-    for name in ("send.log", "stop.log"):
-        p = os.path.join(HOME, ".aiboard", name)
-        try:
-            for line in open(p, errors="replace"):
-                if not line.strip().startswith("{"):
-                    continue
-                try:
-                    d = json.loads(line)
-                    out.append(time.mktime(time.strptime(d["t"], "%Y-%m-%d %H:%M:%S")))
-                except (ValueError, KeyError):
-                    pass
-        except OSError:
-            pass
-    p = os.path.join(HOME, ".aiboard", "actions.jsonl")
-    try:
-        for line in open(p, errors="replace"):
-            try:
-                out.append(float(json.loads(line)["t"]))
-            except (ValueError, KeyError):
-                pass
-    except OSError:
-        pass
-    return sorted(out)
+QUICK = R.QUICK
+KINDS = R.KINDS
+board_actions = R.board_action_times
 
 
 def main():
@@ -157,16 +43,16 @@ def main():
     ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--json", default="")
     a = ap.parse_args()
-    files = transcripts(a.days)
-    events = []
-    for f in files:
-        got = stops_in(f)
-        if got:
-            ep = entrypoint_of(f)
-            tag = "無人" if ep == "sdk-cli" else ("対話" if ep == "cli" else "不明")
-            for e in got:
-                e["ep"] = tag
-            events += got
+    files = R.transcripts(a.days)
+    events = R.scan(days=a.days)          # 変わっていない会話は読み直さない（正典側のキャッシュ）
+    # scan() が選ぶのは「mtime が N 日以内のファイル」。古い会話を今日 1 行でも触ると、
+    # その会話の何か月前の止まりまで入ってしまう（2026-09-23 実測: 1,649 件中 26 件が窓の外）。
+    # 「直近 N 日」と名乗る以上、**出来事の時刻**で切る。mtime ≧ 出来事の時刻なので取りこぼしは無い。
+    cut = time.time() - a.days * 86400
+    events = [e for e in events if e.get("at") and e["at"] >= cut]
+    tag = {"sdk-cli": "無人", "cli": "対話"}
+    for e in events:
+        e["ep"] = tag.get(e.get("ep"), "不明")
     by_ep = {}
     for e in events:
         b = by_ep.setdefault(e["ep"], {"events": 0, "quick": 0, "never": 0, "hours": 0.0})
