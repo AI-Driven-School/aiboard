@@ -67,9 +67,9 @@ def line_session(s, w, show_state=True):
     ms = s.get("model_style") or {}
     model = c(ms.get("rgb"), f"{ms.get('emoji', '❔')} {ms.get('label', '')}") if ms else ""
     acct = f"({s['account']})" if s.get("account") else ""
-    head_plain = f"{s['tab']:<5}{s['mark']} " + (f"{s['state']:<7}" if show_state else "") + \
+    mark, label = overview.shown(s)   # 印と状態名は表の答え(盤のカードと同じ)。幅の計算も同じ文字で
+    head_plain = f"{s['tab']:<5}{mark} " + (f"{label:<7}" if show_state else "") + \
                  f"{(ms.get('emoji', '❔') + ' ' + ms.get('label', '')) if ms else '':<14}{acct}"
-    mark, label = overview.shown(s)   # 印と状態名は表の答え(盤のカードと同じ)
     head = f"{s['tab']:<5}{mark} " + (f"{label:<7}" if show_state else "") + f"{model}{' ' * max(0, 14 - cs.width((ms.get('emoji', '❔') + ' ' + ms.get('label', '')) if ms else ''))}{acct}"
     elapsed = overview.fmt_dur(s.get("state_for")) if s.get("state_for") is not None else "-"
     rest = w - cs.width(head_plain) - cs.width(elapsed) - 4

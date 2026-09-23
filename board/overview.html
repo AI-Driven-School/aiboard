@@ -95,7 +95,8 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
 #rail .rl .lbl{font-weight:700;white-space:nowrap}
 #rail .rl .lbl.turn{color:var(--red)} #rail .rl .lbl.wait{color:var(--yellow)} #rail .rl .lbl.work{color:var(--green)}
 #rail .rl.limited{border-color:rgba(151,71,255,.6)} #rail .rl .lbl.limited{color:#B98CFF} #rail .rl .lbl.past{color:var(--muted)}
-.cvstate .dot.limited{background:#9747FF} .cvstate .dot.wait{background:var(--yellow)}
+.cvstate .dot.limited{background:#9747FF} .cvstate .dot.wait{background:var(--yellow)} .cvstate .dot.loop{background:var(--f-blue,#0D99FF)}
+#rail .rl .lbl.loop{color:#5CB8FF}
 #rail .rl .dg{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 #rail .rlhead{flex:none;font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding-right:4px}
 /* 空状態: 何も動いていない時は「次の一手」を 1 つだけ */
@@ -441,6 +442,7 @@ table.grp .gk{background:#262626;border:1px solid var(--f-line2);border-radius:6
 .frame.fold .fd{width:7px;height:7px;border-radius:50%;display:inline-block;margin-left:6px}
 .frame.fold .fd.turn{background:var(--f-red)} .frame.fold .fd.yourturn{background:var(--f-yellow)}
 .frame.fold .fd.work{background:var(--f-green)} .frame.fold .fd.past{background:#6E6E6E}
+.frame.fold .fd.limited{background:var(--f-violet)} .frame.fold .fd.loop{background:var(--f-blue)}
 .frame.fold .fold-x{color:var(--f-ink3);margin-left:4px}
 .frame .ffold{position:absolute;right:6px;top:-22px;width:20px;height:18px;padding:0;border:1px solid var(--f-line2);border-radius:5px;background:#2A2A2A;color:var(--f-ink3);font-size:10px;line-height:16px;cursor:pointer;opacity:0;transition:opacity .1s}
 .frame:hover .ffold{opacity:1}
@@ -1161,7 +1163,7 @@ function render() {
     if (f.collapsed) {
       const cnt = {turn: 0, yourturn: 0, work: 0, past: 0, limited: 0, loop: 0};
       f.nodes.forEach(n => { cnt[cardKey(n)]++; });
-      const dots = ['turn', 'yourturn', 'work'].filter(k => cnt[k]).map(k => `<span class="fd ${k}"></span>${cnt[k]}`).join('');
+      const dots = ['turn', 'yourturn', 'limited', 'loop', 'work'].filter(k => cnt[k]).map(k => `<span class="fd ${k}"></span>${cnt[k]}`).join('');
       items.push(['f:' + f.key, `<div class="frame fold" data-fold="${esc(f.key)}" style="left:${f.x}px;top:${f.y}px;width:${f.w}px;height:${f.h}px;${color ? '--fc:' + color : ''}" title="${esc(T('押すと開く'))}">
         <div class="fold-l">${color ? `<i style="background:${color}"></i>` : ''}<b>${esc(label.replace(/^[●◇▣]\s*/, ''))}</b></div>
         <div class="fold-r">${dots}${cnt.past ? `<span class="fd past"></span>${cnt.past}` : ''}<span class="fold-x">▸</span></div></div>`]);
@@ -1261,7 +1263,7 @@ function renderRail(all) {
   live.sort((a, b) => rank(a) - rank(b) || (b.s.state_for || 0) - (a.s.state_for || 0));
   const rail = $('#rail');
   const html = (live.length && mode === 'history') ? `<span class="rlhead">${T('いま')}</span>` + live.map(n => {
-    const r = rank(n), cls = {turn: 'turn', yourturn: 'wait', work: 'work', limited: 'limited'}[cardKey(n)] || 'past';   // 色はカードと同じ(上限は紫・それ以外の静かなものは灰)
+    const r = rank(n), cls = {turn: 'turn', yourturn: 'wait', work: 'work', limited: 'limited', loop: 'loop'}[cardKey(n)] || 'past';   // 色はカードと同じ(上限は紫・それ以外の静かなものは灰)
     const m = n.model || {rgb: [120, 120, 120], label: '?'};
     const lbl = cardLabel(n);
     const who = n.client ? `<span class="sq" style="background:${rgb(n.client.rgb)}" title="${esc(n.client.label)}"></span>` : '';
@@ -2202,7 +2204,7 @@ async function renderLive(n) {
     const authUI = !!d.auth_lost && (!cui || ['auth', 'billing'].includes(cui.kind));   // 鍵が無効・ログイン切れの時は 1/2/Esc より直す方を出す
     // 状態の表示もカードと同じ答えから(cardKey / cardLabel)。表の答えが無い時だけ state 文字列
     const cvn = {live: true, s: cur, state: d.state, mark: d.mark}, ck = cardKey(cvn);
-    $('#cvState').innerHTML = `<span class="dot ${{turn: 'turn', work: 'work', yourturn: 'wait', limited: 'limited'}[ck] || 'past'}"></span>${esc(cui ? cardLabel(cvn) : TS(d.state))}`;
+    $('#cvState').innerHTML = `<span class="dot ${{turn: 'turn', work: 'work', yourturn: 'wait', limited: 'limited', loop: 'loop'}[ck] || 'past'}"></span>${esc(cui ? cardLabel(cvn) : TS(d.state))}`;
     const ask = $('#cvAsk');
     if (need) {
       ask.hidden = false;
@@ -2265,7 +2267,7 @@ async function renderLive(n) {
       ask.querySelectorAll('button').forEach(b => b.onclick = async () => {
         if (b.dataset.k === 'look') { toApp({type: 'focus', tab: d.tab}); return; }
         const r = await sendTo(d, {key: b.dataset.k}); say(r.ok ? T('送った') : r.reason, !r.ok); setTimeout(pull, 800); });
-    } else if ((cui ? cui.action === 'trust' : true) && d.state === '確認画面で停止') {   // 表の一手が信頼の時だけ
+    } else if (cui ? cui.row === '信頼の確認' : d.state === '確認画面で停止') {   // 表が「画面で確かめた信頼の確認」と答えた時だけ(state は見ない)
       // 新しいフォルダで開いた claude は、最初に「このフォルダを信頼しますか」で止まる。ここから答えられるようにする
       ask.hidden = false;
       ask.innerHTML = `<div class="q">${T('このフォルダを信頼しますか（claude の最初の確認）')}${isAppTab(d.tab) ? '' : ' — ' + T('端末で ↓ と Enter')}</div>` +

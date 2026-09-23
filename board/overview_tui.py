@@ -82,6 +82,50 @@ def state_label(n):
     return (ui.get("label") or ui.get("state") or n.get("state", "")) if ui else n.get("state", "")
 
 
+def index_child(days, build, live_ids):
+    """索引を読んで、表示に要る行だけ JSON で返す。親プロセスのメモリを増やさないために別プロセスで動く。"""
+    import overview  # noqa
+    import overview_index  # noqa
+    t0 = time.time()
+    stats = None
+    if build:
+        idx, stats = overview_index.build(days=days)
+        del idx
+    q = overview_index.query_db(days=days, include_unattended=True, live_ids=live_ids)
+    rows = []
+    n_unatt = 0
+    for r in q["records"]:
+        if r.get("role") == "subagent":               # サブエージェントは親の child_models(子の数)だけ使う。行は送らない
+            continue
+        if r.get("role") == "unattended":
+            n_unatt += 1
+            if n_unatt > UNATTENDED_CAP:              # 新しい順に並んでいる。u で出す分は上限まで
+                continue
+        r["path"] = r.get("path") or ""
+        r["first_prompt"] = overview.redact(r.get("first_prompt", ""))
+        r["last_prompt"] = overview.redact(r.get("last_prompt", ""))
+        r["title"] = overview.redact(r.get("title", "") or "")
+        role = r.get("role")
+        if role in ("subagent", "review", "helper"):   # カードにしない行は小さく(親の「子N」と関係一覧にだけ使う)
+            r = {k: r.get(k) for k in ("id", "ai", "model_style", "kind", "role", "parent", "parent_session",
+                                       "start", "end", "path", "cwd", "project", "client", "prompts", "tools")} | {"first_prompt": r["first_prompt"][:80]}
+        elif role == "unattended":                    # 無人実行は u で出すときだけ。件数が多い(30日で6千超)ので短く
+            r = {k: r.get(k) for k in ("id", "ai", "model_style", "kind", "role", "start", "end", "path", "cwd", "project",
+                                       "client", "prompts", "tools", "unattended", "unattended_by", "title")} | \
+                {"first_prompt": r["first_prompt"][:80], "last_prompt": r["last_prompt"][:80]}
+        rows.append(r)
+    edges = []
+    for e in q["edges"]:
+        if e["kind"] == "subagent":
+            continue
+        e = dict(e)
+        if isinstance(e.get("evidence"), str) and len(e["evidence"]) > 160:
+            e["evidence"] = e["evidence"][:160]
+        edges.append(e)
+    return {"ok": True, "records": rows, "edges": edges, "built": q.get("built"), "counts": q["counts"],
+            "stats": stats, "took": round(time.time() - t0, 1), "n_index": q.get("n_index", 0)}
+
+
 def server_alive():
     """ブラウザ版のサーバーが動いていれば、索引の再構築(index.json への書き込み)はそちらに任せる。"""
     try:

@@ -4226,6 +4226,18 @@ def sm03(ctx):
     return f"{len(exp)} 種の答え → 色・状態名・印が表どおり(state 文字列は全部「作業中」のまま)"
 
 
+@case("SM-04", "TUI の索引の子プロセス(index_child)が動き、過去の会話を返す(状態の整理で関数ごと消した退行の番)")
+def sm04(ctx):
+    import io
+    import contextlib
+    import overview_tui as t
+    check(callable(getattr(t, "index_child", None)), "index_child が無い(TUI の索引が必ず NameError で落ちる)")
+    with contextlib.redirect_stdout(io.StringIO()):
+        r = t.index_child(1, False, [])
+    check(isinstance(r, dict), f"索引の答えの形 {type(r).__name__}")
+    return f"index_child(1 日・作り直さない) → {sorted(r)[:4]}"
+
+
 @case("DT-01", "状態の真理値表: 全 19 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide
