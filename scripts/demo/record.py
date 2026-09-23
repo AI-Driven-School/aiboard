@@ -32,6 +32,17 @@ CARD_JS = """([title, sub, cmd]) => { let c = document.getElementById('demoCard'
     ${cmd ? `<div style="margin-top:34px;font:500 26px ui-monospace,Menlo,monospace;color:#fff;background:#0B0B0B;border:1px solid #3A3A3A;border-radius:10px;padding:14px 22px;display:inline-block">${cmd}</div>` : ''}</div>`; }"""
 
 
+def wait_cards(pg, n=2, limit=60):
+    """カードが出るまで待つ。盤は CSP で eval を禁じているので wait_for_function(文字列)は使えない
+    (2026-09-23: EvalError。evaluate に関数の形で渡して自分で回す)。"""
+    end = time.time() + limit
+    while time.time() < end:
+        if pg.evaluate("() => document.querySelectorAll('.card.live').length") > n:
+            return True
+        pg.wait_for_timeout(500)
+    raise RuntimeError("カードが出ない(盤サーバは動いていますか)")
+
+
 def main():
     raw_dir = tempfile.mkdtemp(prefix="aiboard-demo-", dir=os.environ.get("AIBOARD_DEMO_TMP"))
     with sync_playwright() as p:
@@ -42,7 +53,7 @@ def main():
         pg.goto(URL)
         pg.evaluate("localStorage.setItem('tour_done','1'); localStorage.setItem('mode','now')")
         pg.reload()
-        pg.wait_for_function("document.querySelectorAll('.card.live').length>2", timeout=60000)
+        wait_cards(pg)
         pg.evaluate(CARD_JS, ["AIBoard", "The whiteboard for your coding agents", ""])
         lead = time.time()   # ここから 30 秒が本編(前の読み込み待ちは切る)
         t0 = time.time()
