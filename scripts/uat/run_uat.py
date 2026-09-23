@@ -3984,6 +3984,39 @@ def sv02(ctx):
     return f"持ち主(pid {owner.pid})を見ていて、居なくなってから数秒で自分も終わった"
 
 
+@case("LG-02", "台帳の日次記録: 元の会話記録が消えても数字が残る。同じ日は 1 行だけ・壊れた行があっても読める")
+def lg02(ctx):
+    import recovery as rc
+    import aiboard_paths as ap
+    keep = ap.DATA
+    ap.DATA = tempfile.mkdtemp(dir=ctx["data"])
+    try:
+        d1 = {"week": {"stops": 10, "long": 2, "hours": 3.5}, "prev": {"stops": 20, "long": 5, "hours": 9.0}}
+        check(rc.remember(d1, today="2026-09-01") is True, "1 日目が残らない")
+        # 同じ日に何度台帳を作り直しても、行は増えない（盤は 15 分ごとに作り直すため）
+        check(rc.remember(d1, today="2026-09-01") is False, "同じ日が二重に入る")
+        check(rc.remember({"week": {"stops": 7}, "prev": None}, today="2026-09-02") is True, "2 日目が残らない")
+        # 壊れた行が混ざっても、読める行だけ返す（途中で落ちない）
+        with open(ap.data(rc.HISTORY), "a") as f:
+            f.write("{壊れた行\n")
+        h = rc.history()
+        check([r["day"] for r in h] == ["2026-09-01", "2026-09-02"], f"日次記録が古い順に返らない: {h}")
+        check(h[0]["week"]["stops"] == 10 and h[0]["prev"]["hours"] == 9.0, f"中身が欠けた: {h[0]}")
+        # 1 日 1 行が小さいこと（会話記録は 30 日で 10GB。ここが太ると意味がない）
+        size = os.path.getsize(ap.data(rc.HISTORY))
+        check(size < 4096, f"日次記録が大きすぎる: {size} B / 2 日")
+        # 試験用サーバでは台帳を作らないので、記録も増えない
+        os.environ["OVERVIEW_NO_INDEX"] = "1"
+        try:
+            check(rc.ledger(force=True).get("skipped") == "OVERVIEW_NO_INDEX", "試験用サーバで台帳を作っている")
+        finally:
+            os.environ.pop("OVERVIEW_NO_INDEX", None)
+        check(len(rc.history()) == 2, "試験用サーバなのに記録が増えた")
+    finally:
+        ap.DATA = keep
+    return "日次記録は 1 日 1 行・同日は上書きせず・壊れた行を飛ばして古い順に返す（2 日で %d B）" % size
+
+
 @case("LG-01", "止まりの台帳: 対話だけを数え、無人は別・夜は差し引き・30 分以上だけを見出しにし、盤の操作を手柄にしない")
 def lg01(ctx):
     import recovery as rc

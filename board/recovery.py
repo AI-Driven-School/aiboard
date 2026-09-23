@@ -231,6 +231,52 @@ WINDOW = 7 * 86400   # 比べる窓。暦の週にすると「今週」だけ途
 
 
 _LAST = {"t": 0, "data": None, "busy": False}
+HISTORY = "ledger_history.jsonl"   # 1 日 1 行。年に 100KB ほど
+
+
+def remember(data, today=None):
+    """その日の台帳を 1 行だけ残す。**元の会話記録は消えるから。**
+
+    Claude Code は `cleanupPeriodDays`（既定 30 日）で会話記録を消す
+    （2026-09-23 実測: 手元の最古 mtime はちょうど 30 日前だった）。
+    つまり今日測った数字は、30 日後には誰も検算できない。実際 09-20 に公開した
+    「認証 989 件」は、同じ窓を測り直しても 899 件にしかならず、差の 90 件は追えなかった。
+    保存期間を伸ばす手は使えない（30 日で 10GB・空きは 4.9GiB しかない）。
+    だから**結果だけ**を残す。1 日 1 行、同じ日には上書きしない（先に書いた方を正とする）。
+    """
+    import aiboard_paths as ap
+    day = today or time.strftime("%Y-%m-%d")
+    path = ap.data(HISTORY)
+    try:
+        with open(path, errors="replace") as f:
+            for line in f:
+                if f'"day": "{day}"' in line or f'"day":"{day}"' in line:
+                    return False              # その日はもう記録済み
+    except OSError:
+        pass
+    row = {"day": day, "at": round(time.time()), "week": data.get("week"), "prev": data.get("prev"),
+           "long_minutes": LONG // 60, "awake": list(AWAKE), "window_days": WINDOW // 86400}
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def history(limit=400):
+    """残してある日次の記録を古い順に返す。無ければ空。"""
+    import aiboard_paths as ap
+    out = []
+    try:
+        for line in open(ap.data(HISTORY), errors="replace"):
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    return out[-limit:]
 
 
 def ledger(force=False, ttl=900):
@@ -255,6 +301,7 @@ def ledger(force=False, ttl=900):
                     "week": summarize(events, t1 - WINDOW, t1 + 1, acts),
                     "prev": summarize(events, t1 - 2 * WINDOW, t1 - WINDOW, acts),
                     "long_minutes": LONG // 60, "awake": list(AWAKE), "window_days": WINDOW // 86400}
+            remember(data)          # 会話記録が消える前に、その日の結果だけ残す
             _LAST.update(t=time.time(), data=data)
         except Exception as e:      # 台帳の失敗で盤を止めない
             _LAST.update(t=time.time(), data={"ok": False, "reason": f"{type(e).__name__}: {e}"[:160]})
