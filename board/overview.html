@@ -47,6 +47,11 @@ body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
   background:radial-gradient(circle at 1px 1px,rgba(255,255,255,.07) 1px,transparent 1.5px) 0 0/28px 28px;}
 /* ぼかし(backdrop-filter)と大きな放射光は、パン中のフレーム時間を 8→18ms にした(2026-09-17 実測)ので使わない */
 #stage,#toolbar,#panel,#status{position:relative;z-index:1}
+/* 下のバーの右端: 今週どれだけ止まったまま置かれたか。成果でなく負担の計器なので目立たせない */
+#btnLedger{position:fixed;right:14px;bottom:10px;z-index:3;background:var(--card,#141a26);color:var(--muted,#8c97a8);
+  border:1px solid var(--line,#243049);border-radius:999px;padding:3px 11px;font:11px/1.6 ui-monospace,Menlo,monospace;cursor:pointer}
+#btnLedger:hover{color:var(--fg,#e7ecf3)}
+#btnLedger b{color:var(--f-yellow,#f5c542);font-weight:600}
 #toolbar{position:fixed;top:0;left:0;right:0;z-index:20;display:flex;flex-direction:column;gap:6px;padding:8px 12px;}
 #toolbar .row{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center}
 #toolbar [hidden]{display:none !important}
@@ -497,6 +502,7 @@ table.grp .gi{background:#262626;border:1px solid var(--f-line2);border-radius:6
 <div id="empty" hidden></div>
 <div id="stage"><div id="world"><svg id="edges"></svg><div id="nodes"></div></div></div>
 <div id="status">…</div>
+<button id="btnLedger" title="今週、止まったまま置かれた時間（観測された経過時間）" hidden></button>
 <aside id="panel"><header><h2 id="pTitle">詳細</h2><div><button id="pClose">✕</button></div></header><div class="body" id="pBody"></div></aside>
 <script>
     // 背景の明るさから文字色を選ぶ(2026-09-17 実測: 白文字だと 6色中5色が WCAG AA 未達。
@@ -575,6 +581,7 @@ const EN = {
   'YouTube工場': 'YouTube factory', '⏸ PAUSE中(publish停止)': '⏸ PAUSED (publishing off)', '稼働': 'running', '最後': 'last', '停止: ': 'down: ', '全部 online': 'all online',
   '▣ 別の機械のセッション': '▣ Sessions on other machines', '読めませんでした': 'could not read it', 'こちらの番': 'your turn', '見るだけ': 'read-only', '（記録の末尾から推定）': ' (inferred from the transcript tail)', '次の一手: ': 'Next: ', 'その機械で開く: ': 'Open on that machine: ',
   '端末（tmux）': 'Terminal (tmux)', '画面を見る': 'show the screen', '画面を閉じる': 'hide the screen', '画面を読めません': 'cannot read the screen', '文字だけを 1.5 秒ごとに読みます。色や書き換え中の表示は出ません（埋め込みの本物の端末は macOS のアプリ版だけ）。': 'Reads the text every 1.5s. No colour, no live redraws — the embedded real terminal is macOS-app only.',
+  '直近 7 日 次の書き込みまで 30 分以上': 'Last 7 days · over 30 min before the next message', '直近 7 日 30 分以上あいたものは無し': 'Last 7 days · nothing over 30 min', '直近 7 日': 'Last 7 days', 'その前の 7 日': 'The 7 days before', '直近 7 日の内訳': 'Last 7 days by kind', '人が座っている会話で、止まってから次にあなたが書くまでの時間を数えます。寝ている間を数えないよう夜（0〜8 時）だけ差し引いていますが、会議中・週末・外出は差し引けていないので、実際より長めに出ます。「失った仕事時間」ではありません。盤が自分で送った定型の再開文は、復帰に数えません。': 'Counts the time between a stop and your next message, in sessions a person was sitting in. Nights (0\u20138) are removed so sleep is not counted, but meetings, weekends and time out of the office are not \u2014 so it reads long. It is not lost work time. Canned resume messages the board itself sent do not count as you coming back.', '2 つの窓は同じ 7 日にそろえていますが、仕事量・障害の多さ・休みの入り方は同じではありません。減っても「盤のおかげ」とは言えません。': 'Both windows are the same 7 days long, but the workload, the outages and the days off are not the same. A drop is not evidence the board caused it.', '今週の止まりを数えています…': 'Counting this week\u2019s stops…', '止まりの台帳': 'Stopped-time ledger', '30 分以上、置かれたまま': 'Left waiting for over 30 minutes',  '止まり': 'stops', '10 分以内に戻れた': 'answered within 10 min', '戻らず': 'never answered',  '認証': 'auth', '上限': 'limit', 'クレジット': 'credits', '一時的な失敗': 'transient', '無人実行（claude -p）の止まり': 'Unattended (claude -p) stops', '戻る人が居ないので合算していません': 'not added in \u2014 nobody was going to answer', 'うち盤から操作した止まり': 'Of those, acted on from the board', '盤のおかげで戻れたという意味ではありません（通知だけでも戻れた分が混ざります）': 'not a claim that the board caused it \u2014 a plain notification would count too', '数え直す': 'Recount', '数え直しています…': 'Recounting…',
   '今日 ok': 'today ok', '本': ' jobs', '前': ' ago', ' 外部送信あり': ' (sends externally)', '取得失敗': 'fetch failed', '未設定(~/.aiboard/config.json の remote_hosts)': 'not configured (remote_hosts in ~/.aiboard/config.json)',
   '▣ macmini 無人AIジョブ': '▣ Remote unattended jobs', '● 自社・その他（直近）': '● Home & others (recent)', 'さらに表示': 'show more', '直近だけに戻す': 'recent only',
   'モデル不明': 'unknown model', '子: ': 'children: ', '子 ': 'children ', ' 動作中': ' running', '↳ サブエージェント': '↳ subagent', '↳ 査読': '↳ review', '↳ 補助': '↳ helper', '🤖 無人': '🤖 unattended',
@@ -1520,6 +1527,8 @@ function renderAccounts(refresh) {
 }
 $('#btnAcct').onclick = () => { renderAccounts(); loadAccounts().then(() => { if ($('#pTitle').dataset.kind === 'accounts') renderAccounts(); }); };
 loadAccounts(); setInterval(loadAccounts, 60000);
+$('#btnLedger').onclick = renderLedger;
+loadLedger(); setInterval(loadLedger, 900000);
 
 // ---------------- 設定 ----------------
 // ログインや設定の変更は、アプリの端末で各 CLI 自身のコマンドを動かす(認証情報を AIBoard は触らない)。ブラウザではコマンドを表示する
@@ -1530,6 +1539,43 @@ function runCmd(title, cmd, cwd) {
 }
 function openPath(path) { if (APP) toApp({type: 'open', path}); else prompt(T('このファイルを開いてください:'), path); }
 let stopArm = {}, memNote = '';   // 「終了」は 2 回押し(4 秒以内)。アプリでもブラウザでも同じ動き
+// ---------------- 止まりの台帳（負担の計器） ----------------
+let ledger = null, ledgerTimer = 0;
+async function loadLedger() {
+  let d; try { d = await getJSON('/api/recovery'); } catch (e) { return; }
+  ledger = d;
+  const b = $('#btnLedger'); if (!b) return;
+  clearTimeout(ledgerTimer);
+  if (d.checking) { b.hidden = false; b.textContent = T('今週の止まりを数えています…'); ledgerTimer = setTimeout(loadLedger, 5000); return; }
+  if (!d.ok || !d.week) { b.hidden = true; return; }
+  const w = d.week;
+  b.hidden = false;
+  b.innerHTML = w.long ? `${T('直近 7 日 次の書き込みまで 30 分以上')} <b>${w.long}${T('件')} · ${Math.round(w.hours)}h</b>` : T('直近 7 日 30 分以上あいたものは無し');
+  if ($('#pTitle') && $('#pTitle').dataset.kind === 'ledger' && $('#panel').classList.contains('open')) renderLedger();
+}
+function renderLedger() {
+  $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
+  $('#pTitle').textContent = T('止まりの台帳'); $('#pTitle').dataset.kind = 'ledger';
+  const d = ledger;
+  if (!d || !d.ok || !d.week) { $('#pBody').innerHTML = `<div class="sub">${esc((d && d.reason) || T('今週の止まりを数えています…'))}</div>`; return; }
+  const row = (label, w) => `<div class="kvrow"><span>${esc(label)}</span><span>
+      <b>${w.long}</b>${T('件')} · <b>${Math.round(w.hours)}</b>h
+      <span class="sub">（${T('止まり')} ${w.stops} / ${T('10 分以内に戻れた')} ${w.quick} / ${T('戻らず')} ${w.never}）</span></span></div>`;
+  const kinds = Object.entries(d.week.long_by_kind || {}).map(([k, v]) => `${T(({auth: '認証', limit: '上限', credits: 'クレジット', transient: '一時的な失敗'})[k] || k)} ${v}`).join(' / ');
+  $('#pBody').innerHTML = `
+    <div class="acct"><div class="sub">${T('人が座っている会話で、止まってから次にあなたが書くまでの時間を数えます。寝ている間を数えないよう夜（0〜8 時）だけ差し引いていますが、会議中・週末・外出は差し引けていないので、実際より長めに出ます。「失った仕事時間」ではありません。盤が自分で送った定型の再開文は、復帰に数えません。')}</div>
+      <h3>${T('30 分以上、置かれたまま')}</h3>
+      ${row(T('直近 7 日'), d.week)}
+      ${row(T('その前の 7 日'), d.prev)}
+      ${kinds ? `<div class="kvrow"><span>${T('直近 7 日の内訳')}</span><span>${esc(kinds)}</span></div>` : ''}
+      <div class="kvrow"><span>${T('無人実行（claude -p）の止まり')}</span><span>${d.week.unattended}${T('件')} <span class="sub">${T('戻る人が居ないので合算していません')}</span></span></div>
+      <div class="kvrow"><span>${T('うち盤から操作した止まり')}</span><span>${d.week.board_touched}${T('件')} <span class="sub">${T('盤のおかげで戻れたという意味ではありません（通知だけでも戻れた分が混ざります）')}</span></span></div>
+    </div>
+    <div class="acct"><div class="sub">${T('2 つの窓は同じ 7 日にそろえていますが、仕事量・障害の多さ・休みの入り方は同じではありません。減っても「盤のおかげ」とは言えません。')}</div>
+      <div class="opts"><button id="ldRefresh">${T('数え直す')}</button><span id="ldMsg" class="legend">${d.built ? T('取得') + ' ' + hhmm(d.built) : ''}</span></div></div>`;
+  $('#ldRefresh').onclick = async () => { $('#ldMsg').textContent = T('数え直しています…'); try { await getJSON('/api/recovery?refresh=1'); } catch (e) {} loadLedger(); };
+}
+
 function renderMemory() {
   $('#panel').classList.add('open'); clearInterval(detailTimer); sel = null;
   if ($('#pTitle').dataset.kind !== 'memory') memNote = '';

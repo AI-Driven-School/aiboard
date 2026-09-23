@@ -520,6 +520,9 @@ class Handler(BaseHTTPRequestHandler):
                                                     key=lambda r: (-r["live"], -r["recent"], r["key"]))})
             elif path == "/api/extensions":
                 self._json(200, {"ok": True, **overview.extensions_info(refresh=q.get("refresh") == "1")})
+            elif path == "/api/recovery":
+                # 止まりの台帳（負担の計器）。重いので裏で作り、いまある値をすぐ返す
+                self._json(200, __import__("recovery").ledger(force=q.get("refresh") == "1"))
             elif path == "/api/accounts":
                 # 各 CLI に聞くのは 5 本合わせて 7 秒前後かかる。**待たせず**、裏で取り直して次の呼びで使う
                 # (直列だった頃は実機で 137 秒かかり、画面が固まったように見えた。2026-09-21)

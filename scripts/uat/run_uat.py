@@ -3984,6 +3984,81 @@ def sv02(ctx):
     return f"持ち主(pid {owner.pid})を見ていて、居なくなってから数秒で自分も終わった"
 
 
+@case("LG-01", "止まりの台帳: 対話だけを数え、無人は別・夜は差し引き・30 分以上だけを見出しにし、盤の操作を手柄にしない")
+def lg01(ctx):
+    import recovery as rc
+    J = lambda x: json.dumps(x, ensure_ascii=False)
+    d = tempfile.mkdtemp(dir=ctx["data"])
+
+    def write(name, ep, rows):
+        p = os.path.join(d, name)
+        head = [J({"type": "system", "entrypoint": ep, "timestamp": "2026-09-21T09:00:00Z"})]
+        open(p, "w").write("\n".join(head + rows) + "\n")
+        return p
+    iso = lambda h, m=0, day=21: f"2026-09-{day:02d}T{h:02d}:{m:02d}:00+09:00"
+    err = lambda t: J({"type": "assistant", "timestamp": t, "isApiErrorMessage": True,
+                       "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "Not logged in · Please run /login"}]}})
+    usr = lambda t, txt="続けて": J({"type": "user", "timestamp": t, "message": {"role": "user", "content": [{"type": "text", "text": txt}]}})
+    # 対話: 10:00 に止まり 12:00 に復帰(2 時間・全部昼) / 別の止まりは 5 分で復帰 / もう 1 つは戻らない
+    f1 = write("a.jsonl", "cli", [err(iso(10)), usr(iso(12)), err(iso(13)), usr(iso(13, 5)), err(iso(15))])
+    # 対話: 23:00 に止まり 翌 9:00 に復帰(10 時間だが、起きているのは 23-24 と 8-9 の 2 時間)
+    f2 = write("b.jsonl", "cli", [err(iso(23)), usr(iso(9, 0, 22))])
+    # 無人: 止まって戻らない(合算しない)
+    f3 = write("c.jsonl", "sdk-cli", [err(iso(11)), err(iso(14))])
+    ev = []
+    for f, ep in ((f1, "cli"), (f2, "cli"), (f3, "sdk-cli")):
+        check(rc.entrypoint_of(f) == ep, f"entrypoint を読めない {f}")
+        ev += [dict(x, ep=ep) for x in rc.stops_in(f)]
+    since = time.mktime(time.strptime("2026-09-21 00:00", "%Y-%m-%d %H:%M"))
+    w = rc.summarize(ev, since, since + 7 * 86400, acts=[])
+    check(w["stops"] == 4, f"対話の止まりの数 {w}（a.jsonl に 3・b.jsonl に 1）")
+    # 無人の 2 行は「同じ種類が続けて出た」ので 1 件にまとまるのが正しい（行数は件数ではない）
+    check(w["unattended"] == 1, f"無人を合算した/畳めていない {w}")
+    check(w["long"] == 2, f"30 分以上の数 {w}（2 時間のものと、夜をまたいだもの）")
+    check(w["quick"] == 1, f"10 分以内に戻れた数 {w}")
+    check(w["never"] == 1, f"戻らなかった数 {w}")
+    check(abs(w["hours"] - 4.0) < 0.05, f"夜を差し引いていない: {w['hours']}h（期待 4.0 = 2 時間 + 夜またぎの 2 時間）")
+    # 盤自身が送る定型の再開文は「人が戻った」と数えない（自分の操作で自分の数字を良くしない）
+    f4 = write("d.jsonl", "cli", [err(iso(10)), usr(iso(10, 40), "前回はここで止まりました。続きから進めてください。"),
+                                  usr(iso(11, 30), "ありがとう、続けて")])
+    ev4 = [dict(x, ep="cli") for x in rc.stops_in(f4)]
+    check(len(ev4) == 1 and ev4[0]["back_at"], f"止まりを拾えていない {ev4}")
+    back = ev4[0]["back_at"] - ev4[0]["at"]
+    check(abs(back - 5400) < 5, f"定型の再開文を「復帰」と数えた（40 分で戻ったことになっている）: {back/60:.0f} 分")
+    # 盤の操作は「手柄」に足さない: 足しても long/hours は変わらず、別の数だけ増える
+    w2 = rc.summarize(ev, since, since + 7 * 86400, acts=[since + 10 * 3600 + 60])
+    check(w2["board_touched"] == 1 and w2["long"] == w["long"] and w2["hours"] == w["hours"],
+          f"盤の操作を数字に混ぜている {w2}")
+
+    # 画面: 下のバーの印と、開いた時の言い切らない書き方
+    def route(pg):
+        pg.route("**/api/recovery*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
+            {"ok": True, "checking": False, "built": time.time(), "long_minutes": 30, "awake": [8, 24],
+             "week": {"stops": 24, "long": 4, "hours": 28.9, "never": 7, "quick": 9, "board_touched": 0,
+                      "unattended": 36, "long_by_kind": {"auth": 3, "limit": 1}},
+             "prev": {"stops": 178, "long": 45, "hours": 101.8, "never": 13, "quick": 100, "board_touched": 14,
+                      "unattended": 208, "long_by_kind": {"auth": 20, "limit": 25}}})))
+
+    def fn(pg, errs, bl):
+        wait_js(pg, "!!document.querySelector('#btnLedger') && !document.querySelector('#btnLedger').hidden", 40)
+        chip = pg.evaluate("document.querySelector('#btnLedger').innerText")
+        pg.evaluate("document.querySelector('#btnLedger').click()")
+        wait_js(pg, "document.querySelector('#pTitle').dataset.kind === 'ledger'", 20)
+        return {"chip": chip, "body": pg.evaluate("document.querySelector('#pBody').innerText")}, errs
+    v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
+    check(not errs, f"ページエラー {errs[:1]}")
+    check("4" in v["chip"] and "29h" in v["chip"], f"下のバーの印 {v['chip']}")
+    for w_ in ("その前の 7 日", "45", "36", "戻る人が居ないので合算していません", "盤のおかげで戻れたという意味ではありません",
+               "会議中・週末・外出は差し引けていない"):
+        check(w_ in v["body"], f"台帳に「{w_}」が無い: {v['body'][:220]}")
+    check("取り戻" not in v["body"], f"「取り戻した」と書いている（因果は示せない）: {v['body'][:220]}")
+    # 比べる 2 つの窓は同じ長さか（暦の週だと「今週」が途中で短い）
+    import recovery as rc2
+    check(rc2.WINDOW == 7 * 86400, "窓が 7 日ではない")
+    return ("対話 4・無人 1(連続を畳む)を分け、30 分以上 2 件・夜を引いて 4.0h / 盤の操作は別勘定 / "
+            "盤の定型再開文は復帰に数えない / 画面は同じ長さの 7 日を 2 つ・言い切らない注記つき")
+
+
 @case("DT-01", "状態の真理値表: 全 14 行が表どおりに当たり、重なった時の優先順位も表どおり(表は board/decide.py の 1 か所)")
 def dt01(ctx):
     import decide
