@@ -4060,6 +4060,15 @@ def lg01(ctx):
     check(w["quick"] == 1, f"10 分以内に戻れた数 {w}")
     check(w["never"] == 1, f"戻らなかった数 {w}")
     check(abs(w["hours"] - 4.0) < 0.05, f"夜を差し引いていない: {w['hours']}h（期待 4.0 = 2 時間 + 夜またぎの 2 時間）")
+    # 同時に 2 本止まっていたら、時間を 2 倍に数えない（2026-09-24 codex の指摘で発覚。
+    # 実測では 30 分以上の 110 件が延べ 387h・実時間 194h で、半分が重複だった）
+    f5 = write("e.jsonl", "cli", [err(iso(10)), usr(iso(12))])          # a.jsonl の 10:00-12:00 と完全に重なる
+    ev5 = ev + [dict(x, ep="cli") for x in rc.stops_in(f5)]
+    w5 = rc.summarize(ev5, since, since + 7 * 86400, acts=[])
+    check(abs(w5["hours"] - 6.0) < 0.05, f"延べ(hours)が合わない: {w5['hours']}h（期待 6.0 = 4.0 + 重なった 2 時間）")
+    check(abs(w5["wall"] - 4.0) < 0.05,
+          f"重なりを二重に数えている: wall={w5['wall']}h（期待 4.0。同じ 10:00-12:00 に 2 本止まっても実時間は増えない）")
+    check(abs(w["wall"] - w["hours"]) < 0.05, f"重ならない場合は延べ＝実時間のはず: {w['wall']} vs {w['hours']}")
     # 盤自身が送る定型の再開文は「人が戻った」と数えない（自分の操作で自分の数字を良くしない）
     f4 = write("d.jsonl", "cli", [err(iso(10)), usr(iso(10, 40), "前回はここで止まりました。続きから進めてください。"),
                                   usr(iso(11, 30), "ありがとう、続けて")])
@@ -4076,9 +4085,9 @@ def lg01(ctx):
     def route(pg):
         pg.route("**/api/recovery*", lambda r, q: r.fulfill(status=200, content_type="application/json", body=json.dumps(
             {"ok": True, "checking": False, "built": time.time(), "long_minutes": 30, "awake": [8, 24],
-             "week": {"stops": 24, "long": 4, "hours": 28.9, "never": 7, "quick": 9, "board_touched": 0,
+             "week": {"stops": 24, "long": 4, "hours": 28.9, "wall": 18.4, "never": 7, "quick": 9, "board_touched": 0,
                       "unattended": 36, "long_by_kind": {"auth": 3, "limit": 1}},
-             "prev": {"stops": 178, "long": 45, "hours": 101.8, "never": 13, "quick": 100, "board_touched": 14,
+             "prev": {"stops": 178, "long": 45, "hours": 101.8, "wall": 101.8, "never": 13, "quick": 100, "board_touched": 14,
                       "unattended": 208, "long_by_kind": {"auth": 20, "limit": 25}}})))
 
     def fn(pg, errs, bl):
@@ -4089,9 +4098,14 @@ def lg01(ctx):
         return {"chip": chip, "body": pg.evaluate("document.querySelector('#pBody').innerText")}, errs
     v, errs = with_page(ctx, fn, "?lang=ja", route_extra=route)
     check(not errs, f"ページエラー {errs[:1]}")
-    check("4" in v["chip"] and "29h" in v["chip"], f"下のバーの印 {v['chip']}")
+    # 見出しは実時間(wall)。延べ(hours)を見出しに出すと、同時に止まっていた時間が二重に乗る
+    check("4" in v["chip"] and "18h" in v["chip"], f"下のバーの印が延べのまま {v['chip']}（期待 18h = wall）")
+    check("29h" not in v["chip"], f"見出しに延べを出している {v['chip']}")
+    check("延べ 29h" in v["body"], f"延べを併記していない: {v['body'][:220]}")
+    check("102" in v["body"] and "延べ 102h" not in v["body"], "重ならない週(wall==hours)に不要な併記を出している")
     for w_ in ("その前の 7 日", "45", "36", "戻る人が居ないので合算していません", "盤のおかげで戻れたという意味ではありません",
-               "会議中・週末・外出は差し引けていない"):
+               "会議中・週末・外出は差し引けていない", "同時に 2 本止まっていた時間は 1 回だけ数えます",
+               "「反応するまで」で、「気づくまで」ではありません"):
         check(w_ in v["body"], f"台帳に「{w_}」が無い: {v['body'][:220]}")
     check("取り戻" not in v["body"], f"「取り戻した」と書いている（因果は示せない）: {v['body'][:220]}")
     # 比べる 2 つの窓は同じ長さか（暦の週だと「今週」が途中で短い）

@@ -4,6 +4,11 @@
 言ってよいのはここまで:
   - 測っているのは**止まり → 次にあなたが書くまでの経過時間**。失った仕事時間ではない
     （会議・週末・外出が混ざる。寝ている間だけは夜として差し引く。だから実際より長めに出る）
+  - 測っているのは「反応するまで」であって「気づくまで」ではない。記録にあるのは次の発言だけで、
+    見て放置したのか見ていないのかは分からない（2026-09-24 codex の指摘）
+  - **時間を足すときは重なりを 1 回だけ数える**（`wall`）。1 件ずつ足した `hours` は、同時に 2 本
+    止まっていれば 2 倍になる。実測では延べ 387 時間に対し実時間 194 時間で、半分が重複だった。
+    見出しに出してよいのは `wall`
   - 「盤の操作が 15 分以内にあった」は**因果の証拠にならない**（通知だけでも戻れた分が混ざる）。
     別の行として出し、上の数字には足さない
   - 比べる 2 つの窓は**同じ長さ**にする（暦の週だと今週だけ途中で、並べた時点で誤読になる）。
@@ -205,8 +210,28 @@ def scan(days=14):
     return events
 
 
+def wall_hours(spans):
+    """重なりを 1 回だけ数えた実時間（起きている時間だけ）。
+
+    1 件ずつ足した「延べ」は、**同時に 2 本止まっていれば 2 倍になる**。人が失った時間には読めない。
+    2026-09-23 実測: 30 分以上の止まり 110 件は、延べ 387 時間だが実時間では 194 時間（重複 50%）。
+    110 件が 30 区間に併合される。codex の指摘（2026-09-24）で判明し、公開していた数字を直した。
+    """
+    merged = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return sum(awake_seconds(a, b) for a, b in merged) / 3600
+
+
 def summarize(events, since, until, acts=()):
-    """ある期間の 1 行分。対話だけを数え、無人は件数のみ添える。"""
+    """ある期間の 1 行分。対話だけを数え、無人は件数のみ添える。
+
+    時間は 2 つ出す。`hours` は 1 件ずつ足した**延べ**、`wall` は重なりを 1 回だけ数えた**実時間**。
+    見出しに使ってよいのは `wall` の方（`hours` は「同時に何本止まっていたか」が混ざる）。
+    """
     import bisect
     inter = [e for e in events if e.get("ep") == "cli" and e.get("at") and since <= e["at"] < until]
     unattended = [e for e in events if e.get("ep") == "sdk-cli" and e.get("at") and since <= e["at"] < until]
@@ -221,7 +246,8 @@ def summarize(events, since, until, acts=()):
             touched += 1
     by_kind = {k: sum(1 for e in longs if e["kind"] == k) for k in KINDS}
     return {"since": since, "until": until, "stops": len(inter), "long": len(longs),
-            "hours": round(hours, 1), "never": len(never), "quick": len(quick),
+            "hours": round(hours, 1), "wall": round(wall_hours((e["at"], e["back_at"]) for e in longs), 1),
+            "never": len(never), "quick": len(quick),
             "board_touched": touched, "unattended": len(unattended),
             "long_by_kind": {k: v for k, v in by_kind.items() if v}}
 
